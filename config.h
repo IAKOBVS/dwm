@@ -13,7 +13,7 @@
 #define SHELL "zsh"
 #define SHELL_BACKUP "bash"
 #define VEDITOR "dav"
-#define BROWSER "$BROWSER"
+#define BROWSER "brave"
 #define TORRENT "qbittorrent" 
 #define SCREENSHOT "scnow"
 #define DISCORD "discord"
@@ -35,7 +35,7 @@ static char selbordercolor[]        = "#988165";
 static char selbgcolor[]            = "#988165";
 static char selfgcolor[]            = "#222222";
 
-static const unsigned int borderpx  = 5;        /* border pixel of windows */
+static const unsigned int borderpx  = 7;        /* border pixel of windows */
 static const Gap default_gap        = {
 	.isgap = 1,
 	.realgap = 17,
@@ -120,6 +120,7 @@ static const Key keys[] = {
 	/* modifier                     key        function        argument */
 	{ MODKEY,                       XK_p,      spawn,          {.v = dmenucmd } },
 	{ MODKEY,                       XK_Return, spawn,          SHCMD(TERMINAL " msg create-window -e " SHELL " || " TERMINAL " -e " SHELL)},
+	{ MODKEY,                       XK_Return, spawn,          SHCMD("gaming-unkill")},
 	/* { ALT,                          XK_Return, spawn,          SHCMD(TERMINAL " msg create-window -e " SHELL_BACKUP "|| " TERMINAL " -e " SHELL_BACKUP)}, */
 	{ ALT,                          XK_Return, spawn,          CMD("st")},
 	/* { MODKEY,                       XK_b,      togglebar,      {0} }, */
@@ -131,12 +132,13 @@ static const Key keys[] = {
 	{ MODKEY,                       XK_space,  zoom,           {0} },
 	{ ALT,                          XK_Tab,    view,           {0} },
 	{ MODKEY,                       XK_q,      killclient,     {0} },
+	{ MODKEY,                       XK_q,      spawn,          CMD("picom-kill-when-steam") },
 	{ MODKEY,                       XK_space,  setlayout,      {.v = &layouts[0]} },
 	{ MODKEY,                       XK_comma,  focusmon,       {.i = -1 } },
 	{ MODKEY,                       XK_period, focusmon,       {.i = +1 } },
 	{ ALT,                          XK_comma,  tagmon,         {.i = -1 } },
 	{ ALT,                          XK_period, tagmon,         {.i = +1 } },
-	{ MODKEY,                       XK_w,      spawn,          CMD("brave") },
+	{ MODKEY,                       XK_w,      spawn,          CMD("chromium") },
 	{ MODKEY,                       XK_s,	   spawn,          CMD("dmenusite") },
 	{ MODKEY,                       XK_c,	   spawn,          CMD("dmenuclip") },
 	{ ALT,                          XK_u,      spawn,          SHCMD(TERMINAL " -e paru -Syu --needed --skipreview && remaps")},
