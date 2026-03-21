@@ -62,6 +62,9 @@ typedef struct {
 	const Arg arg;
 } Key;
 
+KeySym key_keysym_used;
+unsigned int key_mod_used;
+
 typedef struct {
 	const char *symbol;
 	void (*arrange)(Monitor *);

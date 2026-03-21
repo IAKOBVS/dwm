@@ -818,7 +818,9 @@ grabkeys(void)
 		if (!syms)
 			return;
 		for (k = start; k <= end; k++)
-			for (i = 0; i < LENGTH(keys); i++)
+			for (i = 0; i < LENGTH(keys); i++) {
+				key_keysym_used |= keys[i].keysym;
+				key_mod_used |= keys[i].mod;
 				/* skip modifier codes, we do that ourselves */
 				if (keys[i].keysym == syms[(k - start) * skip])
 					for (j = 0; j < LENGTH(modifiers); j++)
@@ -826,6 +828,7 @@ grabkeys(void)
 							 keys[i].mod | modifiers[j],
 							 root, True,
 							 GrabModeAsync, GrabModeAsync);
+			}
 		XFree(syms);
 	}
 }
@@ -858,11 +861,13 @@ keypress(XEvent *e)
 
 	ev = &e->xkey;
 	keysym = XKeycodeToKeysym(dpy, (KeyCode)ev->keycode, 0);
-	for (i = 0; i < LENGTH(keys); i++)
-		if (keysym == keys[i].keysym
-		&& CLEANMASK(keys[i].mod) == CLEANMASK(ev->state)
-		&& keys[i].func)
-			keys[i].func(&(keys[i].arg));
+	if ((CLEANMASK(ev->state) & key_mod_used) && (keysym & key_keysym_used)) {
+		for (i = 0; i < LENGTH(keys); i++)
+			if (keysym == keys[i].keysym
+			&& CLEANMASK(keys[i].mod) == CLEANMASK(ev->state)
+			&& keys[i].func)
+				keys[i].func(&(keys[i].arg));
+	}
 }
 
 void
