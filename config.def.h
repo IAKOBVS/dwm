@@ -46,6 +46,7 @@ static const unsigned int snap      = 32;       /* snap pixel */
 static const int swallowfloating    = 1;        /* 1 means swallow floating windows by default */
 static const int showbar            = 1;        /* 0 means no bar */
 static const int topbar             = 1;        /* 0 means bottom bar */
+static const double lrpad_modifier = 1;
 
 static const char *fonts[]          = {
 	"monospace:size=11:antialias=true:autohint=true",
