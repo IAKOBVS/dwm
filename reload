@@ -1,3 +1,2 @@
 #!/bin/sh
-sudo make install
-killall dwm
+make && sudo make install && killall dwm
