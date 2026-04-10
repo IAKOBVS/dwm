@@ -293,7 +293,7 @@ buttonpress(XEvent *e)
 			click = ClkStatusText;
 		else
 			click = ClkWinTitle;
-	} else if (ev->window == selmon->extrabarwin) {
+	} else if (extrabar && ev->window == selmon->extrabarwin) {
 		if (ev->x < (int)TEXTW(estextl))
 			click = ClkExBarLeftStatus;
 		else if (ev->x > selmon->ww - (int)TEXTW(estextr))
@@ -363,9 +363,11 @@ cleanupmon(Monitor *mon)
 		m->next = mon->next;
 	}
 	XUnmapWindow(dpy, mon->barwin);
-	XUnmapWindow(dpy, mon->extrabarwin);
+	if (extrabar)
+		XUnmapWindow(dpy, mon->extrabarwin);
 	XDestroyWindow(dpy, mon->barwin);
-	XDestroyWindow(dpy, mon->extrabarwin);
+	if (extrabar)
+		XDestroyWindow(dpy, mon->extrabarwin);
 	free(mon);
 }
 
@@ -428,7 +430,8 @@ configurenotify(XEvent *e)
 					if (c->isfullscreen)
 						resizeclient(c, m->mx, m->my, m->mw, m->mh);
 				XMoveResizeWindow(dpy, m->barwin, m->wx, m->by, m->ww, bh);
-				XMoveResizeWindow(dpy, m->extrabarwin, m->wx, m->eby, m->ww, bh);
+				if (extrabar)
+					XMoveResizeWindow(dpy, m->extrabarwin, m->wx, m->eby, m->ww, bh);
 			}
 			focus(NULL);
 			arrange(NULL);
@@ -499,7 +502,8 @@ createmon(void)
 	m->nmaster = nmaster;
 	m->showbar = showbar;
 	m->topbar = topbar;
-	m->extrabar = extrabar;
+	if (extrabar)
+		m->extrabar = extrabar;
 	m->gap = malloc(sizeof(Gap));
 	gap_copy(m->gap, &default_gap);
 	m->lt[0] = &layouts[0];
@@ -619,7 +623,8 @@ drawbar(Monitor *m)
 		drw_text(drw, m->ww - etwr, 0, etwr, bh, 0, estextr, 0);
 		etwl = TEXTW(estextl);
 		drw_text(drw, 0, 0, etwl, bh, 0, estextl, 0);
-		drw_map(drw, m->extrabarwin, 0, 0, m->ww, bh);
+		if (extrabar)
+			drw_map(drw, m->extrabarwin, 0, 0, m->ww, bh);
 	}
 }
 
@@ -1790,14 +1795,15 @@ updatebars(void)
 			XMapRaised(dpy, m->barwin);
 			XSetClassHint(dpy, m->barwin, &ch);
 		}
-		if (!m->extrabarwin) {
-			m->extrabarwin = XCreateWindow(dpy, root, m->wx, m->eby, m->ww, bh, 0, DefaultDepth(dpy, screen),
-					CopyFromParent, DefaultVisual(dpy, screen),
-					CWOverrideRedirect|CWBackPixmap|CWEventMask, &wa);
-			XDefineCursor(dpy, m->extrabarwin, cursor[CurNormal]->cursor);
-			XMapRaised(dpy, m->extrabarwin);
-			XSetClassHint(dpy, m->extrabarwin, &ch);
-		}
+		if (extrabar)
+			if (!m->extrabarwin) {
+				m->extrabarwin = XCreateWindow(dpy, root, m->wx, m->eby, m->ww, bh, 0, DefaultDepth(dpy, screen),
+						CopyFromParent, DefaultVisual(dpy, screen),
+						CWOverrideRedirect|CWBackPixmap|CWEventMask, &wa);
+				XDefineCursor(dpy, m->extrabarwin, cursor[CurNormal]->cursor);
+				XMapRaised(dpy, m->extrabarwin);
+				XSetClassHint(dpy, m->extrabarwin, &ch);
+			}
 	}
 }
 
@@ -1812,12 +1818,14 @@ updatebarpos(Monitor *m)
 		m->wy = m->topbar ? m->wy + bh : m->wy;
 	} else
 		m->by = -bh;
-	if (m->extrabar) {
-		m->wh -= bh;
-		m->eby = !m->topbar ? m->wy : m->wy + m->wh;
-		m->wy = !m->topbar ? m->wy + bh : m->wy;
-	} else
-		m->eby = -bh;
+	if (extrabar) {
+		if (m->extrabar) {
+			m->wh -= bh;
+			m->eby = !m->topbar ? m->wy : m->wy + m->wh;
+			m->wy = !m->topbar ? m->wy + bh : m->wy;
+		} else
+			m->eby = -bh;
+	}
 }
 
 void
@@ -2203,7 +2211,7 @@ wintomon(Window w)
 	if (w == root && getrootptr(&x, &y))
 		return recttomon(x, y, 1, 1);
 	for (m = mons; m; m = m->next)
-		if (w == m->barwin || w == m->extrabarwin)
+		if (w == m->barwin || (extrabar && w == m->extrabarwin))
 			return m;
 	if ((c = wintoclient(w)))
 		return c->mon;
