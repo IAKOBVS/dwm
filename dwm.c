@@ -266,18 +266,27 @@ unswallow(Client *c)
 void
 buttonpress(XEvent *e)
 {
-	unsigned int i, x, click;
+	unsigned int i, x, click, mask;
 	Arg arg = {0};
-	Client *c;
+	Client *c = NULL;
 	Monitor *m;
 	XButtonPressedEvent *ev = &e->xbutton;
 
+	mask = CLEANMASK(ev->state);
 	click = ClkRootWin;
 	/* focus monitor if necessary */
 	if ((m = wintomon(ev->window)) && m != selmon) {
 		unfocus(selmon->sel, 1);
 		selmon = m;
 		focus(NULL);
+	}
+	if (!mousebuttonmatch(ev->button, mask)) {
+		if ((c = wintoclient(ev->window))) {
+			focus(c);
+			restack(selmon);
+			XAllowEvents(dpy, ReplayPointer, CurrentTime);
+		}
+		return;
 	}
 	if (ev->window == selmon->barwin) {
 		i = x = 0;
@@ -301,8 +310,46 @@ buttonpress(XEvent *e)
 	}
 	for (i = 0; i < LENGTH(buttons); i++)
 		if (click == buttons[i].click && buttons[i].func && buttons[i].button == ev->button
-		&& CLEANMASK(buttons[i].mask) == CLEANMASK(ev->state))
+		&& CLEANMASK(buttons[i].mask) == mask)
 			buttons[i].func(click == ClkTagBar && buttons[i].arg.i == 0 ? &arg : &buttons[i].arg);
+}
+
+int
+mousebuttonmatch(unsigned int button, unsigned int mask)
+{
+	return (button >= 8 * sizeof button_button_used || (button_button_used & (1UL << button)))
+		&& !(mask & ~button_mask_used);
+}
+
+void
+cachebuttons(void)
+{
+	unsigned int i;
+
+	button_button_used = 0;
+	button_mask_used = 0;
+	for (i = 0; i < LENGTH(buttons); i++) {
+		if (!buttons[i].func)
+			continue;
+		if (buttons[i].button < 8 * sizeof button_button_used)
+			button_button_used |= 1UL << buttons[i].button;
+		button_mask_used |= CLEANMASK(buttons[i].mask);
+	}
+}
+
+void
+cachekeys(void)
+{
+	unsigned int i;
+
+	key_keysym_used = 0;
+	key_mod_used = 0;
+	for (i = 0; i < LENGTH(keys); i++) {
+		if (!keys[i].func)
+			continue;
+		key_keysym_used |= keys[i].keysym;
+		key_mod_used |= keys[i].mod;
+	}
 }
 
 void
@@ -819,8 +866,6 @@ grabkeys(void)
 			return;
 		for (k = start; k <= end; k++)
 			for (i = 0; i < LENGTH(keys); i++) {
-				key_keysym_used |= keys[i].keysym;
-				key_mod_used |= keys[i].mod;
 				/* skip modifier codes, we do that ourselves */
 				if (keys[i].keysym == syms[(k - start) * skip])
 					for (j = 0; j < LENGTH(modifiers); j++)
@@ -994,6 +1039,8 @@ motionnotify(XEvent *e)
 	Monitor *m;
 	XMotionEvent *ev = &e->xmotion;
 
+	if (!mons || !mons->next)
+		return;
 	if (ev->window != root)
 		return;
 	if ((m = recttomon(ev->x_root, ev->y_root, 1, 1)) != mon && mon) {
@@ -1482,6 +1529,8 @@ setup(void)
 	scheme = ecalloc(LENGTH(colors), sizeof(Clr *));
 	for (i = 0; i < LENGTH(colors); i++)
 		scheme[i] = drw_scm_create(drw, colors[i], 3);
+	cachebuttons();
+	cachekeys();
 	/* init bars */
 	updatebars();
 	updatestatus();

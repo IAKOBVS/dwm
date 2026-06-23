@@ -64,6 +64,8 @@ typedef struct {
 
 KeySym key_keysym_used;
 unsigned int key_mod_used;
+unsigned long button_button_used;
+unsigned int button_mask_used;
 
 typedef struct {
 	const char *symbol;
@@ -119,6 +121,8 @@ static void attachstack(Client *c);
 static void sighup(int unused);
 static void sigterm(int unused);
 static void buttonpress(XEvent *e);
+static void cachebuttons(void);
+static void cachekeys(void);
 static void checkotherwm(void);
 static void cleanup(void);
 static void cleanupmon(Monitor *mon);
@@ -153,6 +157,7 @@ static void manage(Window w, XWindowAttributes *wa);
 static void mappingnotify(XEvent *e);
 static void maprequest(XEvent *e);
 static void monocle(Monitor *m);
+static int mousebuttonmatch(unsigned int button, unsigned int mask);
 static void motionnotify(XEvent *e);
 static void movemouse(const Arg *arg);
 static Client *nexttiled(Client *c);
