@@ -611,8 +611,10 @@ drawbar(Monitor *m)
 	/* skip all bar work when a fullscreen window is focused — content invisible to user */
 	if (optimizefullscreen && m->sel && m->sel->isfullscreen)
 		return;
-	/* skip full re-render when content hasn't changed (expose/restack trivially copy pixmap) */
-	if (!bar_dirty_segments) {
+	/* skip full re-render when content hasn't changed (expose/restack trivially copy pixmap).
+	 * restricted to selmon only — non-selmon monitors may be dirty in the global flag
+	 * but lose their segments after selmon resets it in drawbars(). */
+	if (!bar_dirty_segments && m == selmon) {
 		drw_map(drw, m->barwin, 0, 0, m->ww, bh);
 		return;
 	}
@@ -1440,6 +1442,8 @@ setfullscreen(Client *c, int fullscreen)
 		c->w = c->oldw;
 		c->h = c->oldh;
 		resizeclient(c, c->x, c->y, c->w, c->h);
+		/* force full redraw on un-fullscreen — stale pixmap from frozen bar */
+		bar_dirty_segments = DIRTY_STATUS | DIRTY_TAGS | DIRTY_TITLE;
 		arrange(c->mon);
 	}
 }
