@@ -56,11 +56,17 @@ Four phases of drawbar optimization have been implemented; reference
 
 ### Phase 1: Text Extent Cache (`drw.c`/`drw.h`)
 
-`drw_fontset_getwidth()` now caches computed text widths in a fixed-size
-`ExtentCache` array (`drw.c:14-58`). The cache is keyed by string only — no
-font hash is needed because `drw_fontset_invalidate_cache()` is called on every
-font change (`drw_fontset_create()`, `drw_free()`), ensuring all cache entries
-always belong to the current font.
+`drw_fontset_getwidth()` caches computed text widths in a fixed-size array
+(`drw.c:21-68`). The cache is keyed by string only — `drw_fontset_invalidate_cache()`
+is called on every font change (`drw_fontset_create()`, `drw_free()`), ensuring
+all entries always belong to the current font. Lookup uses `len` + `memcmp` over
+`strcmp` to avoid scanning past the first differing byte when lengths match.
+
+Entries are stored in descending-length order so a miss on a unique-length string
+breaks early without any `memcmp`. SOA layout: `extent_cache_len[]` (256 bytes
+for 64 entries, `unsigned int`) is the only array scanned on lookup; the
+`extent_cache_text[]` struct pairs (`char *text`, `unsigned int width`) are
+fetched only on exact-length match.
 
 This eliminates repeated `XftTextExtentsUtf8` → `XftGlyphExtents` →
 `XftFontLoadGlyphs` → `FT_Load_Glyph` → `png_read_*` → `inflate` calls for
