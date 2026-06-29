@@ -14,54 +14,47 @@
 /*
  * Text extent cache — avoids repeated XftTextExtentsUtf8 calls for
  * the same strings (tags, layout symbols, status text) in drawbar().
- * Invalidated when fonts are recreated.
+ * No font hash needed: cache is invalidated on every font change via
+ * drw_fontset_invalidate_cache(), so all entries always belong to the
+ * current font.
  */
 #define EXTENT_CACHE_SIZE 64
 
-typedef struct {
+static struct {
 	char *text;
 	unsigned int width;
-	unsigned long font_hash;
-} ExtentCache;
-
-static ExtentCache extent_cache[EXTENT_CACHE_SIZE];
+} extent_cache_text[EXTENT_CACHE_SIZE];
+static unsigned int extent_cache_len[EXTENT_CACHE_SIZE];
 static int extent_cache_count = 0;
-
-static unsigned long
-font_hash(Fnt *font)
-{
-	unsigned long h = 5381;
-	for (Fnt *f = font; f; f = f->next) {
-		h = ((h << 5) + h) + (unsigned long)f->xfont;
-		h = ((h << 5) + h) + f->h;
-	}
-	return h;
-}
 
 /* Look up cached text width, or compute and cache it. */
 static unsigned int
 drw_fontset_getwidth_cached(Drw *drw, const char *text)
 {
-	unsigned long fhash;
-	unsigned int i;
+	unsigned int i, len;
 
 	if (!drw || !drw->fonts || !text)
 		return 0;
 
-	fhash = font_hash(drw->fonts);
-
+	len = (unsigned int)strlen(text);
 	for (i = 0; i < extent_cache_count; i++) {
-		if (extent_cache[i].font_hash == fhash &&
-		    strcmp(extent_cache[i].text, text) == 0)
-			return extent_cache[i].width;
+		if (extent_cache_len[i] < len)
+			break;
+		if (extent_cache_len[i] == len &&
+		    memcmp(extent_cache_text[i].text, text, len) == 0)
+			return extent_cache_text[i].width;
 	}
 
 	unsigned int w = drw_text(drw, 0, 0, 0, 0, 0, text, 0);
 
 	if (extent_cache_count < EXTENT_CACHE_SIZE) {
-		extent_cache[extent_cache_count].text = strdup(text);
-		extent_cache[extent_cache_count].width = w;
-		extent_cache[extent_cache_count].font_hash = fhash;
+		for (i = extent_cache_count; i > 0 && extent_cache_len[i-1] < len; i--) {
+			extent_cache_len[i] = extent_cache_len[i-1];
+			extent_cache_text[i] = extent_cache_text[i-1];
+		}
+		extent_cache_text[i].text = strdup(text);
+		extent_cache_text[i].width = w;
+		extent_cache_len[i] = len;
 		extent_cache_count++;
 	}
 
@@ -469,7 +462,7 @@ void
 drw_fontset_invalidate_cache(void)
 {
 	for (int i = 0; i < extent_cache_count; i++)
-		free(extent_cache[i].text);
+		free(extent_cache_text[i].text);
 	extent_cache_count = 0;
 }
 

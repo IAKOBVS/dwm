@@ -56,10 +56,11 @@ Four phases of drawbar optimization have been implemented; reference
 
 ### Phase 1: Text Extent Cache (`drw.c`/`drw.h`)
 
-`drw_fontset_getwidth()` now caches computed text widths per (font-hash, string)
-pair in a fixed-size `ExtentCache` array (`drw.c:14-68`). The cache is
-invalidated when fonts are recreated via `drw_fontset_invalidate_cache()`,
-called from `drw_fontset_create()` and `drw_free()`.
+`drw_fontset_getwidth()` now caches computed text widths in a fixed-size
+`ExtentCache` array (`drw.c:14-58`). The cache is keyed by string only — no
+font hash is needed because `drw_fontset_invalidate_cache()` is called on every
+font change (`drw_fontset_create()`, `drw_free()`), ensuring all cache entries
+always belong to the current font.
 
 This eliminates repeated `XftTextExtentsUtf8` → `XftGlyphExtents` →
 `XftFontLoadGlyphs` → `FT_Load_Glyph` → `png_read_*` → `inflate` calls for
