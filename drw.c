@@ -12,53 +12,46 @@
 #define UTF_SIZ     4
 
 /*
- * Text extent cache — avoids repeated XftTextExtentsUtf8 calls for
- * the same strings (tags, layout symbols, status text) in drawbar().
- * No font hash needed: cache is invalidated on every font change via
- * drw_fontset_invalidate_cache(), so all entries always belong to the
- * current font.
+ * Glyph-width cache — caches per-emoji widths keyed by Unicode codepoint.
+ * Only non-ASCII codepoints (> 0x7F) are cached since ASCII chars have no
+ * emoji PNG overhead. Cache is invalidated on font change via
+ * drw_fontset_invalidate_cache().
  */
-#define EXTENT_CACHE_SIZE 64
+#define GLYPH_CACHE_SIZE 64
 
 static struct {
-	char *text;
+	long codepoint;     /* -1 = empty */
 	unsigned int width;
-} extent_cache_text[EXTENT_CACHE_SIZE];
-static unsigned int extent_cache_len[EXTENT_CACHE_SIZE];
-static int extent_cache_count = 0;
+} glyph_cache[GLYPH_CACHE_SIZE];
 
-/* Look up cached text width, or compute and cache it. */
+/* Return cached glyph width for a non-ASCII codepoint, or measure and cache it. */
 static unsigned int
-drw_fontset_getwidth_cached(Drw *drw, const char *text)
+glyph_getwidth(Drw *drw, long codepoint, const char *utf8str, unsigned int utf8len)
 {
-	unsigned int i, len;
+	unsigned int i = (unsigned int)codepoint & (GLYPH_CACHE_SIZE - 1);
+	unsigned int probe = 0;
+	Fnt *font;
+	unsigned int tmpw;
 
-	if (!drw || !drw->fonts || !text)
-		return 0;
-
-	len = (unsigned int)strlen(text);
-	for (i = 0; i < extent_cache_count; i++) {
-		if (extent_cache_len[i] < len)
+	while (glyph_cache[i].codepoint != -1) {
+		if (glyph_cache[i].codepoint == codepoint)
+			return glyph_cache[i].width;
+		i = (i + 1) & (GLYPH_CACHE_SIZE - 1);
+		if (++probe >= GLYPH_CACHE_SIZE)
 			break;
-		if (extent_cache_len[i] == len &&
-		    memcmp(extent_cache_text[i].text, text, len) == 0)
-			return extent_cache_text[i].width;
 	}
 
-	unsigned int w = drw_text(drw, 0, 0, 0, 0, 0, text, 0);
-
-	if (extent_cache_count < EXTENT_CACHE_SIZE) {
-		for (i = extent_cache_count; i > 0 && extent_cache_len[i-1] < len; i--) {
-			extent_cache_len[i] = extent_cache_len[i-1];
-			extent_cache_text[i] = extent_cache_text[i-1];
+	for (font = drw->fonts; font; font = font->next) {
+		if (XftCharExists(drw->dpy, font->xfont, codepoint)) {
+			drw_font_getexts(font, utf8str, utf8len, &tmpw, NULL);
+			if (probe < GLYPH_CACHE_SIZE) {
+				glyph_cache[i].codepoint = codepoint;
+				glyph_cache[i].width = tmpw;
+			}
+			return tmpw;
 		}
-		extent_cache_text[i].text = strdup(text);
-		extent_cache_text[i].width = w;
-		extent_cache_len[i] = len;
-		extent_cache_count++;
 	}
-
-	return w;
+	return 0;
 }
 
 static const unsigned char utfbyte[UTF_SIZ + 1] = {0x80,    0, 0xC0, 0xE0, 0xF0};
@@ -336,9 +329,12 @@ drw_text(Drw *drw, int x, int y, unsigned int w, unsigned int h, unsigned int lp
 			utf8charlen = utf8decode(text, &utf8codepoint, UTF_SIZ);
 			for (curfont = drw->fonts; curfont; curfont = curfont->next) {
 				charexists = charexists || XftCharExists(drw->dpy, curfont->xfont, utf8codepoint);
-				if (charexists) {
+			if (charexists) {
+				if (utf8codepoint <= 0x7F)
 					drw_font_getexts(curfont, text, utf8charlen, &tmpw, NULL);
-					if (ew + ellipsis_width <= w) {
+				else
+					tmpw = glyph_getwidth(drw, utf8codepoint, text, utf8charlen);
+				if (ew + ellipsis_width <= w) {
 						/* keep track where the ellipsis still fits */
 						ellipsis_x = x + ew;
 						ellipsis_w = w - ew;
@@ -452,18 +448,33 @@ drw_map(Drw *drw, Window win, int x, int y, unsigned int w, unsigned int h)
 unsigned int
 drw_fontset_getwidth(Drw *drw, const char *text)
 {
+	unsigned int total = 0;
+	long codepoint;
+	size_t len;
+
 	if (!drw || !drw->fonts || !text)
 		return 0;
-	return drw_fontset_getwidth_cached(drw, text);
+
+	while (*text) {
+		len = utf8decode(text, &codepoint, UTF_SIZ);
+		if (codepoint <= 0x7F) {
+			unsigned int tmpw;
+			drw_font_getexts(drw->fonts, text, (unsigned int)len, &tmpw, NULL);
+			total += tmpw;
+		} else {
+			total += glyph_getwidth(drw, codepoint, text, (unsigned int)len);
+		}
+		text += len;
+	}
+	return total;
 }
 
-/* Free cached string allocations; call when fonts change. */
+/* Clear glyph cache; call when fonts change. */
 void
 drw_fontset_invalidate_cache(void)
 {
-	for (int i = 0; i < extent_cache_count; i++)
-		free(extent_cache_text[i].text);
-	extent_cache_count = 0;
+	for (int i = 0; i < GLYPH_CACHE_SIZE; i++)
+		glyph_cache[i].codepoint = -1;
 }
 
 unsigned int
