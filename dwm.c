@@ -238,6 +238,8 @@ swallow(Client *p, Client *c)
 	p->win = c->win;
 	c->win = w;
 	updatetitle(p);
+	/* parent adopted child's name; client list unchanged, tags untouched */
+	bar_dirty_segments |= DIRTY_TITLE;
 	XMoveResizeWindow(dpy, p->win, p->x, p->y, p->w, p->h);
 	arrange(p->mon);
 	configure(p);
@@ -606,12 +608,24 @@ drawbar(Monitor *m)
 
 	if (!m->showbar)
 		return;
+	/* skip all bar work when a fullscreen window is focused — content invisible to user */
+	if (optimizefullscreen && m->sel && m->sel->isfullscreen)
+		return;
+	/* skip full re-render when content hasn't changed (expose/restack trivially copy pixmap) */
+	if (!bar_dirty_segments) {
+		drw_map(drw, m->barwin, 0, 0, m->ww, bh);
+		return;
+	}
 
 	/* draw status first so it can be overdrawn by tags later */
 	if (m == selmon) { /* status is only drawn on selected monitor */
-		drw_setscheme(drw, scheme[SchemeNorm]);
-		tw = TEXTW(stext) - lrpad + 2; /* 2px right padding */
-		drw_text(drw, m->ww - tw, 0, tw, bh, 0, stext, 0);
+		if (bar_dirty_segments & DIRTY_STATUS) {
+			drw_setscheme(drw, scheme[SchemeNorm]);
+			tw = TEXTW(stext) - lrpad + 2; /* 2px right padding */
+			drw_text(drw, m->ww - tw, 0, tw, bh, 0, stext, 0);
+		}
+		if (bar_dirty_segments & (DIRTY_STATUS | DIRTY_TITLE))
+			tw = TEXTW(stext) - lrpad + 2; /* needed for title width calculation */
 	}
 
 	for (c = m->clients; c; c = c->next) {
@@ -622,12 +636,14 @@ drawbar(Monitor *m)
 	x = 0;
 	for (i = 0; i < LENGTH(tags); i++) {
 		w = TEXTW(tags[i]);
-		drw_setscheme(drw, scheme[m->tagset[m->seltags] & 1 << i ? SchemeSel : SchemeNorm]);
-		drw_text(drw, x, 0, w, bh, lrpad / 2, tags[i], urg & 1 << i);
-		if (occ & 1 << i)
-			drw_rect(drw, x + boxs, boxs, boxw, boxw,
-				m == selmon && selmon->sel && selmon->sel->tags & 1 << i,
-				urg & 1 << i);
+		if (bar_dirty_segments & DIRTY_TAGS) {
+			drw_setscheme(drw, scheme[m->tagset[m->seltags] & 1 << i ? SchemeSel : SchemeNorm]);
+			drw_text(drw, x, 0, w, bh, lrpad / 2, tags[i], urg & 1 << i);
+			if (occ & 1 << i)
+				drw_rect(drw, x + boxs, boxs, boxw, boxw,
+					m == selmon && selmon->sel && selmon->sel->tags & 1 << i,
+					urg & 1 << i);
+		}
 		x += w;
 	}
 	/* w = TEXTW(m->ltsymbol); */
@@ -635,17 +651,21 @@ drawbar(Monitor *m)
 	/* x = drw_text(drw, x, 0, w, bh, lrpad / 2, m->ltsymbol, 0); */
 
 	if ((w = m->ww - tw - x) > bh) {
-		if (m->sel) {
-			drw_setscheme(drw, scheme[m == selmon ? SchemeSel : SchemeNorm]);
-			drw_text(drw, x, 0, w, bh, lrpad / 2, m->sel->name, 0);
-			if (m->sel->isfloating)
-				drw_rect(drw, x + boxs, boxs, boxw, boxw, m->sel->isfixed, 0);
-		} else {
-			drw_setscheme(drw, scheme[SchemeNorm]);
-			drw_rect(drw, x, 0, w, bh, 1, 1);
+		if (bar_dirty_segments & DIRTY_TITLE) {
+			if (m->sel) {
+				drw_setscheme(drw, scheme[m == selmon ? SchemeSel : SchemeNorm]);
+				drw_text(drw, x, 0, w, bh, lrpad / 2, m->sel->name, 0);
+				if (m->sel->isfloating)
+					drw_rect(drw, x + boxs, boxs, boxw, boxw, m->sel->isfixed, 0);
+			} else {
+				drw_setscheme(drw, scheme[SchemeNorm]);
+				drw_rect(drw, x, 0, w, bh, 1, 1);
+			}
 		}
 	}
 	drw_map(drw, m->barwin, 0, 0, m->ww, bh);
+	/* content now matches pixmap; skip next expose/restack */
+	bar_dirty_segments = 0;
 }
 
 void
@@ -708,6 +728,8 @@ focus(Client *c)
 		XDeleteProperty(dpy, root, netatom[NetActiveWindow]);
 	}
 	selmon->sel = c;
+	/* new selected client: title changes, occupancy box fill state changes */
+	bar_dirty_segments |= DIRTY_TITLE | DIRTY_TAGS;
 	drawbars();
 }
 
@@ -1151,13 +1173,18 @@ propertynotify(XEvent *e)
 			break;
 		case XA_WM_HINTS:
 			updatewmhints(c);
+			/* urgency indicators in tag rects changed */
+			bar_dirty_segments |= DIRTY_TAGS;
 			drawbars();
 			break;
 		}
 		if (ev->atom == XA_WM_NAME || ev->atom == netatom[NetWMName]) {
 			updatetitle(c);
-			if (c == c->mon->sel)
+			if (c == c->mon->sel) {
+				/* selected client's window title changed */
+				bar_dirty_segments |= DIRTY_TITLE;
 				drawbar(c->mon);
+			}
 		}
 		if (ev->atom == netatom[NetWMWindowType])
 			updatewindowtype(c);
@@ -1454,6 +1481,8 @@ setlayout(const Arg *arg)
 	if (arg && arg->v)
 		selmon->lt[selmon->sellt] = (Layout *)arg->v;
 	strncpy(selmon->ltsymbol, selmon->lt[selmon->sellt]->symbol, sizeof selmon->ltsymbol);
+	/* layout symbol in tag area changed */
+	bar_dirty_segments |= DIRTY_TAGS;
 	if (selmon->sel)
 		arrange(selmon);
 	else
@@ -1668,6 +1697,8 @@ togglebar(const Arg *arg)
 	selmon->showbar = !selmon->showbar;
 	updatebarpos(selmon);
 	XMoveResizeWindow(dpy, selmon->barwin, selmon->wx, selmon->by, selmon->ww, bh);
+	/* bar shown/hidden — all segments stale */
+	bar_dirty_segments |= DIRTY_STATUS | DIRTY_TAGS | DIRTY_TITLE;
 	arrange(selmon);
 }
 
@@ -1981,6 +2012,8 @@ updatestatus(void)
 {
 	if (!gettextprop(root, XA_WM_NAME, stext, sizeof(stext)))
 		strcpy(stext, "dwm-"VERSION);
+	/* status changed; title boundary may shift if width differs */
+	bar_dirty_segments |= DIRTY_STATUS | DIRTY_TITLE;
 	drawbar(selmon);
 }
 

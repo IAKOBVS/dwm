@@ -254,5 +254,11 @@ static Monitor *mons, *selmon;
 static Window root, wmcheckwin;
 
 static xcb_connection_t *xcon;
+/* bar_dirty_segments: bitmask tracking which bar segments have changed.
+ * drawbar() skips unchanged segments and early-returns with pixmap copy when all clean. */
+#define DIRTY_STATUS 1
+#define DIRTY_TAGS   2
+#define DIRTY_TITLE  4
+static int bar_dirty_segments = 7;  /* all segments dirty initially */
 
 #endif /* DWM_H */

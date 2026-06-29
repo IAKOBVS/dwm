@@ -11,6 +11,63 @@
 #define UTF_INVALID 0xFFFD
 #define UTF_SIZ     4
 
+/*
+ * Text extent cache — avoids repeated XftTextExtentsUtf8 calls for
+ * the same strings (tags, layout symbols, status text) in drawbar().
+ * Invalidated when fonts are recreated.
+ */
+#define EXTENT_CACHE_SIZE 64
+
+typedef struct {
+	char *text;
+	unsigned int width;
+	unsigned long font_hash;
+} ExtentCache;
+
+static ExtentCache extent_cache[EXTENT_CACHE_SIZE];
+static int extent_cache_count = 0;
+
+static unsigned long
+font_hash(Fnt *font)
+{
+	unsigned long h = 5381;
+	for (Fnt *f = font; f; f = f->next) {
+		h = ((h << 5) + h) + (unsigned long)f->xfont;
+		h = ((h << 5) + h) + f->h;
+	}
+	return h;
+}
+
+/* Look up cached text width, or compute and cache it. */
+static unsigned int
+drw_fontset_getwidth_cached(Drw *drw, const char *text)
+{
+	unsigned long fhash;
+	unsigned int i;
+
+	if (!drw || !drw->fonts || !text)
+		return 0;
+
+	fhash = font_hash(drw->fonts);
+
+	for (i = 0; i < extent_cache_count; i++) {
+		if (extent_cache[i].font_hash == fhash &&
+		    strcmp(extent_cache[i].text, text) == 0)
+			return extent_cache[i].width;
+	}
+
+	unsigned int w = drw_text(drw, 0, 0, 0, 0, 0, text, 0);
+
+	if (extent_cache_count < EXTENT_CACHE_SIZE) {
+		extent_cache[extent_cache_count].text = strdup(text);
+		extent_cache[extent_cache_count].width = w;
+		extent_cache[extent_cache_count].font_hash = fhash;
+		extent_cache_count++;
+	}
+
+	return w;
+}
+
 static const unsigned char utfbyte[UTF_SIZ + 1] = {0x80,    0, 0xC0, 0xE0, 0xF0};
 static const unsigned char utfmask[UTF_SIZ + 1] = {0xC0, 0x80, 0xE0, 0xF0, 0xF8};
 static const long utfmin[UTF_SIZ + 1] = {       0,    0,  0x80,  0x800,  0x10000};
@@ -96,6 +153,7 @@ drw_free(Drw *drw)
 	XFreePixmap(drw->dpy, drw->drawable);
 	XFreeGC(drw->dpy, drw->gc);
 	drw_fontset_free(drw->fonts);
+	drw_fontset_invalidate_cache();
 	free(drw);
 }
 
@@ -161,6 +219,8 @@ drw_fontset_create(Drw* drw, const char *fonts[], size_t fontcount)
 
 	if (!drw || !fonts)
 		return NULL;
+
+	drw_fontset_invalidate_cache();
 
 	for (i = 1; i <= fontcount; i++) {
 		if ((cur = xfont_create(drw, fonts[fontcount - i], NULL))) {
@@ -401,7 +461,16 @@ drw_fontset_getwidth(Drw *drw, const char *text)
 {
 	if (!drw || !drw->fonts || !text)
 		return 0;
-	return drw_text(drw, 0, 0, 0, 0, 0, text, 0);
+	return drw_fontset_getwidth_cached(drw, text);
+}
+
+/* Free cached string allocations; call when fonts change. */
+void
+drw_fontset_invalidate_cache(void)
+{
+	for (int i = 0; i < extent_cache_count; i++)
+		free(extent_cache[i].text);
+	extent_cache_count = 0;
 }
 
 unsigned int

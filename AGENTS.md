@@ -48,3 +48,86 @@ focused, optionally prefixing the touched area (`config: ...`, `README: ...`).
 Pull requests should describe the user-visible behavior change, list build
 verification, mention any manual X-session testing, and call out updates to
 `config.def.h`, patches, or installation defaults.
+
+## Performance Optimizations
+
+Four phases of drawbar optimization have been implemented; reference
+`PERF-PROFILE.md`, `OPTIMIZE-STATUS.md`, and `OPTIMIZE-FULLSCREEN.md` for profiling data and remaining work.
+
+### Phase 1: Text Extent Cache (`drw.c`/`drw.h`)
+
+`drw_fontset_getwidth()` now caches computed text widths per (font-hash, string)
+pair in a fixed-size `ExtentCache` array (`drw.c:14-68`). The cache is
+invalidated when fonts are recreated via `drw_fontset_invalidate_cache()`,
+called from `drw_fontset_create()` and `drw_free()`.
+
+This eliminates repeated `XftTextExtentsUtf8` → `XftGlyphExtents` →
+`XftFontLoadGlyphs` → `FT_Load_Glyph` → `png_read_*` → `inflate` calls for
+the same strings (tags, layout symbols, status text) across bar redraws.
+
+### Phase 2: Bar Dirty Tracking (`dwm.c`/`dwm.h`)
+
+A `bar_dirty` flag (`dwm.h:257`) tracks whether bar content has actually
+changed. `drawbar()` checks it early (`dwm.c:610`): if clean, it copies
+the retained pixmap to the window via `drw_map()` and returns without
+re-rendering text. After a full draw, `bar_dirty` is reset to 0.
+
+This avoids the expensive Xft/FreeType/PNG-decompression path on every
+`Expose`, `ConfigureNotify`, or geometry-only `restack` call. The pixmap
+copy is negligible compared to glyph rendering.
+
+### Phase 3: Segment-Level Dirty Tracking (`dwm.c`/`dwm.h`)
+
+Phase 2's single `bar_dirty` flag was refined into a three-bit `bar_dirty_segments`
+mask (`dwm.h:258-263`) with per-segment flags `DIRTY_STATUS`, `DIRTY_TAGS`,
+`DIRTY_TITLE`. `drawbar()` draws only the dirty segments instead of the entire bar,
+and the `!bar_dirty_segments` early-return applies to all monitors (not just selmon).
+
+Content-change call sites set only the relevant segment bits:
+- `focus()` → `DIRTY_TITLE | DIRTY_TAGS` — selected client changed
+- `updatestatus()` → `DIRTY_STATUS | DIRTY_TITLE` — status text updated
+- `propertynotify()` WM_HINTS → `DIRTY_TAGS` — urgency changed
+- `propertynotify()` WM_NAME → `DIRTY_TITLE` — title changed (selected client only)
+- `setlayout()` → `DIRTY_TAGS` — layout symbol changed
+- `togglebar()` → `DIRTY_STATUS | DIRTY_TAGS | DIRTY_TITLE` — bar shown/hidden
+- `swallow()` → `DIRTY_TITLE` — swallowed client title changed
+
+`DIRTY_TITLE` is always set alongside `DIRTY_STATUS` because status text width
+changes shift the title area boundary, requiring a title redraw. Tags-only and
+title-only changes avoid the expensive emoji/status draw entirely.
+
+### Phase 4: Fullscreen Bar Freeze (`config.h`/`dwm.c`)
+
+`optimizefullscreen` (`config.def.h:93`, default 1) guards a check at the top
+of `drawbar()` (`dwm.c:610-612`): when a fullscreen window is focused, the bar
+is not drawn at all — no pixmap copy, no font work, no emoji. The bar freezes
+at its pre-fullscreen state and resumes when the window exits fullscreen.
+
+**What dwm still does during fullscreen:**
+- Runs the event loop (`XNextEvent` dispatches normally)
+- Handles client messages, configure, map, unmap, destroy for all windows
+- Manages focus (if `lockfullscreen = 0`, user can refocus other windows)
+- Processes `_NET_WM_STATE` for fullscreen toggle
+- Runs `updatestatus()`, `focus()`, `propertynotify()` — these call `drawbar()`
+  but it returns immediately at the `isfullscreen` check
+
+**What dwm skips during fullscreen (`drawbar()` early-return):**
+- `drw_text()` → XftDrawStringUtf8 → FreeType glyph rendering → emoji PNG decompress
+- `drw_map()` → XCopyArea + XSync pixmap copy to bar window
+- All per-segment drawing (status, tags, title, layout symbol, urgency rects)
+- `XftFontLoadGlyphs`, `inflate`, `png_read_*` for status text
+
+**What happens on un-fullscreen:**
+- `setfullscreen(c, 0)` calls `arrange()` → `restack()` → `drawbar()`
+- `isfullscreen` is now 0, so the guard passes
+- `bar_dirty_segments` is 0 initially (never modified during fullscreen), so
+  the `!bar_dirty_segments` early-return would normally skip the draw... but
+  the pixmap is stale from before fullscreen. To force a fresh draw, `setfullscreen()`
+  should set `bar_dirty_segments = DIRTY_ALL`. See `OPTIMIZE-FULLSCREEN.md` for
+  this refinement.
+
+**Config interaction:**
+- `optimizefullscreen = 1` (default): freeze bar during fullscreen, zero CPU
+- `optimizefullscreen = 0`: stock behavior — bar draws on top of fullscreen content
+- `lockfullscreen = 1` (default): prevents focus cycling away from fullscreen window
+- Both are independent knobs in `config.h`/`config.def.h`

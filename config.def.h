@@ -90,6 +90,7 @@ static const float mfact     = 0.55f; /* factor of master area size [0.05..0.95]
 static const int nmaster     = 1;    /* number of clients in master area */
 static const int resizehints = 1;    /* 1 means respect size hints in tiled resizals */
 static const int lockfullscreen = 1; /* 1 will force focus on the fullscreen window */
+static const int optimizefullscreen = 1; /* 1 will skip bar drawing during fullscreen (saves CPU) */
 
 static const Layout layouts[] = {
 	/* symbol     arrange function */
