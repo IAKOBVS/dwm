@@ -1,5 +1,6 @@
 #include "mock_x11.h"
 #include <stdarg.h>
+#include <assert.h>
 #include <stdint.h>
 #include <xcb/xcb.h>
 #include <xcb/res.h>
@@ -490,6 +491,7 @@ Pixmap
 XCreatePixmap(Display *dpy, Drawable d, unsigned int w, unsigned int h,
 	      unsigned int depth)
 {
+	assert(w > 0 && h > 0);
 	(void)dpy; (void)d; (void)w; (void)h; (void)depth;
 	return (Pixmap)mock_next_win++;
 }
@@ -539,6 +541,7 @@ void
 XDrawRectangle(Display *dpy, Drawable d, GC gc,
 	       int x, int y, unsigned int w, unsigned int h)
 {
+	assert(w < 100000 && h < 100000);
 	(void)dpy; (void)d; (void)gc; (void)x; (void)y; (void)w; (void)h;
 }
 
@@ -546,6 +549,7 @@ void
 XFillRectangle(Display *dpy, Drawable d, GC gc,
 	       int x, int y, unsigned int w, unsigned int h)
 {
+	assert(w < 100000 && h < 100000);
 	(void)dpy; (void)d; (void)gc; (void)x; (void)y; (void)w; (void)h;
 }
 
