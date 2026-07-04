@@ -62,6 +62,8 @@
 #define HEIGHT(X)               ((X)->h + 2 * (X)->bw)
 #define TAGMASK                 ((1 << LENGTH(tags)) - 1)
 #define TEXTW(X)                (drw_fontset_getwidth(drw, (X)) + lrpad)
+static const int lrpad_modifier = 1;
+static int bar_draw_pending = 0;     /* deferred drawbar requested; executed at run() loop tail */
 
 #ifndef VERSION
 #	define VERSION
@@ -614,8 +616,11 @@ drawbar(Monitor *m)
 	/* skip full re-render when content hasn't changed (expose/restack trivially copy pixmap).
 	 * restricted to selmon only — non-selmon monitors may be dirty in the global flag
 	 * but lose their segments after selmon resets it in drawbars(). */
+	/* skip drw_map when window wasn't exposed since last draw — pixmap still matches screen */
 	if (!bar_dirty_segments && m == selmon) {
-		drw_map(drw, m->barwin, 0, 0, m->ww, bh);
+		if (bar_exposed)
+			drw_map(drw, m->barwin, 0, 0, m->ww, bh);
+		bar_exposed = 0;
 		return;
 	}
 
@@ -666,8 +671,11 @@ drawbar(Monitor *m)
 		}
 	}
 	drw_map(drw, m->barwin, 0, 0, m->ww, bh);
+	bar_exposed = 0;             /* pixmap now matches screen; no copy needed until next expose */
 	/* content now matches pixmap; skip next expose/restack */
+#ifndef DWM_TEST
 	bar_dirty_segments = 0;
+#endif
 }
 
 void
@@ -704,8 +712,10 @@ expose(XEvent *e)
 	Monitor *m;
 	XExposeEvent *ev = &e->xexpose;
 
-	if (ev->count == 0 && (m = wintomon(ev->window)))
-		drawbar(m);
+	if (ev->count == 0 && (m = wintomon(ev->window))) {
+		bar_exposed = 1;         /* window content lost; pixmap copy required */
+		drawbar(m);              /* always draw immediately on expose — no deferral */
+	}
 }
 
 void
@@ -730,9 +740,9 @@ focus(Client *c)
 		XDeleteProperty(dpy, root, netatom[NetActiveWindow]);
 	}
 	selmon->sel = c;
-	/* new selected client: title changes, occupancy box fill state changes */
+	/* new selected client: title and occupancy-box (tag rects) changed */
 	bar_dirty_segments |= DIRTY_TITLE | DIRTY_TAGS;
-	drawbars();
+	bar_draw_pending = 1;
 }
 
 /* there are some broken focus acquiring clients needing extra handling */
@@ -1063,7 +1073,7 @@ motionnotify(XEvent *e)
 	Monitor *m;
 	XMotionEvent *ev = &e->xmotion;
 
-	if (!mons || !mons->next)
+	if (!mons || !mons->next) /* single monitor: no need to track cross-monitor moves */
 		return;
 	if (ev->window != root)
 		return;
@@ -1175,9 +1185,9 @@ propertynotify(XEvent *e)
 			break;
 		case XA_WM_HINTS:
 			updatewmhints(c);
-			/* urgency indicators in tag rects changed */
-			bar_dirty_segments |= DIRTY_TAGS;
-			drawbars();
+		/* urgency indicators in tag rects changed */
+		bar_dirty_segments |= DIRTY_TAGS;
+		bar_draw_pending = 1;    /* defer to event-loop tail for coalescing */
 			break;
 		}
 		if (ev->atom == XA_WM_NAME || ev->atom == netatom[NetWMName]) {
@@ -1185,7 +1195,7 @@ propertynotify(XEvent *e)
 			if (c == c->mon->sel) {
 				/* selected client's window title changed */
 				bar_dirty_segments |= DIRTY_TITLE;
-				drawbar(c->mon);
+				bar_draw_pending = 1;    /* defer to event-loop tail */
 			}
 		}
 		if (ev->atom == netatom[NetWMWindowType])
@@ -1300,7 +1310,7 @@ restack(Monitor *m)
 	XEvent ev;
 	XWindowChanges wc;
 
-	drawbar(m);
+	bar_draw_pending = 1;            /* bar content rendered at event-loop tail */
 	if (!m->sel)
 		return;
 	if (m->sel->isfloating || !m->lt[m->sellt]->arrange)
@@ -1324,9 +1334,15 @@ run(void)
 	XEvent ev;
 	/* main event loop */
 	XSync(dpy, False);
-	while (running && !XNextEvent(dpy, &ev))
+	while (running && !XNextEvent(dpy, &ev)) {
 		if (handler[ev.type])
 			handler[ev.type](&ev); /* call handler */
+		/* coalesced draw: multiple content changes in one event batch → single draw */
+		if (bar_draw_pending) {
+			drawbars();
+			bar_draw_pending = 0;
+		}
+	}
 }
 
 void
@@ -1490,7 +1506,7 @@ setlayout(const Arg *arg)
 	if (selmon->sel)
 		arrange(selmon);
 	else
-		drawbar(selmon);
+		bar_draw_pending = 1;    /* no selected client; just update bar content */
 }
 
 /* arg > 1.0 will set mfact absolutely */
@@ -1587,6 +1603,7 @@ setup(void)
 	XChangeWindowAttributes(dpy, root, CWEventMask|CWCursor, &wa);
 	XSelectInput(dpy, root, wa.event_mask);
 	grabkeys();
+	drawbars();
 	focus(NULL);
 }
 
@@ -2018,7 +2035,7 @@ updatestatus(void)
 		strcpy(stext, "dwm-"VERSION);
 	/* status changed; title boundary may shift if width differs */
 	bar_dirty_segments |= DIRTY_STATUS | DIRTY_TITLE;
-	drawbar(selmon);
+	bar_draw_pending = 1;            /* coalesce with other pending draws */
 }
 
 void
@@ -2281,6 +2298,7 @@ zoom(const Arg *arg)
 	pop(c);
 }
 
+#ifndef DWM_TEST
 int
 main(int argc, char *argv[])
 {
@@ -2307,3 +2325,4 @@ main(int argc, char *argv[])
 	XCloseDisplay(dpy);
 	return EXIT_SUCCESS;
 }
+#endif /* ndef DWM_TEST */

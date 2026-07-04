@@ -260,5 +260,6 @@ static xcb_connection_t *xcon;
 #define DIRTY_TAGS   2
 #define DIRTY_TITLE  4
 static int bar_dirty_segments = 7;  /* all segments dirty initially */
+static int bar_exposed = 1;    /* barwin received expose since last draw — drw_map needed */
 
 #endif /* DWM_H */

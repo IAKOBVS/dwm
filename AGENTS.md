@@ -32,13 +32,148 @@ underscores where practical, matching examples such as `applyrules` and
 style, and avoid broad refactors while changing behavior. Format manually to
 match surrounding code; no formatter is configured.
 
+Every new feature MUST include:
+- A **purpose comment** above the primary declaration or implementation
+- **Inline comments** for non-obvious logic (bit operations, guard conditions,
+  algorithm choices, performance trade-offs)
+- **Corresponding unit tests** that exercise the primary path and at least one
+  edge case
+
+## Subagent & Parallelism
+
+Development and testing leverage up to 5 concurrent subagent threads for
+parallel work. Subagents build, test, and generate code independently and
+report back results. This document describes the repository guidelines
+that agents apply when working.
+
 ## Testing Guidelines
 
-There is no automated test suite in this tree. Use `make clean && make` as the
-baseline validation for every change. For window-management behavior, test in a
-nested or disposable X session when possible, for example with Xephyr, then run
-the built `./dwm` inside that display. Exercise changed keybindings, layouts,
-tag behavior, fullscreen handling, and restart/swallow paths as applicable.
+### Quick Start
+
+```sh
+cd tests
+make run       # build and run all unit tests
+make coverage  # clean build, run tests with gcov, show dwm.c coverage
+```
+
+### Test Architecture
+
+Unit tests live in `tests/` and compile dwm.c with mock X11 headers (no real
+X server needed). Every test `.c` file follows this pattern:
+
+1. `#include "mock_x11.h"` + `#define DRW_H` + `#include "mock_drw.h"`
+2. `#include "../dwm.h"` + `#include "../dwm.c"` — pulls in all dwm internals
+3. A `main()` that initializes globals (`dpy`, `drw`, `selmon`, `scheme[]`) and
+   calls test functions
+4. `ASSERT()` / `ASSERT_EQ()` macros for pass/fail
+
+### Current Test Files
+
+- **test_pure_logic.c** (~1100 lines, 101 tests) — core dwm logic: linked-list
+  ops (attach, detach, attachstack, detachstack), nexttiled, dirtomon,
+  recttomon, wintoclient, gap_copy, setgaps (toggle/adjust/clamp/reset),
+  tag/toggletag/toggleview/view, setmfact, incnmaster, zoom/togglefloating,
+  setlayout, tile/monocle, updatebarpos, focusstack, swallowingclient,
+  cachebuttons/cachekeys, ISVISIBLE/INTERSECT macros, applysizehints,
+  createmon defaults, mousebuttonmatch fast-path, keypress mapped/unmapped
+
+- **test_segments.c** (~230 lines, 17 tests) — bar_dirty_segments tracking:
+  initial state, drawbar reset, drawbar early return, focus sets segments,
+  updatestatus sets segments, setlayout sets segments, togglebar sets segments,
+  setfullscreen(0) sets segments
+
+- **test_arrange.c** (~420 lines, 42 tests) — arrange/arrangemon with tile
+  and floating layouts (null, no clients, multi-monitor), tile geometry
+  (1 client, 2 clients master/stack, nmaster=0, nmaster > n), monocle
+  counting (1 client, 2 clients), resize/resizeclient geometry tracking
+  and applysizehints clamping, setfocus (normal/neverfocus), showhide
+  (null/visible/invisible), focus (sel changes, NULL finds visible),
+  unfocus (with/without setfocus)
+
+- **test_window_ops.c** (~310 lines, 29 tests) — togglebar toggles showbar and sets
+  dirty segments, togglefloating (toggle, fullscreen noop, no-sel noop),
+  seturgent flag, sendmon (changes monitor, detach/attach, same-monitor noop),
+  unmanage (detach, destroy), manage geometry clamping,
+  setclientstate (NormalState, WithdrawnState)
+
+- **test_drw_cache.c** (~550 lines, 25 tests) — glyph-width cache in isolation:
+  cache miss/hit returns same value, cache hit confirms stored width, ASCII
+  uses direct extents, cache invalidate preserves value, empty/NULL/null-fonts
+  returns 0, full-cache eviction no-infinite-loop, missing glyph returns 0,
+  drw_fontset_getwidth_clamp limits/zero/n>width, linear probing across
+  colliding slots, utf8decodebyte valid/continuation, utf8validate rejects
+  surrogates/out-of-range, utf8decode zero-length input
+
+- **test_events.c** (~560 lines, 62 tests) — focusin (different window, own window,
+  no selection), clientmessage fullscreen (add, remove, toggle, unknown window,
+  NetActiveWindow urgent), unmapnotify (send_event withdraw, non-send_event
+  unmanage), destroynotify unmanage, configurerequest floating geometry
+  (full mask, partial mask, non-client), expose (barwin, other),
+  propertynotify (root WM_NAME, PropertyDelete early return, client
+  WM_NORMAL_HINTS, WM_HINTS sets DIRTY_TAGS, WM_NAME on sel/non-sel),
+  setfullscreen enter/exit/idempotent, togglefullscr with/without sel,
+  enternotify (non-Normal mode, NotifyInferior, entering sel returns early,
+  entering barwin returns early)
+
+### Mock Infrastructure
+
+- **mock_x11.h** — ~700 lines: all X11 types (Display, Window, Atom, XEvent
+  union with all subtypes), X11 constants (modifiers, keysyms, atoms, CW*,
+  etc.), and ~80 X11 function declarations
+
+- **mock_x11.c** — stub implementations for all ~80 Xlib functions (safe
+  no-ops), plus `ecalloc()`, `die()`, and xcb stubs
+
+- **mock_drw.h** — `static inline` no-op stubs for all `drw_*()` functions
+
+- **Forwarding headers** under `tests/include/X11/` and `tests/include/xcb/`
+  redirect angle-bracket includes (`<X11/Xlib.h>`, `<xcb/xcb.h>`) to the mocks,
+  keeping `-I tests/include` ahead of system includes
+
+- **DWM_TEST define** — guards `main()` in `dwm.c` (`#ifndef DWM_TEST` …
+  `#endif`) and suppresses `bar_dirty_segments = 0` in `drawbar()` so tests
+  can verify segment bits after the function returns
+
+- **test_drw_cache.c is self-contained** — it provides its own type stubs for
+  `Display`, `XftFont`, `FcPattern` and does NOT include mock_x11.h, mock_drw.h,
+  or the real dwm.c. It replicates the cache/UTF-8 logic from drw.c inline so
+  tests never hit real X11 or Xft headers.
+
+### Known Gotchas
+
+- Tests that set `selmon = &local_monitor` MUST restore `selmon` to the
+  heap-allocated original before the local variable goes out of scope,
+  otherwise subsequent tests crash on dangling pointers
+- Many dwm functions call `arrange()` → `tile()` which accesses `m->gap` — any
+  local `Monitor` used with such a function must have `m.gap` allocated
+- `toggletag()` preserves a client's last tag (won't XOR to 0) — tests must
+  match actual dwm behavior, not assumed behavior
+- `setmfact()` rejects values outside [0.05, 0.95]; absolute mode uses
+  `arg->f - 1.0` which can yield >0.95 and be rejected
+- `drawbar()` accesses `drw->fonts->h` at line 605, before the `showbar` and
+  `bar_dirty_segments` early-returns — the global `drw` must have a valid
+  font chain even for bar-drawing callers
+- LSP errors about `GC` redefinition and missing `ft2build.h` are false
+  positives from clangd seeing system X11 headers instead of mock redirects;
+  actual compilation with `c99 -I include` succeeds
+  `tests/include/X11/Xlib.h`, `mock_x11.h:26`)
+
+### Adding a New Test
+
+1. Create `tests/test_<feature>.c` following the existing pattern
+2. The Makefile's `$(wildcard test_*.c)` picks it up automatically
+3. Run `make` to verify it compiles
+4. Add `cov_test_<feature>` to the `coverage` make target
+
+### Pre-existing Notices
+
+- `config.def.h` defines `termcmd[]` but it is never used (warning suppressed)
+- `dwm.c:298,302,304` have signedness warnings in `buttonpress()` (X int v.
+  unsigned tag index)
+- `dwm.c:422-423` have signedness warnings in `clientmessage()` (long v.
+  Atom (unsigned long))
+- `dwm.c:892,1564,1681,1686,1964` have additional signedness warnings in
+  grabkeys, setup, tile, updatenumlockmask
 
 ## Commit & Pull Request Guidelines
 
@@ -49,28 +184,39 @@ Pull requests should describe the user-visible behavior change, list build
 verification, mention any manual X-session testing, and call out updates to
 `config.def.h`, patches, or installation defaults.
 
+### IMPORTANT: Commit before switching branches
+
+**Always commit all working-tree changes before checking out into another
+branch.** Untracked files (new test files, docs, etc.) are invisible to git
+until staged, and `git clean -fd` (often needed after a branch switch)
+permanently deletes them.  Committing first ensures nothing is lost: use
+`git add -A && git commit -m "<message>"` or `git stash` (which also saves
+untracked files with `--include-untracked`).  Never rely on the working tree
+being preserved across checkout when new files are present.
+
 ## Performance Optimizations
 
-Four phases of drawbar optimization have been implemented; reference
+Five phases of drawbar optimization have been implemented; reference
 `PERF-PROFILE.md`, `OPTIMIZE-STATUS.md`, and `OPTIMIZE-FULLSCREEN.md` for profiling data and remaining work.
 
-### Phase 1: Text Extent Cache (`drw.c`/`drw.h`)
+### Phase 1: Glyph-Width Cache (`drw.c`)
 
-`drw_fontset_getwidth()` caches computed text widths in a fixed-size array
-(`drw.c:21-68`). The cache is keyed by string only — `drw_fontset_invalidate_cache()`
-is called on every font change (`drw_fontset_create()`, `drw_free()`), ensuring
-all entries always belong to the current font. Lookup uses `len` + `memcmp` over
-`strcmp` to avoid scanning past the first differing byte when lengths match.
+`drw_fontset_getwidth()` uses a per-codepoint cache for non-ASCII (emoji)
+glyphs (`drw.c:20-55`). The cache is a fixed-size open-addressing hash table
+(`glyph_cache`, 64 entries) keyed by Unicode codepoint with linear probing.
+`drw_fontset_invalidate_cache()` clears all entries on font change.
 
-Entries are stored in descending-length order so a miss on a unique-length string
-breaks early without any `memcmp`. SOA layout: `extent_cache_len[]` (256 bytes
-for 64 entries, `unsigned int`) is the only array scanned on lookup; the
-`extent_cache_text[]` struct pairs (`char *text`, `unsigned int width`) are
-fetched only on exact-length match.
+ASCII characters (< 0x7F) skip the cache and call `drw_font_getexts()` directly
+since they have no emoji/PNG overhead. Non-ASCII goes through `glyph_getwidth()`
+which checks the cache first, then calls `XftCharExists()` + `drw_font_getexts()`
+on cache miss.
 
-This eliminates repeated `XftTextExtentsUtf8` → `XftGlyphExtents` →
-`XftFontLoadGlyphs` → `FT_Load_Glyph` → `png_read_*` → `inflate` calls for
-the same strings (tags, layout symbols, status text) across bar redraws.
+This avoids repeated `XftGlyphExtents` → `FT_Load_Glyph` → `png_read_*` →
+`inflate` for emoji codepoints that appear in multiple bar redraws (tags, status
+text, title text).
+
+Cache correctness is tested in `tests/test_drw_cache.c` (25 tests) which
+replicates the cache logic with minimal stubs (no X server required).
 
 ### Phase 2: Bar Dirty Tracking (`dwm.c`/`dwm.h`)
 
@@ -138,3 +284,33 @@ at its pre-fullscreen state and resumes when the window exits fullscreen.
 - `optimizefullscreen = 0`: stock behavior — bar draws on top of fullscreen content
 - `lockfullscreen = 1` (default): prevents focus cycling away from fullscreen window
 - Both are independent knobs in `config.h`/`config.def.h`
+
+### Phase 5: Emoji Render Cache (`drw.c`)
+
+An `emoji_cache` in the `Drw` struct (`drw.h:39-42`, `drw.c:56-105`)
+caches the rendered pixmap for each unique color emoji codepoint in a
+32-entry open-addressing hash table with linear probing. On first
+encounter in `drw_text()` (`drw.c:447-491`), the emoji is rendered
+normally through `XftDrawStringUtf8` (which triggers
+`XftFontLoadGlyphs` → `FT_Load_Glyph` → `png_read_*` → `inflate`)
+and the resulting pixels are captured to a per-entry `XImage` via
+`XGetImage`. On subsequent draws, `XPutImage` copies the cached
+pixmap directly, bypassing the entire font-loading and PNG decompress
+pipeline.
+
+This avoids repeated `XftFontLoadGlyphs` + `inflate` for emoji
+codepoints that appear in every drawbar redraw (status text). In
+production with a 5-emoji status bar, perf shows:
+- Samples: 87 → 14 (**−84%**)
+- Cycles: 21.5M → 1.7M (**−92%**)
+- `XftFontLoadGlyphs`: 0% (was 27.8%)
+- `inflate`: 0% (was 30.3%)
+
+Cache invalidation happens on font change (`drw_fontset_create`) and
+drw destruction (`drw_free`). `XImage` pixmaps are freed during
+invalidation. The cache uses `emojicachehash()` as a non-cryptographic
+hash of the codepoint; eviction replaces the first colliding entry in
+the probed slot.
+
+Cache correctness is tested in `tests/test_drw_cache.c` alongside the
+Phase-1 glyph-width cache tests (same file, distinct test groups).

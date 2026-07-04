@@ -21,15 +21,28 @@ typedef struct Fnt {
 enum { ColFg, ColBg, ColBorder }; /* Clr scheme index */
 typedef XftColor Clr;
 
+/* Emoji render cache — caches rendered emoji pixmaps keyed by codepoint.
+ * Avoids repeat FT_Load_Glyph → png_read_image → inflate for color emoji
+ * that appear in multiple bar redraws. */
+#define EMOJI_CACHE_SIZE 32
+
+typedef struct {
+	long codepoint;     /* -1 = empty */
+	Pixmap pixmap;      /* cached rendered emoji pixmap (same depth as screen) */
+	int w;              /* glyph width in pixels */
+} EmojiCacheSlot;
+
 typedef struct {
 	unsigned int w, h;
 	Display *dpy;
 	int screen;
 	Window root;
 	Drawable drawable;
+	XftDraw *xftd;               /* persistent XftDraw — keeps Xft's internal glyph cache alive */
 	GC gc;
 	Clr *scheme;
 	Fnt *fonts;
+	EmojiCacheSlot emoji_cache[EMOJI_CACHE_SIZE];
 } Drw;
 
 /* Drawable abstraction */
