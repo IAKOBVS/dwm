@@ -163,8 +163,8 @@ drw_create(Display *dpy, int screen, Window root, unsigned int w, unsigned int h
 	drw->dpy = dpy;
 	drw->screen = screen;
 	drw->root = root;
-	drw->w = w;
-	drw->h = h;
+	drw->w = w = w ? w : 1;
+	drw->h = h = h ? h : 1;
 	drw->drawable = XCreatePixmap(dpy, root, w, h, DefaultDepth(dpy, screen));
 	drw->gc = XCreateGC(dpy, root, 0, NULL);
 	/* persistent XftDraw: Xft caches rendered glyphs per-drawable;
@@ -186,8 +186,8 @@ drw_resize(Drw *drw, unsigned int w, unsigned int h)
 	if (!drw)
 		return;
 
-	drw->w = w;
-	drw->h = h;
+	drw->w = w = w ? w : 1;
+	drw->h = h = h ? h : 1;
 	if (drw->drawable)
 		XFreePixmap(drw->dpy, drw->drawable);
 	XftDrawDestroy(drw->xftd);    /* old XftDraw tied to old pixmap */
@@ -341,7 +341,7 @@ drw_setscheme(Drw *drw, Clr *scm)
 void
 drw_rect(Drw *drw, int x, int y, unsigned int w, unsigned int h, int filled, int invert)
 {
-	if (!drw || !drw->scheme)
+	if (!drw || !drw->scheme || !w || !h)
 		return;
 	XSetForeground(drw->dpy, drw->gc, invert ? drw->scheme[ColBg].pixel : drw->scheme[ColFg].pixel);
 	if (filled)
@@ -380,7 +380,7 @@ drw_text(Drw *drw, int x, int y, unsigned int w, unsigned int h, unsigned int lp
 		XFillRectangle(drw->dpy, drw->drawable, drw->gc, x, y, w, h);
 		d = drw->xftd;           /* use persistent XftDraw (created in drw_create) */
 		x += lpad;
-		w -= lpad;
+		w = (w >= lpad) ? (w - lpad) : 0;
 	}
 
 	usedfont = drw->fonts;
@@ -461,6 +461,7 @@ drw_text(Drw *drw, int x, int y, unsigned int w, unsigned int h, unsigned int lp
 							ascii_len = 0;
 						}
 						cw = glyph_getwidth(drw, cp, rp, (unsigned int)clen);
+						if (cw > 0) {
 						eidx = emoji_cache_lookup(drw, cp);
 						if (eidx >= 0) {
 							EmojiCacheSlot *eslot = &drw->emoji_cache[eidx];
@@ -483,6 +484,7 @@ drw_text(Drw *drw, int x, int y, unsigned int w, unsigned int h, unsigned int lp
 							emoji_cache_insert(drw, cp, cpm, (int)cw);
 						}
 						cx += (int)cw;
+					}
 					}
 					rp += clen;
 					rrem -= (int)clen;
