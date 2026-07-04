@@ -104,17 +104,21 @@ echo "  dwm started (PID $DWM_PID)"
 echo ""
 
 # -------------------------------------------------------------------------
-# Phase A: Rapid emoji status updates
+# Phase A: All non-ASCII status flood (Unicode U+0080 to U+10FFFF)
 # -------------------------------------------------------------------------
-phase "A: Emoji status flood (500 updates)"
+phase "A: All non-ASCII status flood (1.1M codepoints)"
 A_FAIL=0
-for i in $(seq 1 500); do
-	xsetroot -name "stress test $i ⚡🔥💯✨🚀📦🔴🟢🔵🟡 emoji $i" 2>/dev/null || true
-	if [ $((i % 100)) -eq 0 ]; then
-		check_dwm_alive || { A_FAIL=1; break; }
-	fi
-done
-report "emoji status flood" "$A_FAIL"
+python3 -c '
+import subprocess
+# Generate all valid Unicode non-ASCII characters (excluding surrogates)
+chars = [chr(i) for i in range(0x80, 0x110000) if not (0xD800 <= i <= 0xDFFF)]
+chunk_size = 200
+for i in range(0, len(chars), chunk_size):
+    chunk = "".join(chars[i:i+chunk_size])
+    subprocess.run(["xsetroot", "-name", chunk], stderr=subprocess.DEVNULL)
+' || true
+check_dwm_alive || A_FAIL=1
+report "all non-ASCII status flood" "$A_FAIL"
 
 # -------------------------------------------------------------------------
 # Phase B: Window storm (create/destroy 50 windows)
