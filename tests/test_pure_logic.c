@@ -489,6 +489,7 @@ test_zoom_single_client(void)
 	/* Just verify it doesn't crash */
 	zoom(&arg);
 	ASSERT(m.sel == &c, "zoom single client: sel unchanged");
+	free(m.gap);
 }
 
 static void
@@ -512,6 +513,7 @@ test_zoom_swaps(void)
 	/* After zoom, c2 (sel) becomes first in clients list */
 	ASSERT(m.clients == &c2, "zoom moves sel to front");
 	ASSERT(c2.next == &c1, "zoom: c2.next == c1");
+	free(m.gap);
 }
 
 static void

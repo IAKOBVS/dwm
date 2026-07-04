@@ -284,7 +284,12 @@ test_manage_clamps_geometry(void)
 	ASSERT(c->y + c->h + 2 * c->bw <= m->wy + m->wh,
 		"manage clamps bottom edge to monitor");
 
+	Client *managed = m->clients;
+	m->clients = NULL;
+	m->stack = NULL;
+	m->sel = NULL;
 	mons = selmon = saved_selmon;
+	free(managed);
 	cleanup_mon(m);
 }
 

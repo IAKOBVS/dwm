@@ -209,6 +209,9 @@ static void
 test_unmapnotify_send_event_withdraws(void)
 {
 	Client c = { .win = 42, .mon = selmon, .tags = 1, .neverfocus = 0 };
+	Client *old_clients = selmon->clients;
+	Client *old_stack = selmon->stack;
+	Client *old_sel = selmon->sel;
 	selmon->clients = &c;
 	selmon->stack = &c;
 	selmon->sel = &c;
@@ -219,6 +222,10 @@ test_unmapnotify_send_event_withdraws(void)
 	ev.xunmap.send_event = 1;
 
 	unmapnotify(&ev);
+
+	selmon->clients = old_clients;
+	selmon->stack = old_stack;
+	selmon->sel = old_sel;
 	ASSERT(1, "unmapnotify with send_event does not crash");
 }
 
@@ -252,6 +259,7 @@ test_unmapnotify_normal_unmanages(void)
 	ASSERT_EQ(m->clients, NULL, "unmapnotify without send_event unmanages client");
 	ASSERT_EQ(m->stack, NULL, "unmapnotify without send_event clears stack");
 
+	selmon = mons = saved_selmon;
 	free(m->gap);
 	free(m);
 }
