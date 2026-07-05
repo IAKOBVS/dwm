@@ -28,13 +28,13 @@ static long nanos_mono(void)
 static void setup(void)
 {
 	dpy = XOpenDisplay(":99");
-	if (!dpy) die("no :99");
+	if (!dpy) DIE("XOpenDisplay():no :99");
 	screen = DefaultScreen(dpy);
 	drw = drw_create(dpy, screen, RootWindow(dpy, screen),
 	                 DisplayWidth(dpy, screen), DisplayHeight(dpy, screen));
-	if (!drw) die("drw_create");
+	if (!drw) DIE("drw_create():drw_create failed");
 	const char *fonts[] = {"monospace:size=10:antialias=true:autohint=true"};
-	if (!drw_fontset_create(drw, fonts, 1)) die("fontset");
+	if (!drw_fontset_create(drw, fonts, 1)) DIE("drw_fontset_create():fontset creation failed");
 }
 
 /* Run N iterations, return average ns/call */

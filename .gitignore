@@ -1,6 +1,10 @@
 # User files
 dwm
 config.h
+*tests
+!tests/*.c
+!tests/*.h
+!tests/*.sh
 
 # Prerequisites
 *.d

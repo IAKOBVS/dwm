@@ -1,12 +1,13 @@
 #include "mock_x11.h"
+#include <errno.h>
 #include <stdarg.h>
 #include <assert.h>
 #include <stdint.h>
+#include <string.h>
 #include <xcb/xcb.h>
 #include <xcb/res.h>
 
-/* die forward declaration for ecalloc */
-void die(const char *fmt, ...);
+#include "../util.h"
 
 static Window mock_next_win = 1000;
 static Atom mock_next_atom = 100;
@@ -652,19 +653,20 @@ ecalloc(size_t nmemb, size_t size)
 {
 	void *p;
 	if (!(p = calloc(nmemb, size)))
-		die("calloc failed");
+		DIE("calloc():calloc:");
 	return p;
 }
 
 void
-die(const char *fmt, ...)
+die(const char *file, int line, const char *func, const char *fmt, ...)
 {
 	va_list ap;
+	fprintf(stderr, "%s:%d: %s(): ", file, line, func);
 	va_start(ap, fmt);
 	vfprintf(stderr, fmt, ap);
 	va_end(ap);
-	fprintf(stderr, "\n");
-	exit(1);
+	fprintf(stderr, " errno (%d): %s\n", errno, strerror(errno));
+	abort();
 }
 
 /* XKeysymToKeycode stub */

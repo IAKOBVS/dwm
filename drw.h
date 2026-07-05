@@ -1,4 +1,18 @@
-/* See LICENSE file for copyright and license details. */
+/* See LICENSE file for copyright and license details.
+ *
+ * drw.h — type definitions and public API for the drw drawing library.
+ *
+ * Provides an abstraction over X11/Xft drawing primitives used by dwm's bar.
+ * Key types:
+ *   Drw    — drawing context (display, drawable, GC, fonts, color schemes,
+ *            emoji cache)
+ *   Fnt    — linked-list font chain (fallback fonts for missing glyphs)
+ *   Clr    — XftColor wrapper (ColFg/ColBg/ColBorder)
+ *   Cur    — cursor wrapper
+ *
+ * The Drw struct owns a persistent XftDraw (→ Xft glyph cache) and an
+ * emoji render cache that avoids repeat PNG-decompress for color emoji.
+ */
 
 #ifndef DRW_H
 #define DRW_H 1

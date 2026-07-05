@@ -1,3 +1,22 @@
+/* dwm.h — central header for the dynamic window manager.
+ *
+ * Defines all shared types, enums, forward declarations, and global
+ * variables used across dwm.c.  The core data structures are:
+ *
+ *   Client  — an X window managed by dwm (geometry, tags, swallowing, etc.)
+ *   Monitor — a physical or virtual screen (linked list, tag sets, layout)
+ *   Key     — hotkey binding (mod + keysym → function + arg)
+ *   Button  — mouse binding (click area + button → function + arg)
+ *   Layout  — arrange function + display symbol
+ *   Rule    — auto-properties matched against class/instance/title
+ *   Gap     — inner/outer gap state (isgap, realgap, gappx)
+ *
+ * Bar dirty-tracking (Phase 2-4 optimizations):
+ *   bar_dirty_segments — bitmask (DIRTY_STATUS|DIRTY_TAGS|DIRTY_TITLE)
+ *   bar_exposed        — flags when an Expose event invalidated the pixmap
+ *   bar_draw_pending   — deferred draw coalesced at the event-loop tail
+ */
+
 #ifndef DWM_H
 #define DWM_H 1
 

@@ -1,0 +1,4 @@
+-std=c99
+-Iinclude
+-I..
+-DDWM_TEST

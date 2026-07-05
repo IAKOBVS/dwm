@@ -1,4 +1,39 @@
 /* See LICENSE file for copyright and license details. */
+/*
+ * drw.c — lightweight X11/Xft drawing library for dwm.
+ *
+ * Architecture overview
+ * ---------------------
+ * This file provides text and rectangle rendering primitives used
+ * primarily for dwm's status bar.  Key subsystems:
+ *
+ *   Glyph-width cache (GLYPH_CACHE_SIZE=64, open-addressing hash)
+ *     caches per-codepoint advance widths for non-ASCII glyphs.
+ *     ASCII chars bypass the cache and call XftTextExtentsUtf8 directly.
+ *
+ *   Emoji render cache (EMOJI_CACHE_SIZE=32, open-addressing hash)
+ *     caches rendered emoji pixmaps so that the expensive
+ *     FT_Load_Glyph → png_read_image → inflate pipeline runs once per
+ *     unique codepoint per font cycle, not once per drawbar redraw.
+ *     Cached pixmaps are blitted via XCopyArea on subsequent draws.
+ *
+ *   UTF-8 decode helpers (utf8decodebyte/utf8validate/utf8decode)
+ *     decode multi-byte sequences, reject surrogates and out-of-range
+ *     values, and return the UTF-32 codepoint + byte length.
+ *
+ *   Font-chain fallback (Fnt linked list)
+ *     drw_text iterates the user-specified font chain for each codepoint;
+ *     if none match it calls XftFontMatch to find a system fallback and
+ *     appends it to the chain.  A small static set of "no-match"
+ *     codepoints avoids repeating the XftFontMatch call for characters
+ *     known to be missing from the system.
+ *
+ *   Persistent XftDraw (drw->xftd, created in drw_create)
+ *     Xft caches rendered glyphs per-drawable.  By keeping the XftDraw
+ *     alive across bar redraws we avoid repeat FT_Load_Glyph work even
+ *     for uncached emoji.  Re-created in drw_resize when the backing
+ *     pixmap changes size.
+ */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,7 +59,13 @@ static struct {
 	unsigned int width;
 } glyph_cache[GLYPH_CACHE_SIZE];
 
-/* Return cached glyph width for a non-ASCII codepoint, or measure and cache it. */
+/*
+ * Look up or measure the advance width of a non-ASCII codepoint.
+ * First checks the open-addressing glyph_cache; on miss walks the font
+ * chain, calls XftCharExists + drw_font_getexts, and populates the cache.
+ * Returns 0 if no font in the chain covers the codepoint.
+ * drw, utf8str, utf8len: used only when measuring (cache miss).
+ */
 static unsigned int
 glyph_getwidth(Drw *drw, long codepoint, const char *utf8str, unsigned int utf8len)
 {
@@ -33,6 +74,8 @@ glyph_getwidth(Drw *drw, long codepoint, const char *utf8str, unsigned int utf8l
 	Fnt *font;
 	unsigned int tmpw;
 
+	/* open-addressing probe: search the slot at index (codepoint % GLYPH_CACHE_SIZE)
+	 * and linear-probe forward, wrapping at GLYPH_CACHE_SIZE. */
 	while (glyph_cache[i].codepoint != -1) {
 		if (glyph_cache[i].codepoint == codepoint)
 			return glyph_cache[i].width;
@@ -54,9 +97,10 @@ glyph_getwidth(Drw *drw, long codepoint, const char *utf8str, unsigned int utf8l
 	return 0;
 }
 
-/* Emoji render cache — caches rendered emoji pixmaps so FT_Load_Glyph →
- * png_read → inflate (color emoji PNG decompress) runs once per unique
- * codepoint per font cycle, not once per drawbar redraw. */
+/*
+ * Look up a codepoint in the emoji render cache.  Open-addressing hash
+ * with linear probing; returns the slot index on hit, -1 on miss.
+ */
 static int
 emoji_cache_lookup(Drw *drw, long codepoint)
 {
@@ -73,6 +117,12 @@ emoji_cache_lookup(Drw *drw, long codepoint)
 	return -1;
 }
 
+/*
+ * Insert a newly rendered emoji pixmap into the emoji render cache.
+ * Uses open-addressing with linear probing; evicts (and frees) any
+ * existing entry at the target slot.  The pixmap must have been created
+ * from the same-depth drawable and is later blitted with XCopyArea.
+ */
 static void
 emoji_cache_insert(Drw *drw, long codepoint, Pixmap pixmap, int w)
 {
@@ -94,6 +144,11 @@ emoji_cache_insert(Drw *drw, long codepoint, Pixmap pixmap, int w)
 	drw->emoji_cache[i].w = w;
 }
 
+/*
+ * Clear the entire emoji render cache, freeing each cached pixmap.
+ * Called from drw_fontset_create (font change invalidates all cached
+ * glyphs) and from drw_free (teardown).
+ */
 static void
 emoji_cache_invalidate(Drw *drw)
 {
@@ -106,11 +161,24 @@ emoji_cache_invalidate(Drw *drw)
 	}
 }
 
+/* UTF-8 decode tables: index 0 = continuation byte, 1 = ASCII,
+ * 2 = 2-byte start, 3 = 3-byte start, 4 = 4-byte start.
+ * utfbyte[mask]  — the bit pattern that a byte of type `i` must match;
+ *                   continuation byte (0x80) is used as the mask check.
+ * utfmask[t]     — the mask to isolate the leading bits.
+ * utfmin[i]      — smallest codepoint valid for a sequence of length i.
+ * utfmax[i]      — largest codepoint valid for a sequence of length i.
+ */
 static const unsigned char utfbyte[UTF_SIZ + 1] = {0x80,    0, 0xC0, 0xE0, 0xF0};
 static const unsigned char utfmask[UTF_SIZ + 1] = {0xC0, 0x80, 0xE0, 0xF0, 0xF8};
 static const long utfmin[UTF_SIZ + 1] = {       0,    0,  0x80,  0x800,  0x10000};
 static const long utfmax[UTF_SIZ + 1] = {0x10FFFF, 0x7F, 0x7FF, 0xFFFF, 0x10FFFF};
 
+/*
+ * Classify a UTF-8 byte and extract its data bits.
+ * Returns the payload bits (low 6/5/4/3 bits depending on byte type).
+ * Sets *i to the sequence length (1–4) or 0 for continuation bytes.
+ */
 static long
 utf8decodebyte(const char c, size_t *i)
 {
@@ -120,6 +188,12 @@ utf8decodebyte(const char c, size_t *i)
 	return 0;
 }
 
+/*
+ * Validate a decoded UTF-32 codepoint: reject surrogates
+ * (U+D800–U+DFFF) and out-of-range values, replacing with
+ * UTF_INVALID.  Returns the minimal byte-sequence length
+ * that can represent the (possibly corrected) codepoint.
+ */
 static size_t
 utf8validate(long *u, size_t i)
 {
@@ -130,6 +204,11 @@ utf8validate(long *u, size_t i)
 	return i;
 }
 
+/*
+ * Decode a UTF-8 byte sequence of at most clen bytes into *u.
+ * Returns the number of bytes consumed (0 = incomplete sequence).
+ * On invalid starting byte, advances 1 position and sets *u = UTF_INVALID.
+ */
 static size_t
 utf8decode(const char *c, long *u, size_t clen)
 {
@@ -155,6 +234,12 @@ utf8decode(const char *c, long *u, size_t clen)
 	return len;
 }
 
+/*
+ * Create a drawing context: allocates an off-screen pixmap, a GC, and a
+ * persistent XftDraw tied to the pixmap.  The XftDraw is long-lived so
+ * that Xft's internal glyph cache (FT_Load_Glyph results) survives
+ * across bar redraws.  Returns NULL on allocation failure.
+ */
 Drw *
 drw_create(Display *dpy, int screen, Window root, unsigned int w, unsigned int h)
 {
@@ -168,7 +253,8 @@ drw_create(Display *dpy, int screen, Window root, unsigned int w, unsigned int h
 	drw->drawable = XCreatePixmap(dpy, root, w, h, DefaultDepth(dpy, screen));
 	drw->gc = XCreateGC(dpy, root, 0, NULL);
 	/* persistent XftDraw: Xft caches rendered glyphs per-drawable;
-	 * keeping it alive avoids repeat FT_Load_Glyph/png_read/inflate. */
+	 * we keep the XftDraw alive across redraws so the cached glyphs
+	 * (FT_Load_Glyph / png_read / inflate results) are not discarded. */
 	drw->xftd = XftDrawCreate(dpy, drw->drawable,
 	                          DefaultVisual(dpy, screen),
 	                          DefaultColormap(dpy, screen));
@@ -180,6 +266,12 @@ drw_create(Display *dpy, int screen, Window root, unsigned int w, unsigned int h
 	return drw;
 }
 
+/*
+ * Resize the backing pixmap and re-create the XftDraw.  The old XftDraw
+ * was tied to the old pixmap and must be destroyed — Xft will internally
+ * free any cached glyph images for that drawable.  The emoji render cache
+ * and glyph-width cache survive (font chain is unchanged).
+ */
 void
 drw_resize(Drw *drw, unsigned int w, unsigned int h)
 {
@@ -190,27 +282,34 @@ drw_resize(Drw *drw, unsigned int w, unsigned int h)
 	drw->h = h = h ? h : 1;
 	if (drw->drawable)
 		XFreePixmap(drw->dpy, drw->drawable);
-	XftDrawDestroy(drw->xftd);    /* old XftDraw tied to old pixmap */
+	XftDrawDestroy(drw->xftd);    /* old XftDraw was tied to old pixmap */
 	drw->drawable = XCreatePixmap(drw->dpy, drw->root, w, h, DefaultDepth(drw->dpy, drw->screen));
-	/* recreate XftDraw — tied to the new pixmap drawable */
+	/* re-create XftDraw tied to the new pixmap drawable */
 	drw->xftd = XftDrawCreate(drw->dpy, drw->drawable,
 	                          DefaultVisual(drw->dpy, drw->screen),
 	                          DefaultColormap(drw->dpy, drw->screen));
 }
 
+/*
+ * Free a drawing context and all associated resources: emoji cache,
+ * XftDraw, backing pixmap, GC, and the font chain.
+ */
 void
 drw_free(Drw *drw)
 {
 	emoji_cache_invalidate(drw);
-	XftDrawDestroy(drw->xftd);    /* destroy persistent XftDraw before its pixmap is freed */
+	XftDrawDestroy(drw->xftd);    /* destroy XftDraw before its pixmap is freed */
 	XFreePixmap(drw->dpy, drw->drawable);
 	XFreeGC(drw->dpy, drw->gc);
 	drw_fontset_free(drw->fonts);
 	free(drw);
 }
 
-/* This function is an implementation detail. Library users should use
- * drw_fontset_create instead.
+/*
+ * Load a single XftFont from either a font name string or an FcPattern.
+ * When loading from a name we also store the parsed FcPattern so that
+ * drw_text can use it as a base for FcFontMatch fallback lookups.
+ * Returns NULL on failure.  Internal helper — use drw_fontset_create.
  */
 static Fnt *
 xfont_create(Drw *drw, const char *fontname, FcPattern *fontpattern)
@@ -240,7 +339,7 @@ xfont_create(Drw *drw, const char *fontname, FcPattern *fontpattern)
 			return NULL;
 		}
 	} else {
-		die("no font specified.");
+		DIE("xfont_create():no font specified.");
 	}
 
 	font = ecalloc(1, sizeof(Fnt));
@@ -252,6 +351,10 @@ xfont_create(Drw *drw, const char *fontname, FcPattern *fontpattern)
 	return font;
 }
 
+/*
+ * Free a single Fnt node: destroy its FcPattern and close the XftFont.
+ * Does NOT follow font->next (caller manages the chain).
+ */
 static void
 xfont_free(Fnt *font)
 {
@@ -263,6 +366,12 @@ xfont_free(Fnt *font)
 	free(font);
 }
 
+/*
+ * Create a font chain from an ordered list of font name strings.
+ * Fonts are loaded in reverse and prepended so that the first-named
+ * font ends up at the head (drw->fonts).  Both caches are invalidated
+ * because the new fonts may have different glyph metrics.
+ */
 Fnt*
 drw_fontset_create(Drw* drw, const char *fonts[], size_t fontcount)
 {
@@ -284,6 +393,9 @@ drw_fontset_create(Drw* drw, const char *fonts[], size_t fontcount)
 	return (drw->fonts = ret);
 }
 
+/*
+ * Recursively free a font chain (linked list of Fnt nodes).
+ */
 void
 drw_fontset_free(Fnt *font)
 {
@@ -293,29 +405,35 @@ drw_fontset_free(Fnt *font)
 	}
 }
 
+/*
+ * Allocate an Xft color by named string (e.g. "#rrggbb" or "blue").
+ * Sets the alpha channel to fully opaque (0xff << 24) so that cairo-like
+ * compositing doesn't dim text when drawn onto the backing pixmap.
+ */
 void
 drw_clr_create(Drw *drw, Clr *dest, const char *clrname)
 {
 	if (!drw || !dest || !clrname)
 		return;
 
-	if (!XftColorAllocName(drw->dpy, DefaultVisual(drw->dpy, drw->screen),
+	if (unlikely(!XftColorAllocName(drw->dpy, DefaultVisual(drw->dpy, drw->screen),
 	                       DefaultColormap(drw->dpy, drw->screen),
-	                       clrname, dest))
-		die("error, cannot allocate color '%s'", clrname);
+	                       clrname, dest)))
+		DIE("XftColorAllocName():error, cannot allocate color '%s'", clrname);
 
 	dest->pixel |= 0xff << 24;
 }
 
-/* Wrapper to create color schemes. The caller has to call free(3) on the
- * returned color scheme when done using it. */
+/*
+ * Allocate an array of Clr (XftColor) from string names.  Returns a
+ * heap-allocated array that the caller must free() when done.
+ */
 Clr *
 drw_scm_create(Drw *drw, const char *clrnames[], size_t clrcount)
 {
 	size_t i;
 	Clr *ret;
 
-	/* need at least two colors for a scheme */
 	if (!drw || !clrnames || clrcount < 2 || !(ret = ecalloc(clrcount, sizeof(XftColor))))
 		return NULL;
 
@@ -324,6 +442,10 @@ drw_scm_create(Drw *drw, const char *clrnames[], size_t clrcount)
 	return ret;
 }
 
+/*
+ * Set the active font chain for subsequent draws.  Does NOT take
+ * ownership of the chain (caller manages lifetime).
+ */
 void
 drw_setfontset(Drw *drw, Fnt *set)
 {
@@ -331,6 +453,10 @@ drw_setfontset(Drw *drw, Fnt *set)
 		drw->fonts = set;
 }
 
+/*
+ * Set the active color scheme for subsequent draws.  Does NOT take
+ * ownership of the scheme (caller manages lifetime).
+ */
 void
 drw_setscheme(Drw *drw, Clr *scm)
 {
@@ -338,6 +464,12 @@ drw_setscheme(Drw *drw, Clr *scm)
 		drw->scheme = scm;
 }
 
+/*
+ * Draw a filled or stroked rectangle using the current scheme.
+ * When invert is set, foreground/background colors are swapped.
+ * Stroked rectangles are drawn 1 px narrower/shorter (w-1, h-1)
+ * to fit inside the given bounding box.
+ */
 void
 drw_rect(Drw *drw, int x, int y, unsigned int w, unsigned int h, int filled, int invert)
 {
@@ -350,6 +482,24 @@ drw_rect(Drw *drw, int x, int y, unsigned int w, unsigned int h, int filled, int
 		XDrawRectangle(drw->dpy, drw->drawable, drw->gc, x, y, w - 1, h - 1);
 }
 
+/*
+ * Render text (or measure its width) using the font chain.
+ *
+ * When x=y=w=h=0 the function measures width only (no X drawing).
+ * Otherwise it draws filled-background text within the given rectangle.
+ *
+ * Rendering loop:
+ *   1. Scan forward through text, accumulating width in ew.
+ *   2. When width exceeds available w, record overflow and compute the
+ *      ellipsis insertion point.
+ *   3. When the current codepoint needs a different font (nextfont),
+ *      break and flush accumulated run in the current font.
+ *   4. After flushing, either switch fonts (nextfont), try XftFontMatch
+ *      fallback, or continue scanning.
+ *
+ * Returns the x-coordinate past the last drawn character (or the
+ * computed width when measuring).
+ */
 int
 drw_text(Drw *drw, int x, int y, unsigned int w, unsigned int h, unsigned int lpad, const char *text, int invert)
 {
@@ -391,38 +541,45 @@ drw_text(Drw *drw, int x, int y, unsigned int w, unsigned int h, unsigned int lp
 		utf8str = text;
 		nextfont = NULL;
 		while (*text) {
-			utf8charlen = utf8decode(text, &utf8codepoint, UTF_SIZ);
-			for (curfont = drw->fonts; curfont; curfont = curfont->next) {
-				charexists = XftCharExists(drw->dpy, curfont->xfont, utf8codepoint);
-			if (charexists) {
-				if (utf8codepoint <= 0x7F)
-					drw_font_getexts(curfont, text, utf8charlen, &tmpw, NULL);
-				else
-					tmpw = glyph_getwidth(drw, utf8codepoint, text, utf8charlen);
-				if (ew + ellipsis_width <= w) {
-						/* keep track where the ellipsis still fits */
-						ellipsis_x = x + ew;
-						ellipsis_w = w - ew;
-						ellipsis_len = utf8strlen;
+			/* ASCII fast-path: single-byte, always exists in the first font,
+			 * measure directly (skip XftCharExists). */
+			if ((unsigned char)*text <= 0x7F) {
+				utf8codepoint = (unsigned char)*text;
+				utf8charlen = 1;
+				charexists = 1;
+				curfont = drw->fonts;
+				drw_font_getexts(curfont, text, 1, &tmpw, NULL);
+			} else {
+				utf8charlen = utf8decode(text, &utf8codepoint, UTF_SIZ);
+				for (curfont = drw->fonts; curfont; curfont = curfont->next) {
+					charexists = XftCharExists(drw->dpy, curfont->xfont, utf8codepoint);
+					if (charexists) {
+						tmpw = glyph_getwidth(drw, utf8codepoint, text, utf8charlen);
+						break;
 					}
+				}
+			}
 
-					if (ew + tmpw > w) {
-						overflow = 1;
-						/* called from drw_fontset_getwidth_clamp():
-						 * it wants the width AFTER the overflow
-						 */
-						if (!render)
-							x += tmpw;
-						else
-							utf8strlen = ellipsis_len;
-					} else if (curfont == usedfont) {
-						utf8strlen += utf8charlen;
-						text += utf8charlen;
-						ew += tmpw;
-					} else {
-						nextfont = curfont;
-					}
-					break;
+			if (charexists) {
+				/* track the last safe ellipsis cut point */
+				if (ew + ellipsis_width <= w) {
+					ellipsis_x = x + ew;
+					ellipsis_w = w - ew;
+					ellipsis_len = utf8strlen;
+				}
+
+				if (ew + tmpw > w) {
+					overflow = 1;
+					if (!render)
+						x += tmpw;
+					else
+						utf8strlen = ellipsis_len;
+				} else if (curfont == usedfont) {
+					utf8strlen += utf8charlen;
+					text += utf8charlen;
+					ew += tmpw;
+				} else {
+					nextfont = curfont;
 				}
 			}
 
@@ -440,9 +597,14 @@ drw_text(Drw *drw, int x, int y, unsigned int w, unsigned int h, unsigned int lp
 				ty2 = y + (h - usedfont->h) / 2 + usedfont->xfont->ascent;
 				while (rrem > 0) {
 					long cp;
-					size_t clen = utf8decode(rp, &cp, (unsigned int)rrem);
+					size_t clen;
 					unsigned int cw;
-					if (cp <= 0x7F) {
+					/* ASCII batch accumulation: group consecutive ASCII bytes
+					 * and draw them with a single XftDrawStringUtf8 call.
+					 * This reduces Xft/FreeType call overhead. */
+					if ((unsigned char)*rp <= 0x7F) {
+						cp = (unsigned char)*rp;
+						clen = 1;
 						if (!ascii_len) {
 							ascii_off = (int)(rp - utf8str);
 							ascii_start_x = cx;
@@ -451,8 +613,9 @@ drw_text(Drw *drw, int x, int y, unsigned int w, unsigned int h, unsigned int lp
 						drw_font_getexts(usedfont, rp, (unsigned int)clen, &cw, NULL);
 						cx += (int)cw;
 					} else {
+						clen = utf8decode(rp, &cp, (unsigned int)rrem);
 						int eidx;
-						/* flush any pending ASCII batch */
+						/* flush pending ASCII batch before a non-ASCII glyph */
 						if (ascii_len) {
 							XftDrawStringUtf8(d,
 								&drw->scheme[invert ? ColBg : ColFg],
@@ -462,6 +625,12 @@ drw_text(Drw *drw, int x, int y, unsigned int w, unsigned int h, unsigned int lp
 						}
 						cw = glyph_getwidth(drw, cp, rp, (unsigned int)clen);
 						if (cw > 0) {
+						/* emoji render cache: if we have a cached pixmap,
+						 * blit it with XCopyArea instead of re-rendering
+						 * through Xft (which would trigger FT_Load_Glyph
+						 * → png_read → inflate).  On cache miss, render
+						 * via Xft, capture the result with XCopyArea into
+						 * a fresh pixmap, and insert into the cache. */
 						eidx = emoji_cache_lookup(drw, cp);
 						if (eidx >= 0) {
 							EmojiCacheSlot *eslot = &drw->emoji_cache[eidx];
@@ -509,12 +678,14 @@ drw_text(Drw *drw, int x, int y, unsigned int w, unsigned int h, unsigned int lp
 			charexists = 0;
 			usedfont = nextfont;
 		} else {
-			/* Regardless of whether or not a fallback font is found, the
-			 * character must be drawn. */
+			/* No font in the chain covers this codepoint.  Try XftFontMatch
+			 * to find a system fallback.  If found and the font has the glyph,
+			 * append it to the font chain so subsequent occurrences reuse it. */
 			charexists = 1;
 
+			/* match-nomatch optimization: skip XftFontMatch for codepoints
+			 * we have previously failed to find — XftFontMatch is expensive. */
 			for (i = 0; i < nomatches_len; ++i) {
-				/* avoid calling XftFontMatch if we know we won't find a match */
 				if (utf8codepoint == nomatches.codepoint[i])
 					goto no_match;
 			}
@@ -522,9 +693,9 @@ drw_text(Drw *drw, int x, int y, unsigned int w, unsigned int h, unsigned int lp
 			fccharset = FcCharSetCreate();
 			FcCharSetAddChar(fccharset, utf8codepoint);
 
-			if (!drw->fonts->pattern) {
+			if (unlikely(!drw->fonts->pattern)) {
 				/* Refer to the comment in xfont_create for more information. */
-				die("the first font in the cache must be loaded from a font string.");
+				DIE("the first font in the cache must be loaded from a font string.");
 			}
 
 			fcpattern = FcPatternDuplicate(drw->fonts->pattern);
@@ -546,6 +717,8 @@ drw_text(Drw *drw, int x, int y, unsigned int w, unsigned int h, unsigned int lp
 					curfont->next = usedfont;
 				} else {
 					xfont_free(usedfont);
+					/* remember this codepoint as a no-match so we skip the
+					 * expensive XftFontMatch call next time we see it */
 					nomatches.codepoint[++nomatches.idx % nomatches_len] = utf8codepoint;
 no_match:
 					text += utf8charlen;

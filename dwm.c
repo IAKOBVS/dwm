@@ -52,10 +52,10 @@
 
 /* macros */
 #define BUTTONMASK              (ButtonPressMask|ButtonReleaseMask)
-#define CLEANMASK(mask)         (mask & ~(numlockmask|LockMask) & (ShiftMask|ControlMask|Mod1Mask|Mod2Mask|Mod3Mask|Mod4Mask|Mod5Mask))
-#define INTERSECT(x,y,w,h,m)    (MAX(0, MIN((x)+(w),(m)->wx+(m)->ww) - MAX((x),(m)->wx)) \
+#define CLEANMASK(mask)         (mask & ~(numlockmask|LockMask) & (ShiftMask|ControlMask|Mod1Mask|Mod2Mask|Mod3Mask|Mod4Mask|Mod5Mask)) /* strip lock bits, keep only modifiers */
+#define INTERSECT(x,y,w,h,m)    (MAX(0, MIN((x)+(w),(m)->wx+(m)->ww) - MAX((x),(m)->wx)) /* pixel overlap of rect and monitor m */\
                                * MAX(0, MIN((y)+(h),(m)->wy+(m)->wh) - MAX((y),(m)->wy)))
-#define ISVISIBLE(C)            ((C->tags & C->mon->tagset[C->mon->seltags]))
+#define ISVISIBLE(C)            ((C->tags & C->mon->tagset[C->mon->seltags])) /* true if client tagged in current view */
 #define LENGTH(X)               (sizeof X / sizeof X[0])
 #define MOUSEMASK               (BUTTONMASK|PointerMotionMask)
 #define WIDTH(X)                ((X)->w + 2 * (X)->bw)
@@ -76,6 +76,7 @@ static int bar_draw_pending = 0;     /* deferred drawbar requested; executed at 
 struct NumTags { char limitexceeded[LENGTH(tags) > 31 ? -1 : 1]; };
 
 /* function implementations */
+/* match client against rules[]; set isfloating, tags, monitor, isterminal, noswallow */
 void
 applyrules(Client *c)
 {
@@ -114,6 +115,7 @@ applyrules(Client *c)
 	c->tags = c->tags & TAGMASK ? c->tags & TAGMASK : c->mon->tagset[c->mon->seltags];
 }
 
+/* clamp geometry to ICCCM size hints (min/max, aspect, increment), return whether geometry changed */
 int
 applysizehints(Client *c, int *x, int *y, int *w, int *h, int interact)
 {
@@ -182,6 +184,7 @@ applysizehints(Client *c, int *x, int *y, int *w, int *h, int interact)
 	return *x != c->x || *y != c->y || *w != c->w || *h != c->h;
 }
 
+/* hide/show clients and apply current layout on monitor m (or all if NULL) */
 void
 arrange(Monitor *m)
 {
@@ -795,6 +798,8 @@ focusstack(const Arg *arg)
 	}
 }
 
+/* Read an Atom-typed property from a client window.
+ * Returns the Atom value, or None if the property is absent/invalid. */
 Atom
 getatomprop(Client *c, Atom prop)
 {
@@ -811,6 +816,8 @@ getatomprop(Client *c, Atom prop)
 	return atom;
 }
 
+/* Query the root-relative pointer position.
+ * Returns True on success, with x/y filled in; False on failure. */
 int
 getrootptr(int *x, int *y)
 {
@@ -821,6 +828,8 @@ getrootptr(int *x, int *y)
 	return XQueryPointer(dpy, root, &dummy, &dummy, x, y, &di, &di, &dui);
 }
 
+/* Read the WM_STATE property of a window.
+ * Returns the state value (e.g. NormalState/IconicState) or -1 on error. */
 long
 getstate(Window w)
 {
@@ -839,6 +848,9 @@ getstate(Window w)
 	return result;
 }
 
+/* Fetch a text property from window w into the given buffer.
+ * Handles XA_STRING and compound-text (Xmb) encoding.
+ * Returns 1 on success (text filled), 0 on failure. */
 int
 gettextprop(Window w, Atom atom, char *text, unsigned int size)
 {
@@ -862,6 +874,9 @@ gettextprop(Window w, Atom atom, char *text, unsigned int size)
 	return 1;
 }
 
+/* Grab/release mouse buttons for a client window.
+ * When focused=1, applies user-defined button bindings (ClkClientWin).
+ * When focused=0, grabs AnyButton in Sync mode so buttonpress can replay. */
 void
 grabbuttons(Client *c, int focused)
 {
@@ -883,6 +898,10 @@ grabbuttons(Client *c, int focused)
 	}
 }
 
+/* Grab all configured key combinations on the root window.
+ * Iterates every physical keycode and matches it against the keys[]
+ * array; each match is grabbed with NumLock/CapsLock modifiers so
+ * bindings work regardless of lock-key state. */
 void
 grabkeys(void)
 {
@@ -912,6 +931,8 @@ grabkeys(void)
 	}
 }
 
+/* Increase/decrease the number of master windows on the selected monitor.
+ * arg->i is the delta (positive or negative); clamps >= 0. */
 void
 incnmaster(const Arg *arg)
 {
@@ -920,6 +941,10 @@ incnmaster(const Arg *arg)
 }
 
 #ifdef XINERAMA
+/* Deduplicate Xinerama screen geometries: return 0 if info matches any
+ * already-seen entry in unique[0..n), 1 if it is genuinely new.
+ * This avoids creating per-monitor state for clone-mode outputs whose
+ * geometry is identical. */
 static int
 isuniquegeom(XineramaScreenInfo *unique, size_t n, XineramaScreenInfo *info)
 {
@@ -931,6 +956,9 @@ isuniquegeom(XineramaScreenInfo *unique, size_t n, XineramaScreenInfo *info)
 }
 #endif /* XINERAMA */
 
+/* Dispatch keyboard events to key bindings.
+ * Fast-path: skip the keys[] walk when neither modifier nor keysym
+ * matches any configured binding (using precomputed bitmasks). */
 void
 keypress(XEvent *e)
 {
@@ -949,6 +977,8 @@ keypress(XEvent *e)
 	}
 }
 
+/* Terminate the selected client: try WM_DELETE_WINDOW protocol
+ * first; fall back to XKillClient if the client doesn't support it. */
 void
 killclient(const Arg *arg)
 {
@@ -965,6 +995,11 @@ killclient(const Arg *arg)
 	}
 }
 
+/* Adopt a new window into dwm's client list.
+ * Sets geometry, applies rules, sets up Swallowing (winpid →
+ * getparentprocess → isdescprocess → termforwin chain), and
+ * maps the window. Side effects: updates _NET_CLIENT_LIST,
+ * may swallow the new client into its parent terminal. */
 void
 manage(Window w, XWindowAttributes *wa)
 {
@@ -1029,6 +1064,9 @@ manage(Window w, XWindowAttributes *wa)
 	focus(NULL);
 }
 
+/* Handle keyboard mapping changes (e.g. Xkb layout switch).
+ * Refreshes Xlib's internal mapping and re-grabs keys if the
+ * keyboard mapping itself changed. */
 void
 mappingnotify(XEvent *e)
 {
@@ -1039,6 +1077,8 @@ mappingnotify(XEvent *e)
 		grabkeys();
 }
 
+/* A new window wants to be mapped: create a client for it unless it
+ * has override_redirect set or is already managed. */
 void
 maprequest(XEvent *e)
 {
@@ -1051,6 +1091,8 @@ maprequest(XEvent *e)
 		manage(ev->window, &wa);
 }
 
+/* Monocle layout: each visible client fills the entire monitor area.
+ * The layout symbol shows the count of visible clients. */
 void
 monocle(Monitor *m)
 {
@@ -1066,6 +1108,8 @@ monocle(Monitor *m)
 		resize(c, m->wx, m->wy, m->ww - 2 * c->bw, m->wh - 2 * c->bw, 0);
 }
 
+/* Track pointer motion across monitors; switch focus to the monitor
+ * under the cursor when it crosses an edge. */
 void
 motionnotify(XEvent *e)
 {
@@ -1085,6 +1129,11 @@ motionnotify(XEvent *e)
 	mon = m;
 }
 
+/* Interactive window move via mouse drag.
+ * Grabs the pointer, warps to the bottom-right corner, and follows
+ * MotionNotify events to reposition the window. Snaps to monitor
+ * edges. Automatically floats a tiled client dragged past the snap
+ * threshold. */
 void
 movemouse(const Arg *arg)
 {
@@ -1145,6 +1194,9 @@ movemouse(const Arg *arg)
 	}
 }
 
+/* Walk the client list and return the first non-floating visible
+ * client starting from c. Used by layout functions to iterate
+ * only clients that participate in tiling. */
 Client *
 nexttiled(Client *c)
 {
@@ -1152,6 +1204,8 @@ nexttiled(Client *c)
 	return c;
 }
 
+/* Move client to the front of its monitor's client list and focus it.
+ * Used by zoom() to swap the selected client with the master. */
 void
 pop(Client *c)
 {
@@ -1161,6 +1215,9 @@ pop(Client *c)
 	arrange(c->mon);
 }
 
+/* Respond to X11 property changes: WM_NAME on root updates status;
+ * per-client property changes trigger title/type/hints updates and
+ * set dirty segments for the bar. */
 void
 propertynotify(XEvent *e)
 {
@@ -1203,6 +1260,8 @@ propertynotify(XEvent *e)
 	}
 }
 
+/* Exit the event loop. If arg->i is set, the process will execvp
+ * itself (restart) after cleanup instead of exiting. */
 void
 quit(const Arg *arg)
 {
@@ -1210,6 +1269,8 @@ quit(const Arg *arg)
 	running = 0;
 }
 
+/* Return the monitor whose screen area has the largest intersection
+ * with the given rectangle. Defaults to selmon. */
 Monitor *
 recttomon(int x, int y, int w, int h)
 {
@@ -1550,8 +1611,8 @@ setup(void)
 	sh = DisplayHeight(dpy, screen);
 	root = RootWindow(dpy, screen);
 	drw = drw_create(dpy, screen, root, sw, sh);
-	if (!drw_fontset_create(drw, fonts, LENGTH(fonts)))
-		die("no fonts could be loaded.");
+	if (unlikely(!drw_fontset_create(drw, fonts, LENGTH(fonts))))
+		DIE("drw_fontset_create():no fonts could be loaded.");
 	lrpad = drw->fonts->h * lrpad_modifier;
 	bh = drw->fonts->h + 2;
 	updategeom();
@@ -1662,7 +1723,7 @@ spawn(const Arg *arg)
 			close(ConnectionNumber(dpy));
 		setsid();
 		execvp(((char **)arg->v)[0], (char **)arg->v);
-		die("dwm: execvp '%s' failed:", ((char **)arg->v)[0]);
+		DIE("execvp():dwm: execvp '%s' failed:", ((char **)arg->v)[0]);
 	}
 }
 
@@ -2282,7 +2343,7 @@ xerrordummy(Display *dpy, XErrorEvent *ee)
 int
 xerrorstart(Display *dpy, XErrorEvent *ee)
 {
-	die("dwm: another window manager is already running");
+	DIE("XOpenDisplay():dwm: another window manager is already running");
 	return -1;
 }
 
@@ -2302,21 +2363,21 @@ zoom(const Arg *arg)
 int
 main(int argc, char *argv[])
 {
-	if (argc == 2 && !strcmp("-v", argv[1]))
-		die("dwm-" VERSION);
-	else if (argc != 1)
-		die("usage: dwm [-v]");
+	if (unlikely(argc == 2 && !strcmp("-v", argv[1])))
+		DIE("dwm-" VERSION);
+	else if (unlikely(argc != 1))
+		DIE("usage: dwm [-v]");
 	if (!setlocale(LC_CTYPE, "") || !XSupportsLocale())
 		fputs("warning: no locale support\n", stderr);
-	if (!(dpy = XOpenDisplay(NULL)))
-		die("dwm: cannot open display");
-	if (!(xcon = XGetXCBConnection(dpy)))
-		die("dwm: cannot get xcb connection\n");
+	if (unlikely(!(dpy = XOpenDisplay(NULL))))
+		DIE("XOpenDisplay():dwm: cannot open display");
+	if (unlikely(!(xcon = XGetXCBConnection(dpy))))
+		DIE("XGetXCBConnection():dwm: cannot get xcb connection");
 	checkotherwm();
 	setup();
 #ifdef __OpenBSD__
-	if (pledge("stdio rpath proc exec ps", NULL) == -1)
-		die("pledge");
+	if (unlikely(pledge("stdio rpath proc exec ps", NULL) == -1))
+		DIE("pledge():pledge:");
 #endif /* __OpenBSD__ */
 	scan();
 	run();
