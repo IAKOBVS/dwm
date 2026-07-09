@@ -2,19 +2,29 @@
 
 ## Potential Optimizations
 
-- Skip unnecessary root pointer work when dwm is effectively idle. `motionnotify()` is only useful for monitor switching on multi-monitor setups; keep the single-monitor fast path and consider disabling `PointerMotionMask` on the root window when pointer-driven monitor selection is not needed.
+Status: `[OPEN]` = not started, `[PARTIAL]` = partially done, no tag = done.
 
-- Add a gaming/low-overhead mode. A runtime flag could suppress nonessential work while a fullscreen game is focused, such as root motion monitor switching, extra bar redraws, and status-triggered visual updates.
+- `[OPEN]` **Skip unnecessary root pointer work when idle.** `motionnotify()` returns immediately on single-monitor, but `PointerMotionMask` is still registered in `setup()` (dwm.c:1661), so X11 delivers events that are immediately discarded. Consider conditionally removing the mask via `XSelectInput` when only one monitor is present, or removing it entirely while a fullscreen client is focused.
 
-- Avoid redundant bar redraws. Audit `drawbars()` and `drawbar()` callers so focus, layout, and status changes only redraw when visible bar state actually changed.
+- `[OPEN]` **Add a runtime gaming/low-overhead mode.** Suppress nonessential work while a fullscreen game is focused: root motion monitor switching, status-triggered bar redraws, `propertynotify` processing for non-critical atoms, and `updatestatus()` calls. `optimizefullscreen` only skips `drawbar()` — many ancillary handlers still run.
 
-- Avoid redundant arrange calls. Check paths that call `arrange()` after tag, fullscreen, swallow, unmanage, or floating changes, and skip arrange when client geometry or layout state is unchanged.
+- `[PARTIAL]` **Avoid redundant bar redraws.** Segment-level dirty tracking (`DIRTY_STATUS/TAGS/TITLE`) is live and effective, but callers lack before/after guards: `focus()` dirties segments even when the same client is still focused, `updatestatus()` dirties even when `stext` hasn't changed, `setlayout()` dirties even when the layout symbol is unchanged. Add value comparisons before setting segment bits.
 
-- Keep button and key fast paths simple. Button presses now use startup-derived button and mask caches before scanning `buttons[]`; keypress already filters on modifier state before scanning `keys[]`. Prefer exact low-cost prechecks over larger dispatch tables unless profiling shows real overhead.
+- `[OPEN]` **Avoid redundant `arrange()` calls.** All 25+ callers invoke `arrange()` unconditionally — no check for whether client geometry or layout state actually changed. Add guard conditions at hot call sites (tag, fullscreen, swallow, unmanage, floating toggles) or introduce an `arrange_pending` coalescing flag (mirroring `bar_draw_pending`) to defer to the event-loop tail.
 
-- Consider reducing status update churn. External status scripts can wake dwm frequently through root window name changes; avoid high-frequency status updates during games or fullscreen sessions.
+- `[OPEN]` **Reduce status update churn.** External status scripts can fire `XA_WM_NAME` changes on root at high frequency. `updatestatus()` runs on every one with no debouncing, rate-limiting, or before/after `stext` comparison. Consider: comparing new text vs. old before dirtying segments; skipping entirely when fullscreen is focused; or capping to ~10 Hz via a timestamp guard.
 
-- Profile before adding complexity. Use `perf top`, `perf record`, or targeted logging during normal use and gaming to confirm whether time is spent in event handling, bar drawing, arranging, or X calls.
+- `[OPEN]` **`arrange_pending` coalescing.** `bar_draw_pending` defers `drawbars()` to the event-loop tail, but there is no equivalent for `arrange()` — each separate event in a batch calls `arrange()` immediately. Introduce `arrange_pending` so that burst events (e.g., window creation) produce only one arrange pass.
+
+- `[OPEN]` **Skip `updatestatus()` during fullscreen.** When the bar is frozen by `optimizefullscreen`, processing status updates is wasted work. Add a guard at the top of `updatestatus()` or in `propertynotify()`: if `optimizefullscreen && selmon->sel && selmon->sel->isfullscreen`, return early.
+
+- `[OPEN]` **`propertynotify` early atom filtering.** Every property change on root or any client dispatches through `propertynotify()`, which calls `XGetWindowProperty` for interesting atoms. Return early for uninteresting atoms with a cheap constant-time check before any X11 call.
+
+- `[OPEN]` **Cache visible-client counts in tile/monocle.** Both `tile()` and `monocle()` walk the full client list on every arrange to count visible clients. Cache this count and update it incrementally on attach/detach/showhide to avoid O(n) walks on every layout pass.
+
+- `[OPEN]` **Single-monitor `enternotify` guard.** Same pattern as `motionnotify`: on single-monitor setups, `EnterWindowMask` events are delivered but `enternotify()` (dwm.c:694) still runs through the full `wintoclient`/`wintomon`/`focus` chain. Either conditionally mask the event, or add a fast-path return when `!mons->next`.
+
+- `[OPEN]` **Simplify `updategeom()`.** The code itself already says `/* TODO: updategeom handling sucks, needs to be simplified */` at dwm.c:463. The multi-monitor geometry update path (Xinerama, monitor add/remove, fullscreen resize) is convoluted and a source of subtle bugs. Simplification may also reduce unnecessary arrange/draw churn on geometry changes.
 
 ## Hidden Bug Hunting Plan
 

@@ -1519,7 +1519,8 @@ setfullscreen(Client *c, int fullscreen)
 		c->w = c->oldw;
 		c->h = c->oldh;
 		resizeclient(c, c->x, c->y, c->w, c->h);
-		/* force full redraw on un-fullscreen — stale pixmap from frozen bar */
+		/* refresh status text (was skipped during fullscreen) and force full redraw */
+		updatestatus();
 		bar_dirty_segments = DIRTY_STATUS | DIRTY_TAGS | DIRTY_TITLE;
 		arrange(c->mon);
 	}
@@ -2092,6 +2093,9 @@ updatesizehints(Client *c)
 void
 updatestatus(void)
 {
+	/* skip when fullscreen - bar is frozen, status would never be drawn */
+	if (optimizefullscreen && selmon->sel && selmon->sel->isfullscreen)
+		return;
 	if (!gettextprop(root, XA_WM_NAME, stext, sizeof(stext)))
 		strcpy(stext, "dwm-"VERSION);
 	/* status changed; title boundary may shift if width differs */
