@@ -55,7 +55,7 @@
 #define GLYPH_CACHE_SIZE 64
 
 static struct {
-	long codepoint;     /* -1 = empty */
+	long codepoint; /* -1 = empty */
 	unsigned int width;
 } glyph_cache[GLYPH_CACHE_SIZE];
 
@@ -129,8 +129,7 @@ emoji_cache_insert(Drw *drw, long codepoint, Pixmap pixmap, int w)
 	unsigned int i = (unsigned int)codepoint & (EMOJI_CACHE_SIZE - 1);
 	unsigned int probe = 0;
 
-	while (drw->emoji_cache[i].codepoint != -1 &&
-	       drw->emoji_cache[i].codepoint != codepoint) {
+	while (drw->emoji_cache[i].codepoint != -1 && drw->emoji_cache[i].codepoint != codepoint) {
 		i = (i + 1) & (EMOJI_CACHE_SIZE - 1);
 		if (++probe >= EMOJI_CACHE_SIZE)
 			break;
@@ -169,10 +168,10 @@ emoji_cache_invalidate(Drw *drw)
  * utfmin[i]      — smallest codepoint valid for a sequence of length i.
  * utfmax[i]      — largest codepoint valid for a sequence of length i.
  */
-static const unsigned char utfbyte[UTF_SIZ + 1] = {0x80,    0, 0xC0, 0xE0, 0xF0};
-static const unsigned char utfmask[UTF_SIZ + 1] = {0xC0, 0x80, 0xE0, 0xF0, 0xF8};
-static const long utfmin[UTF_SIZ + 1] = {       0,    0,  0x80,  0x800,  0x10000};
-static const long utfmax[UTF_SIZ + 1] = {0x10FFFF, 0x7F, 0x7FF, 0xFFFF, 0x10FFFF};
+static const unsigned char utfbyte[UTF_SIZ + 1] = { 0x80, 0, 0xC0, 0xE0, 0xF0 };
+static const unsigned char utfmask[UTF_SIZ + 1] = { 0xC0, 0x80, 0xE0, 0xF0, 0xF8 };
+static const long utfmin[UTF_SIZ + 1] = { 0, 0, 0x80, 0x800, 0x10000 };
+static const long utfmax[UTF_SIZ + 1] = { 0x10FFFF, 0x7F, 0x7FF, 0xFFFF, 0x10FFFF };
 
 /*
  * Classify a UTF-8 byte and extract its data bits.
@@ -255,9 +254,7 @@ drw_create(Display *dpy, int screen, Window root, unsigned int w, unsigned int h
 	/* persistent XftDraw: Xft caches rendered glyphs per-drawable;
 	 * we keep the XftDraw alive across redraws so the cached glyphs
 	 * (FT_Load_Glyph / png_read / inflate results) are not discarded. */
-	drw->xftd = XftDrawCreate(dpy, drw->drawable,
-	                          DefaultVisual(dpy, screen),
-	                          DefaultColormap(dpy, screen));
+	drw->xftd = XftDrawCreate(dpy, drw->drawable, DefaultVisual(dpy, screen), DefaultColormap(dpy, screen));
 	XSetLineAttributes(dpy, drw->gc, 1, LineSolid, CapButt, JoinMiter);
 
 	for (int i = 0; i < EMOJI_CACHE_SIZE; i++)
@@ -282,12 +279,10 @@ drw_resize(Drw *drw, unsigned int w, unsigned int h)
 	drw->h = h = h ? h : 1;
 	if (drw->drawable)
 		XFreePixmap(drw->dpy, drw->drawable);
-	XftDrawDestroy(drw->xftd);    /* old XftDraw was tied to old pixmap */
+	XftDrawDestroy(drw->xftd); /* old XftDraw was tied to old pixmap */
 	drw->drawable = XCreatePixmap(drw->dpy, drw->root, w, h, DefaultDepth(drw->dpy, drw->screen));
 	/* re-create XftDraw tied to the new pixmap drawable */
-	drw->xftd = XftDrawCreate(drw->dpy, drw->drawable,
-	                          DefaultVisual(drw->dpy, drw->screen),
-	                          DefaultColormap(drw->dpy, drw->screen));
+	drw->xftd = XftDrawCreate(drw->dpy, drw->drawable, DefaultVisual(drw->dpy, drw->screen), DefaultColormap(drw->dpy, drw->screen));
 }
 
 /*
@@ -298,7 +293,7 @@ void
 drw_free(Drw *drw)
 {
 	emoji_cache_invalidate(drw);
-	XftDrawDestroy(drw->xftd);    /* destroy XftDraw before its pixmap is freed */
+	XftDrawDestroy(drw->xftd); /* destroy XftDraw before its pixmap is freed */
 	XFreePixmap(drw->dpy, drw->drawable);
 	XFreeGC(drw->dpy, drw->gc);
 	drw_fontset_free(drw->fonts);
@@ -328,7 +323,7 @@ xfont_create(Drw *drw, const char *fontname, FcPattern *fontpattern)
 			fprintf(stderr, "error, cannot load font from name: '%s'\n", fontname);
 			return NULL;
 		}
-		if (!(pattern = FcNameParse((FcChar8 *) fontname))) {
+		if (!(pattern = FcNameParse((FcChar8 *)fontname))) {
 			fprintf(stderr, "error, cannot parse font name to pattern: '%s'\n", fontname);
 			XftFontClose(drw->dpy, xfont);
 			return NULL;
@@ -372,8 +367,8 @@ xfont_free(Fnt *font)
  * font ends up at the head (drw->fonts).  Both caches are invalidated
  * because the new fonts may have different glyph metrics.
  */
-Fnt*
-drw_fontset_create(Drw* drw, const char *fonts[], size_t fontcount)
+Fnt *
+drw_fontset_create(Drw *drw, const char *fonts[], size_t fontcount)
 {
 	Fnt *cur, *ret = NULL;
 	size_t i;
@@ -416,9 +411,7 @@ drw_clr_create(Drw *drw, Clr *dest, const char *clrname)
 	if (!drw || !dest || !clrname)
 		return;
 
-	if (unlikely(!XftColorAllocName(drw->dpy, DefaultVisual(drw->dpy, drw->screen),
-	                       DefaultColormap(drw->dpy, drw->screen),
-	                       clrname, dest)))
+	if (unlikely(!XftColorAllocName(drw->dpy, DefaultVisual(drw->dpy, drw->screen), DefaultColormap(drw->dpy, drw->screen), clrname, dest)))
 		DIE("XftColorAllocName():error, cannot allocate color '%s'", clrname);
 
 	dest->pixel |= 0xff << 24;
@@ -517,7 +510,10 @@ drw_text(Drw *drw, int x, int y, unsigned int w, unsigned int h, unsigned int lp
 	int charexists = 0, overflow = 0;
 	/* keep track of a couple codepoints for which we have no match. */
 	enum { nomatches_len = 64 };
-	static struct { long codepoint[nomatches_len]; unsigned int idx; } nomatches;
+	static struct {
+		long codepoint[nomatches_len];
+		unsigned int idx;
+	} nomatches;
 	static unsigned int ellipsis_width = 0;
 
 	if (!drw || (render && (!drw->scheme || !w)) || !text || !drw->fonts)
@@ -528,7 +524,7 @@ drw_text(Drw *drw, int x, int y, unsigned int w, unsigned int h, unsigned int lp
 	} else {
 		XSetForeground(drw->dpy, drw->gc, drw->scheme[invert ? ColFg : ColBg].pixel);
 		XFillRectangle(drw->dpy, drw->drawable, drw->gc, x, y, w, h);
-		d = drw->xftd;           /* use persistent XftDraw (created in drw_create) */
+		d = drw->xftd; /* use persistent XftDraw (created in drw_create) */
 		x += lpad;
 		w = (w >= lpad) ? (w - lpad) : 0;
 	}
@@ -618,42 +614,41 @@ drw_text(Drw *drw, int x, int y, unsigned int w, unsigned int h, unsigned int lp
 						/* flush pending ASCII batch before a non-ASCII glyph */
 						if (ascii_len) {
 							XftDrawStringUtf8(d,
-								&drw->scheme[invert ? ColBg : ColFg],
-								usedfont->xfont, ascii_start_x, ty2,
-								(XftChar8 *)(utf8str + ascii_off), ascii_len);
+							                  &drw->scheme[invert ? ColBg : ColFg],
+							                  usedfont->xfont,
+							                  ascii_start_x,
+							                  ty2,
+							                  (XftChar8 *)(utf8str + ascii_off),
+							                  ascii_len);
 							ascii_len = 0;
 						}
 						cw = glyph_getwidth(drw, cp, rp, (unsigned int)clen);
 						if (cw > 0) {
-						/* emoji render cache: if we have a cached pixmap,
+							/* emoji render cache: if we have a cached pixmap,
 						 * blit it with XCopyArea instead of re-rendering
 						 * through Xft (which would trigger FT_Load_Glyph
 						 * → png_read → inflate).  On cache miss, render
 						 * via Xft, capture the result with XCopyArea into
 						 * a fresh pixmap, and insert into the cache. */
-						eidx = emoji_cache_lookup(drw, cp);
-						if (eidx >= 0) {
-							EmojiCacheSlot *eslot = &drw->emoji_cache[eidx];
-							XCopyArea(drw->dpy, eslot->pixmap,
-								drw->drawable, drw->gc,
-								0, 0, (unsigned int)eslot->w, h,
-								cx, y);
-						} else {
-							Pixmap cpm;
-							XftDrawStringUtf8(d,
-								&drw->scheme[invert ? ColBg : ColFg],
-								usedfont->xfont, cx, ty2,
-								(XftChar8 *)rp, (int)clen);
-							cpm = XCreatePixmap(drw->dpy, drw->drawable,
-								(unsigned int)cw, h,
-								DefaultDepth(drw->dpy, drw->screen));
-							XCopyArea(drw->dpy, drw->drawable,
-								cpm, drw->gc,
-								cx, y, (unsigned int)cw, h, 0, 0);
-							emoji_cache_insert(drw, cp, cpm, (int)cw);
+							eidx = emoji_cache_lookup(drw, cp);
+							if (eidx >= 0) {
+								EmojiCacheSlot *eslot = &drw->emoji_cache[eidx];
+								XCopyArea(drw->dpy, eslot->pixmap, drw->drawable, drw->gc, 0, 0, (unsigned int)eslot->w, h, cx, y);
+							} else {
+								Pixmap cpm;
+								XftDrawStringUtf8(d,
+								                  &drw->scheme[invert ? ColBg : ColFg],
+								                  usedfont->xfont,
+								                  cx,
+								                  ty2,
+								                  (XftChar8 *)rp,
+								                  (int)clen);
+								cpm = XCreatePixmap(drw->dpy, drw->drawable, (unsigned int)cw, h, DefaultDepth(drw->dpy, drw->screen));
+								XCopyArea(drw->dpy, drw->drawable, cpm, drw->gc, cx, y, (unsigned int)cw, h, 0, 0);
+								emoji_cache_insert(drw, cp, cpm, (int)cw);
+							}
+							cx += (int)cw;
 						}
-						cx += (int)cw;
-					}
 					}
 					rp += clen;
 					rrem -= (int)clen;
@@ -661,9 +656,12 @@ drw_text(Drw *drw, int x, int y, unsigned int w, unsigned int h, unsigned int lp
 				/* flush any trailing ASCII run */
 				if (ascii_len) {
 					XftDrawStringUtf8(d,
-						&drw->scheme[invert ? ColBg : ColFg],
-						usedfont->xfont, ascii_start_x, ty2,
-						(XftChar8 *)(utf8str + ascii_off), ascii_len);
+					                  &drw->scheme[invert ? ColBg : ColFg],
+					                  usedfont->xfont,
+					                  ascii_start_x,
+					                  ty2,
+					                  (XftChar8 *)(utf8str + ascii_off),
+					                  ascii_len);
 				}
 			}
 			x += ew;
