@@ -1044,7 +1044,7 @@ test_keypress_mapped_key(void)
 	memset(&ev, 0, sizeof(ev));
 	ev.xkey.type = KeyPress;
 	ev.xkey.keycode = XK_b;  /* mock returns keycode as keysym → XK_b */
-	ev.xkey.state = ALT;  /* matches the togglebar key binding */
+	ev.xkey.state = Mod1Mask;  /* matches the togglebar key binding (MODKEY) */
 
 	old_showbar = selmon->showbar;
 	keypress(&ev);

@@ -13,6 +13,76 @@ static Window mock_next_win = 1000;
 static Atom mock_next_atom = 100;
 int _mock_x11_last_error_code = 0;
 
+/* strdup is not C99; implement locally for portability */
+static char *
+mock_strdup(const char *s)
+{
+	size_t len;
+	char *p;
+	if (!s) return NULL;
+	len = strlen(s);
+	p = ecalloc(1, len + 1);
+	memcpy(p, s, len);
+	return p;
+}
+
+/* Mock control variable definitions (defaults match old behavior) */
+const char *mock_class_res_class = NULL;
+const char *mock_class_res_name  = NULL;
+int  mock_normal_hints_return = 1;
+int  mock_normal_hints_flags = PSize;
+int  mock_normal_hints_base_width = 0;
+int  mock_normal_hints_base_height = 0;
+int  mock_normal_hints_min_width = 0;
+int  mock_normal_hints_min_height = 0;
+int  mock_normal_hints_max_width = 0;
+int  mock_normal_hints_max_height = 0;
+int  mock_normal_hints_width_inc = 0;
+int  mock_normal_hints_height_inc = 0;
+int  mock_normal_hints_min_aspect_x = 0;
+int  mock_normal_hints_min_aspect_y = 0;
+int  mock_normal_hints_max_aspect_x = 0;
+int  mock_normal_hints_max_aspect_y = 0;
+int  mock_gettextprop_return = 0;
+const char *mock_gettextprop_value = NULL;
+Atom mock_gettextprop_encoding = XA_STRING;
+int  mock_getwindowproperty_return = 0;
+Atom mock_getwindowproperty_atom = 0;
+int  mock_gettransient_return = 0;
+Window mock_gettransient_win = None;
+long mock_wmhints_flags = InputHint;
+Bool  mock_wmhints_input = True;
+
+void
+mock_x11_reset(void)
+{
+	mock_class_res_class = NULL;
+	mock_class_res_name = NULL;
+	mock_normal_hints_return = 1;
+	mock_normal_hints_flags = PSize;
+	mock_normal_hints_base_width = 0;
+	mock_normal_hints_base_height = 0;
+	mock_normal_hints_min_width = 0;
+	mock_normal_hints_min_height = 0;
+	mock_normal_hints_max_width = 0;
+	mock_normal_hints_max_height = 0;
+	mock_normal_hints_width_inc = 0;
+	mock_normal_hints_height_inc = 0;
+	mock_normal_hints_min_aspect_x = 0;
+	mock_normal_hints_min_aspect_y = 0;
+	mock_normal_hints_max_aspect_x = 0;
+	mock_normal_hints_max_aspect_y = 0;
+	mock_gettextprop_return = 0;
+	mock_gettextprop_value = NULL;
+	mock_gettextprop_encoding = XA_STRING;
+	mock_getwindowproperty_return = 0;
+	mock_getwindowproperty_atom = 0;
+	mock_gettransient_return = 0;
+	mock_gettransient_win = None;
+	mock_wmhints_flags = InputHint;
+	mock_wmhints_input = True;
+}
+
 Display *
 XOpenDisplay(const char *name)
 {
@@ -208,11 +278,20 @@ XGetWindowProperty(Display *dpy, Window w, Atom property, long offset,
 {
 	(void)dpy; (void)w; (void)property; (void)offset; (void)length;
 	(void)delete; (void)req_type;
+	if (!mock_getwindowproperty_return) {
+		*actual_type = None;
+		*actual_format = 0;
+		*nitems = 0;
+		*bytes_after = 0;
+		*prop = NULL;
+		return 1; /* technically the mock always returns Success, but nitems=0 means fail */
+	}
 	*actual_type = XA_CARDINAL;
 	*actual_format = 32;
-	*nitems = 0;
+	*nitems = 1;
 	*bytes_after = 0;
-	*prop = NULL;
+	*prop = malloc(sizeof(Atom));
+	if (*prop) *(Atom *)*prop = mock_getwindowproperty_atom;
 	return Success;
 }
 
@@ -229,8 +308,24 @@ int
 XGetWMNormalHints(Display *dpy, Window w, XSizeHints *hints, long *returned)
 {
 	(void)dpy; (void)w;
+	if (!mock_normal_hints_return) {
+		*returned = 0;
+		return 0;
+	}
 	memset(hints, 0, sizeof(*hints));
-	hints->flags = PSize;
+	hints->flags = mock_normal_hints_flags;
+	hints->base_width  = mock_normal_hints_base_width;
+	hints->base_height = mock_normal_hints_base_height;
+	hints->min_width   = mock_normal_hints_min_width;
+	hints->min_height  = mock_normal_hints_min_height;
+	hints->max_width   = mock_normal_hints_max_width;
+	hints->max_height  = mock_normal_hints_max_height;
+	hints->width_inc   = mock_normal_hints_width_inc;
+	hints->height_inc  = mock_normal_hints_height_inc;
+	hints->min_aspect.x = mock_normal_hints_min_aspect_x;
+	hints->min_aspect.y = mock_normal_hints_min_aspect_y;
+	hints->max_aspect.x = mock_normal_hints_max_aspect_x;
+	hints->max_aspect.y = mock_normal_hints_max_aspect_y;
 	*returned = 0;
 	return 1;
 }
@@ -239,8 +334,8 @@ int
 XGetClassHint(Display *dpy, Window w, XClassHint *hint)
 {
 	(void)dpy; (void)w;
-	hint->res_name = NULL;
-	hint->res_class = NULL;
+	hint->res_class = mock_strdup(mock_class_res_class);
+	hint->res_name  = mock_strdup(mock_class_res_name);
 	return 1;
 }
 
@@ -249,8 +344,8 @@ XGetWMHints(Display *dpy, Window w)
 {
 	(void)dpy; (void)w;
 	XWMHints *wmh = calloc(1, sizeof(XWMHints));
-	wmh->flags = InputHint;
-	wmh->input = True;
+	wmh->flags = mock_wmhints_flags;
+	wmh->input = mock_wmhints_input;
 	return wmh;
 }
 
@@ -264,8 +359,8 @@ int
 XGetTransientForHint(Display *dpy, Window w, Window *prop)
 {
 	(void)dpy; (void)w;
-	*prop = None;
-	return 0;
+	*prop = mock_gettransient_win;
+	return mock_gettransient_return;
 }
 
 int
@@ -286,16 +381,25 @@ XGetWindowAttributes(Display *dpy, Window w, XWindowAttributes *attr)
 int
 XGetTextProperty(Display *dpy, Window w, XTextProperty *tp, Atom atom)
 {
-	(void)dpy; (void)w; (void)tp; (void)atom;
-	return 0;
+	(void)dpy; (void)w; (void)atom;
+	if (!mock_gettextprop_return) return 0;
+	if (tp) {
+		tp->value = (unsigned char *)mock_strdup(mock_gettextprop_value);
+		tp->encoding = mock_gettextprop_encoding;
+		tp->format = 8;
+		tp->nitems = mock_gettextprop_value ? strlen(mock_gettextprop_value) : 0;
+	}
+	return 1;
 }
 
 int
 XmbTextPropertyToTextList(Display *dpy, const XTextProperty *tp,
 			  char ***list, int *count)
 {
-	(void)dpy; (void)tp; (void)list; (void)count;
-	return 0;
+	(void)dpy; (void)tp;
+	if (list) *list = NULL;
+	if (count) *count = 0;
+	return 0; /* Success */
 }
 
 void

@@ -50,22 +50,19 @@ run: $(TEST_BIN)
 		./$$t; \
 	done
 
+COV_LABELS = pure_logic segments arrange window_ops events drw_cache emoji_render_cache comprehensive
+
+cov_bins: $(MOCK_OBJ)
+	$(MAKE) $(addprefix cov_test_,$(COV_LABELS))
+
 coverage: clean
-	$(MAKE) $(MOCK_OBJ) cov_test_pure_logic cov_test_segments cov_test_arrange cov_test_window_ops cov_test_events cov_test_drw_cache cov_test_emoji_render_cache
-	./cov_test_pure_logic
-	./cov_test_segments
-	./cov_test_arrange
-	./cov_test_window_ops
-	./cov_test_events
-	./cov_test_drw_cache
-	./cov_test_emoji_render_cache
-	@gcov -o cov_test_pure_logic-test_pure_logic ../dwm.c 2>/dev/null || true
-	@gcov -o cov_test_segments-test_segments ../dwm.c 2>/dev/null || true
-	@gcov -o cov_test_arrange-test_arrange ../dwm.c 2>/dev/null || true
-	@gcov -o cov_test_window_ops-test_window_ops ../dwm.c 2>/dev/null || true
-	@gcov -o cov_test_events-test_events ../dwm.c 2>/dev/null || true
-	@echo "=== Coverage summary (dwm.c) ==="
-	@grep -E '^    [0-9]+:' dwm.c.gcov 2>/dev/null | head -25 || echo "(no gcov data)"
+	$(MAKE) $(MOCK_OBJ)
+	$(MAKE) $(addprefix cov_test_,$(COV_LABELS))
+	@python3 merge_gcov.py . $(COV_LABELS)
+	@echo "=== Per-test gcov files (last run) ==="
+	@gcov -o cov_test_events-test_events ../dwm.c 2>/dev/null | grep -E 'Lines executed' || true
+	@echo ""
+	@grep -E '^    [0-9]+:' dwm.c.gcov 2>/dev/null | head -25 || true
 
 asan: $(MOCK_OBJ)
 	$(MAKE) CFLAGS="$(CFLAGS) $(ASAN_CFLAGS)" LDFLAGS="$(LDFLAGS) $(ASAN_LDFLAGS)" \

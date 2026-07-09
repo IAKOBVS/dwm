@@ -607,6 +607,35 @@ void XDefineCursor(Display *dpy, Window w, Cursor cursor);
 void XChangeProperty(Display *dpy, Window w, Atom property, Atom type,
                      int format, int mode, unsigned char *data, int nelements);
 void XDeleteProperty(Display *dpy, Window w, Atom property);
+/* Mock control variables — tests can set these to control mock return values */
+extern const char *mock_class_res_class;
+extern const char *mock_class_res_name;
+extern int  mock_normal_hints_return; /* 0=fail, 1=success */
+extern int  mock_normal_hints_flags;
+extern int  mock_normal_hints_base_width;
+extern int  mock_normal_hints_base_height;
+extern int  mock_normal_hints_min_width;
+extern int  mock_normal_hints_min_height;
+extern int  mock_normal_hints_max_width;
+extern int  mock_normal_hints_max_height;
+extern int  mock_normal_hints_width_inc;
+extern int  mock_normal_hints_height_inc;
+extern int  mock_normal_hints_min_aspect_x;
+extern int  mock_normal_hints_min_aspect_y;
+extern int  mock_normal_hints_max_aspect_x;
+extern int  mock_normal_hints_max_aspect_y;
+extern int  mock_gettextprop_return; /* 0=fail, 1=success */
+extern const char *mock_gettextprop_value;
+extern Atom mock_gettextprop_encoding;
+extern int  mock_getwindowproperty_return; /* 0=fail, 1=success */
+extern Atom mock_getwindowproperty_atom;
+extern int  mock_gettransient_return; /* 0=fail, 1=success */
+extern Window mock_gettransient_win;
+extern long mock_wmhints_flags;   /* XGetWMHints returns this as wmh->flags */
+extern Bool  mock_wmhints_input;  /* XGetWMHints returns this as wmh->input */
+
+void mock_x11_reset(void);
+
 void XSetClassHint(Display *dpy, Window w, XClassHint *classhint);
 Atom XInternAtom(Display *dpy, const char *name, Bool only_if_exists);
 int XGetWindowProperty(Display *dpy, Window w, Atom property, long offset,
