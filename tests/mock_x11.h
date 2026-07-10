@@ -633,6 +633,21 @@ extern int  mock_gettransient_return; /* 0=fail, 1=success */
 extern Window mock_gettransient_win;
 extern long mock_wmhints_flags;   /* XGetWMHints returns this as wmh->flags */
 extern Bool  mock_wmhints_input;  /* XGetWMHints returns this as wmh->input */
+extern int  mock_override_redirect; /* XGetWindowAttributes override_redirect */
+extern const char *mock_textlist_text; /* XmbTextPropertyToTextList: text to return in list */
+extern int  mock_textlist_count;   /* XmbTextPropertyToTextList: count to return */
+extern uint32_t mock_winpid_value; /* winpid return value (via xcb stubs) */
+extern int  mock_winpid_set;       /* 1=use mock_winpid_value, 0=return NULL */
+
+extern int  mock_keyboardmapping_return_null; /* 1 = XGetKeyboardMapping returns NULL */
+extern KeySym mock_keyboardmapping_first_keysym; /* if non-zero, syms[0] = this value */
+
+extern int  mock_modmap_has_numlock; /* 1 = XGetModifierMapping puts Num_Lock keycode in modmap */
+extern int  mock_die_abort; /* 0=normal abort, 1=mock: set to 2 and return instead of aborting */
+
+extern int   mock_wmprotocols_return; /* 0=fail, 1=success */
+extern Atom *mock_wmprotocols_list;   /* array of atoms to return */
+extern int   mock_wmprotocols_count;  /* number of atoms in list */
 
 void mock_x11_reset(void);
 

@@ -1,5 +1,9 @@
 # TODO
 
+## Now
+
+Fix swallowing: disallow to swallow random terminals, when can't determine which terminal to swlalow
+
 ## Potential Optimizations
 
 Status: `[OPEN]` = not started, `[PARTIAL]` = partially done, no tag = done.

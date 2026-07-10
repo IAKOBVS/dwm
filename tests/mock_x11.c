@@ -52,6 +52,19 @@ int  mock_gettransient_return = 0;
 Window mock_gettransient_win = None;
 long mock_wmhints_flags = InputHint;
 Bool  mock_wmhints_input = True;
+int  mock_override_redirect = 0;
+const char *mock_textlist_text = NULL;
+int  mock_textlist_count = 0;
+uint32_t mock_winpid_value = 0;
+int  mock_winpid_set =       0;
+int  mock_keyboardmapping_return_null = 0;
+KeySym mock_keyboardmapping_first_keysym = 0;
+int  mock_modmap_has_numlock = 0;
+int  mock_die_abort = 0;
+
+int   mock_wmprotocols_return = 0;
+Atom *mock_wmprotocols_list = NULL;
+int   mock_wmprotocols_count = 0;
 
 void
 mock_x11_reset(void)
@@ -81,6 +94,18 @@ mock_x11_reset(void)
 	mock_gettransient_win = None;
 	mock_wmhints_flags = InputHint;
 	mock_wmhints_input = True;
+	mock_override_redirect = 0;
+	mock_textlist_text = NULL;
+	mock_textlist_count = 0;
+	mock_winpid_value = 0;
+	mock_winpid_set = 0;
+	mock_keyboardmapping_return_null = 0;
+	mock_keyboardmapping_first_keysym = 0;
+	mock_modmap_has_numlock = 0;
+	mock_die_abort = 0;
+	mock_wmprotocols_return = 0;
+	mock_wmprotocols_list = NULL;
+	mock_wmprotocols_count = 0;
 }
 
 Display *
@@ -299,9 +324,19 @@ int
 XGetWMProtocols(Display *dpy, Window w, Atom **protocols, int *count)
 {
 	(void)dpy; (void)w;
-	*protocols = NULL;
-	*count = 0;
-	return 0;
+	if (!mock_wmprotocols_return) {
+		*protocols = NULL;
+		*count = 0;
+		return 0;
+	}
+	if (mock_wmprotocols_count > 0 && mock_wmprotocols_list) {
+		*protocols = malloc(mock_wmprotocols_count * sizeof(Atom));
+		memcpy(*protocols, mock_wmprotocols_list, mock_wmprotocols_count * sizeof(Atom));
+	} else {
+		*protocols = NULL;
+	}
+	*count = mock_wmprotocols_count;
+	return 1;
 }
 
 int
@@ -369,7 +404,7 @@ XGetWindowAttributes(Display *dpy, Window w, XWindowAttributes *attr)
 	(void)dpy; (void)w;
 	memset(attr, 0, sizeof(*attr));
 	attr->map_state = IsViewable;
-	attr->override_redirect = False;
+	attr->override_redirect = mock_override_redirect;
 	attr->width = 800;
 	attr->height = 600;
 	attr->x = 0;
@@ -397,15 +432,29 @@ XmbTextPropertyToTextList(Display *dpy, const XTextProperty *tp,
 			  char ***list, int *count)
 {
 	(void)dpy; (void)tp;
-	if (list) *list = NULL;
-	if (count) *count = 0;
+	if (!mock_textlist_text) {
+		if (list) *list = NULL;
+		if (count) *count = 0;
+		return 0; /* Success but empty */
+	}
+	if (list) {
+		*list = calloc(2, sizeof(char *));
+		(*list)[0] = mock_strdup(mock_textlist_text);
+		(*list)[1] = NULL;
+	}
+	if (count) *count = mock_textlist_count > 0 ? mock_textlist_count : 1;
 	return 0; /* Success */
 }
 
 void
 XFreeStringList(char **list)
 {
-	(void)list;
+	if (list) {
+		int i;
+		for (i = 0; list[i]; i++)
+			free(list[i]);
+		free(list);
+	}
 }
 
 int
@@ -531,8 +580,13 @@ KeySym *
 XGetKeyboardMapping(Display *dpy, KeyCode first, int count, int *keysyms_per_keycode)
 {
 	(void)dpy; (void)first; (void)count;
+	if (mock_keyboardmapping_return_null)
+		return NULL;
 	*keysyms_per_keycode = 2;
-	return calloc((size_t)count * 2, sizeof(KeySym));
+	KeySym *syms = calloc((size_t)count * 2, sizeof(KeySym));
+	if (syms && mock_keyboardmapping_first_keysym)
+		syms[0] = mock_keyboardmapping_first_keysym;
+	return syms;
 }
 
 void
@@ -555,6 +609,11 @@ XGetModifierMapping(Display *dpy)
 	XModifierKeymap *m = calloc(1, sizeof(*m));
 	m->max_keypermod = 1;
 	m->modifiermap = calloc(8, sizeof(KeyCode));
+	if (mock_modmap_has_numlock) {
+		/* Put Num_Lock keycode (XKeysymToKeycode returns 0x7F=127)
+		 * in the Mod3 (index 2) slot so updatenumlockmask() finds it */
+		m->modifiermap[2] = 127;
+	}
 	return m;
 }
 
@@ -765,6 +824,10 @@ void
 die(const char *file, int line, const char *func, const char *fmt, ...)
 {
 	va_list ap;
+	if (mock_die_abort) {
+		mock_die_abort = 2;
+		return;
+	}
 	fprintf(stderr, "%s:%d: %s(): ", file, line, func);
 	va_start(ap, fmt);
 	vfprintf(stderr, fmt, ap);
@@ -782,6 +845,9 @@ XKeysymToKeycode(Display *dpy, KeySym ks)
 }
 
 /* xcb stubs for winpid */
+static uint32_t mock_winpid_pid;
+static xcb_res_client_id_value_t *mock_cid_value;
+
 xcb_res_query_client_ids_cookie_t
 xcb_res_query_client_ids(xcb_connection_t *c, uint32_t spec_len, const void *spec)
 {
@@ -794,7 +860,10 @@ xcb_res_query_client_ids_reply_t *
 xcb_res_query_client_ids_reply(xcb_connection_t *c, xcb_res_query_client_ids_cookie_t cookie, xcb_generic_error_t **e)
 {
 	(void)c; (void)cookie; (void)e;
-	return NULL;
+	if (!mock_winpid_set)
+		return NULL;
+	/* Return a non-NULL pointer; the iterator stub ignores it anyway */
+	return calloc(1, 256);
 }
 
 xcb_res_client_id_value_iterator_t
@@ -802,6 +871,20 @@ xcb_res_query_client_ids_ids_iterator(void *r)
 {
 	(void)r;
 	xcb_res_client_id_value_iterator_t i = {0};
+	if (mock_winpid_set) {
+		mock_winpid_pid = mock_winpid_value;
+		/* Allocate struct + space for 1 uint32_t value inline */
+		free(mock_cid_value);
+		mock_cid_value = calloc(1, sizeof(xcb_res_client_id_value_t) + sizeof(uint32_t));
+		mock_cid_value->spec.mask = XCB_RES_CLIENT_ID_MASK_LOCAL_CLIENT_PID;
+		mock_cid_value->spec.client = 0;
+		mock_cid_value->length = 1;
+		/* value data is stored inline after the struct */
+		memcpy((char *)mock_cid_value + sizeof(xcb_res_client_id_value_t),
+		       &mock_winpid_pid, sizeof(uint32_t));
+		i.data = mock_cid_value;
+		i.rem = 1;
+	}
 	return i;
 }
 
@@ -815,5 +898,8 @@ uint32_t *
 xcb_res_client_id_value_value(void *data)
 {
 	(void)data;
-	return NULL;
+	if (!mock_winpid_set)
+		return NULL;
+	/* value data is inline after the struct */
+	return (uint32_t *)((char *)mock_cid_value + sizeof(xcb_res_client_id_value_t));
 }
