@@ -49,3 +49,31 @@ To systematically flush out remaining hidden bugs (memory leaks, crashes, logic 
 ### Phase 4: Patch Interoperability
 1. **Review Patch Seams**: Identify all patches applied to this build (e.g., Color Emoji, Systray, Alpha, AttachAside).
 2. **Check Shared State**: Review how these patches interact with the global `Client` list and monitor states. For example, if the systray patch resizes the bar, does the alpha patch handle the new dimensions correctly?
+
+## Missing Test Edge Cases
+
+**Line coverage**: 99.93% of dwm.c (1348 lines covered, only dead code at line 231 uncovered).  
+**Total tests**: 833 across 9 binaries in `tests/`.
+
+Despite strong line coverage, many edge-case *values* and *branch combinations* are untested:
+
+| Priority | Function | Missing edge case | Why it matters |
+|----------|----------|-------------------|----------------|
+| High | `applysizehints` | `incw=0` or `inch=0` (skip increment adjustment); `mina=maxa=0` (skip aspect); `baseismin=false` path (both `basew`+`minw` set) | UI responsiveness — incorrect geometry on floating/fixed-size clients |
+| High | `buttonpress` | Click past last tag (`i == LENGTH(tags)` falls through to `ClkWinTitle`); `ClkMasterTag`; `ClkRootWin` no-match path | Visible crash if tag area is mis-sized |
+| High | `enternotify` | `NotifyGrab`/`NotifyUngrab` mode early return; entering selmon->sel's own window (early return at line 704) | Focus leak on grab/ungrab sequences |
+| High | `focus` | `selmon==NULL`; `c == selmon->sel` (idempotent skip) | Crash on monitor-less setup or redundant focus calls |
+| High | `manage` | `wa->map_state != IsViewable`; `XGetClassHint` failure | Crash on malformed window properties |
+| High | `propertynotify` | `XA_WM_TRANSIENT_FOR` on non-sel window; unsupported atoms besides the explicitly handled ones | Hidden crash path |
+| High | `updatesizehints` | `XGetWMNormalHints` returning `USSize`/`USPosition` only (no min/max/base) | Floating client position/geometry ignored |
+| Med | `applyrules` | Title-only rules (`r->title` filter); rule tags overwriting existing tags; multiple matching rules | Window classification silent failure |
+| Med | `configurenotify` | Non-root window event; loop resizing fullscreen clients (line 473) | Arrange skipped on geometry change |
+| Med | `focusstack` | All clients invisible (line 786 `for` loop, `sel` stays NULL after iteration) | Stack navigation broken on empty tag |
+| Med | `monocle` | 2+ clients; invisible client in list | Layout miscount |
+| Med | `resize` | Interact flag combination paths; floating-only resize | Incorrect geometry for floating clients |
+| Med | `setlayout` | `arg->i` pointing to `layouts[]` entry with NULL `arrange` function pointer | NULL deref in arrange path |
+| Med | `tile` | Layout in `sellt` with `arrange != tile`; `n > m->nmaster` with gap applied | Bar/window overlap on layout switch |
+| Med | `unmapnotify` | Non-client window; `send_event`+already `WithdrawnState` | Double-remove from client list |
+| Low | `focusmon` | Wrap past end/beginning of empty monitor list | Crash on edge-case monitor config |
+| Low | `keypress` | Numlock-only modifier early return | Unmasked modifier interaction |
+| Low | `scan` | `XQueryTree` failure; `XGetWindowAttributes` failure; already-mapped windows; two monitors | Skipped window management

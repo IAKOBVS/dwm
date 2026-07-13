@@ -50,7 +50,7 @@ run: $(TEST_BIN)
 		./$$t; \
 	done
 
-COV_LABELS = pure_logic segments arrange window_ops events drw_cache emoji_render_cache comprehensive
+COV_LABELS = pure_logic segments arrange window_ops events drw_cache emoji_render_cache comprehensive drw_safety
 
 cov_bins: $(MOCK_OBJ)
 	$(MAKE) $(addprefix cov_test_,$(COV_LABELS))
@@ -68,7 +68,7 @@ asan: $(MOCK_OBJ)
 	$(MAKE) CFLAGS="$(CFLAGS) $(ASAN_CFLAGS)" LDFLAGS="$(LDFLAGS) $(ASAN_LDFLAGS)" \
 		asan_test_pure_logic asan_test_segments asan_test_arrange \
 		asan_test_window_ops asan_test_events asan_test_drw_cache \
-		asan_test_emoji_render_cache
+		asan_test_emoji_render_cache asan_test_drw_safety
 	@for t in asan_test_*; do \
 		if [ -x "$$t" ]; then \
 			printf "\033[1;34mRUNNING\033[0m $$t\n"; \

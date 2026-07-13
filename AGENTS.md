@@ -67,7 +67,7 @@ X server needed). Every test `.c` file follows this pattern:
    calls test functions
 4. `ASSERT()` / `ASSERT_EQ()` macros for pass/fail
 
-### Current Test Files
+### Current Test Files (833 tests total, 9 binaries)
 
 - **test_pure_logic.c** (~1100 lines, 101 tests) — core dwm logic: linked-list
   ops (attach, detach, attachstack, detachstack), nexttiled, dirtomon,
@@ -114,6 +114,39 @@ X server needed). Every test `.c` file follows this pattern:
   setfullscreen enter/exit/idempotent, togglefullscr with/without sel,
   enternotify (non-Normal mode, NotifyInferior, entering sel returns early,
   entering barwin returns early)
+
+- **test_comprehensive.c** (~7136 lines, 428 tests) — broad dwm.c coverage
+  across all 107 functions: applyrules/applysizehints, swallow/unswallow,
+  buttonpress/click types/tag iteration, configure/configurenotify,
+  configurerequest (floating/full/non-client), createmon, destroynotify,
+  dirtomon, drawbar (segments/fullscreen freeze), enternotify, expose,
+  focusmon/focusstack, getatomprop/getstate/gettextprop/title/winpid,
+  grabkeys/grabbuttons, incnmaster, keypress, killclient, manage
+  (new/clamping/swallow/transient/centered), mappingnotify, maprequest,
+  monocle, motionnotify, movemouse (snap/cross-mir/throttle/early return),
+  pop, propertynotify (all atoms), resize/resizeclient, resizemouse,
+  restack, run events, scan (windows/iconic/override/transient),
+  sendevent, sendmon, setclientstate, setfocus, setfullscreen,
+  setgaps/setlayout/setmfact, seturgent, showhide, sighup/sigterm,
+  spawn (fork/child/dmenucmd/null), tag/toggletag/toggleview/view,
+  tagmon, textnw, tile, togglebar/togglefloating/togglefullscr,
+  unmanage/unswallow/unmapnotify, updatebars/updatebarpos,
+  updateclientlist, updategeom, updatenumlockmask, updatesizehints,
+  updatestatus/updatetitle/updatewindowtype/updatewmhints,
+  termforwin/isdescprocess/getparentprocess,
+  wintoclient/wintomon, xerror (all variants), zoom
+
+- **test_drw_safety.c** (~330 lines, 33 tests) — drw.c null/zero/edge-case
+  crash-safety: drw_create (NULL display/colormap), drw_resize (NULL/zero
+  dims), drw_rect (NULL/zero/empty/filled/multiple), drw_map (NULL/zero
+  area), drw_text (NULL/zero/empty), drw_fontset_getwidth (NULL/zero/
+  clamp), drw_setfontset (NULL), drw_setscheme (NULL), drw_free (NULL)
+
+- **test_emoji_render_cache.c** (~200 lines, 87 tests) — emoji render cache
+  (Phase 5): cache miss fills entry, subsequent hits reuse cached XImage,
+  hash collision probes linearly, codepoint 0 does not cache,
+  drw_emojicache_get returns NULL for cacheable but uncached emoji,
+  per-dpy cache isolation, drw_free frees all cache entries
 
 ### Mock Infrastructure
 

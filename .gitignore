@@ -5,6 +5,7 @@ config.h
 !tests/*.c
 !tests/*.h
 !tests/*.sh
+*.gcov
 
 # Prerequisites
 *.d

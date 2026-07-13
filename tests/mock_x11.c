@@ -4,8 +4,11 @@
 #include <assert.h>
 #include <stdint.h>
 #include <string.h>
+#include <sys/types.h>
+#include <unistd.h>
 #include <xcb/xcb.h>
 #include <xcb/res.h>
+#include <X11/Xft/Xft.h>
 
 #include "../util.h"
 
@@ -52,7 +55,9 @@ int  mock_gettransient_return = 0;
 Window mock_gettransient_win = None;
 long mock_wmhints_flags = InputHint;
 Bool  mock_wmhints_input = True;
+int   mock_wmhints_return_null = 0;
 int  mock_override_redirect = 0;
+int  mock_map_state = IsViewable;
 const char *mock_textlist_text = NULL;
 int  mock_textlist_count = 0;
 uint32_t mock_winpid_value = 0;
@@ -65,6 +70,26 @@ int  mock_die_abort = 0;
 int   mock_wmprotocols_return = 0;
 Atom *mock_wmprotocols_list = NULL;
 int   mock_wmprotocols_count = 0;
+
+int   mock_event_queue_count = 0;
+XEvent mock_event_queue[8];
+
+int mock_querypointer_return = 1;
+int mock_querypointer_root_x = 0;
+int mock_querypointer_root_y = 0;
+
+int    mock_querytree_return = 0;
+Window mock_querytree_root = 0;
+Window *mock_querytree_children = NULL;
+unsigned int mock_querytree_nchildren = 0;
+
+int mock_fork_return = -1;
+
+int mock_grabpointer_return = 0;  /* 0=GrabSuccess, non-zero=failure */
+int mock_fontset_fail = 0;        /* 0=normal, 1=drw_fontset_create returns NULL */
+
+int mock_getwindowattr_call_count = 0;
+int mock_getwindowattr_fail_at = 0;  /* 0=never fail */
 
 void
 mock_x11_reset(void)
@@ -94,7 +119,9 @@ mock_x11_reset(void)
 	mock_gettransient_win = None;
 	mock_wmhints_flags = InputHint;
 	mock_wmhints_input = True;
+	mock_wmhints_return_null = 0;
 	mock_override_redirect = 0;
+	mock_map_state = IsViewable;
 	mock_textlist_text = NULL;
 	mock_textlist_count = 0;
 	mock_winpid_value = 0;
@@ -106,6 +133,19 @@ mock_x11_reset(void)
 	mock_wmprotocols_return = 0;
 	mock_wmprotocols_list = NULL;
 	mock_wmprotocols_count = 0;
+	mock_event_queue_count = 0;
+	mock_querypointer_return = 1;
+	mock_querypointer_root_x = 0;
+	mock_querypointer_root_y = 0;
+	mock_querytree_return = 0;
+	mock_querytree_root = 0;
+	mock_querytree_children = NULL;
+	mock_querytree_nchildren = 0;
+	mock_fork_return = -1;
+	mock_grabpointer_return = 0;
+	mock_fontset_fail = 0;
+	mock_getwindowattr_call_count = 0;
+	mock_getwindowattr_fail_at = 0;
 }
 
 Display *
@@ -378,6 +418,8 @@ XWMHints *
 XGetWMHints(Display *dpy, Window w)
 {
 	(void)dpy; (void)w;
+	if (mock_wmhints_return_null)
+		return NULL;
 	XWMHints *wmh = calloc(1, sizeof(XWMHints));
 	wmh->flags = mock_wmhints_flags;
 	wmh->input = mock_wmhints_input;
@@ -402,8 +444,11 @@ int
 XGetWindowAttributes(Display *dpy, Window w, XWindowAttributes *attr)
 {
 	(void)dpy; (void)w;
+	mock_getwindowattr_call_count++;
+	if (mock_getwindowattr_fail_at > 0 && mock_getwindowattr_call_count >= mock_getwindowattr_fail_at)
+		return 0;
 	memset(attr, 0, sizeof(*attr));
-	attr->map_state = IsViewable;
+	attr->map_state = mock_map_state;
 	attr->override_redirect = mock_override_redirect;
 	attr->width = 800;
 	attr->height = 600;
@@ -462,6 +507,16 @@ XQueryTree(Display *dpy, Window w, Window *root_return,
 	   Window *parent_return, Window **children, unsigned int *nchildren)
 {
 	(void)dpy; (void)w;
+	if (mock_querytree_return && mock_querytree_children) {
+		*root_return = mock_querytree_root;
+		*parent_return = 42;
+		/* Return a heap-allocated copy so XFree (which calls free) is safe */
+		*children = ecalloc(mock_querytree_nchildren, sizeof(Window));
+		memcpy(*children, mock_querytree_children,
+		       mock_querytree_nchildren * sizeof(Window));
+		*nchildren = mock_querytree_nchildren;
+		return 1;
+	}
 	*root_return = 42;
 	*parent_return = 42;
 	*children = NULL;
@@ -477,10 +532,15 @@ XQueryPointer(Display *dpy, Window w, Window *root_return,
 	(void)dpy; (void)w;
 	*root_return = 42;
 	*child_return = None;
-	*root_x = 0; *root_y = 0;
+	if (mock_querypointer_return) {
+		*root_x = mock_querypointer_root_x;
+		*root_y = mock_querypointer_root_y;
+	} else {
+		*root_x = 0; *root_y = 0;
+	}
 	*win_x = 0; *win_y = 0;
 	*mask = 0;
-	return 1;
+	return mock_querypointer_return ? True : False;
 }
 
 void
@@ -513,7 +573,7 @@ XGrabPointer(Display *dpy, Window w, Bool owner_events, unsigned int mask,
 	(void)dpy; (void)w; (void)owner_events; (void)mask;
 	(void)pointer_mode; (void)keyboard_mode; (void)confine_to;
 	(void)cursor; (void)time;
-	return GrabSuccess;
+	return mock_grabpointer_return;
 }
 
 void
@@ -734,28 +794,79 @@ XSendEvent(Display *dpy, Window w, Bool propagate, long mask, XEvent *ev)
 	return 1;
 }
 
+/* Map X11 event type to its corresponding event-mask bit(s). */
+static long
+event_type_to_mask(int type)
+{
+	switch (type) {
+	case KeyPress:      return KeyPressMask;
+	case KeyRelease:    return KeyReleaseMask;
+	case ButtonPress:   return ButtonPressMask;
+	case ButtonRelease: return ButtonReleaseMask;
+	case MotionNotify:  return PointerMotionMask;
+	case EnterNotify:   return EnterWindowMask;
+	case LeaveNotify:   return LeaveWindowMask;
+	case FocusIn:
+	case FocusOut:      return FocusChangeMask;
+	case Expose:        return ExposureMask;
+	case DestroyNotify: return StructureNotifyMask;
+	case UnmapNotify:   return StructureNotifyMask;
+	case MapRequest:    return SubstructureRedirectMask;
+	case ConfigureNotify:  return StructureNotifyMask;
+	case ConfigureRequest: return SubstructureRedirectMask;
+	case PropertyNotify:   return PropertyChangeMask;
+	case ClientMessage:    return SubstructureNotifyMask;
+	default:              return 0;
+	}
+}
+
 int
 XCheckMaskEvent(Display *dpy, long mask, XEvent *ev)
 {
-	(void)dpy; (void)mask;
-	ev->type = 0;
-	return 0;
+	(void)dpy;
+	for (int i = 0; i < mock_event_queue_count; i++) {
+		if (event_type_to_mask(mock_event_queue[i].type) & mask) {
+			*ev = mock_event_queue[i];
+			for (int j = i; j < mock_event_queue_count - 1; j++)
+				mock_event_queue[j] = mock_event_queue[j+1];
+			mock_event_queue_count--;
+			return True;
+		}
+	}
+	return False;
 }
 
 int
 XNextEvent(Display *dpy, XEvent *ev)
 {
 	(void)dpy;
-	ev->type = 0;
-	return 0;
+	if (mock_event_queue_count > 0) {
+		*ev = mock_event_queue[0];
+		for (int i = 0; i < mock_event_queue_count - 1; i++)
+			mock_event_queue[i] = mock_event_queue[i+1];
+		mock_event_queue_count--;
+		return 0;
+	}
+	/* No more events: signal end by returning error */
+	return -1;
 }
 
 int
 XMaskEvent(Display *dpy, long mask, XEvent *ev)
 {
-	(void)dpy; (void)mask;
+	(void)dpy;
+	for (int i = 0; i < mock_event_queue_count; i++) {
+		if (event_type_to_mask(mock_event_queue[i].type) & mask) {
+			*ev = mock_event_queue[i];
+			for (int j = i; j < mock_event_queue_count - 1; j++)
+				mock_event_queue[j] = mock_event_queue[j+1];
+			mock_event_queue_count--;
+			return 0;
+		}
+	}
+	/* No matching event in queue — real Xlib would block */
 	ev->type = 0;
-	return 0;
+	return -1;
 }
 
 int
@@ -818,6 +929,17 @@ ecalloc(size_t nmemb, size_t size)
 	if (!(p = calloc(nmemb, size)))
 		DIE("calloc():calloc:");
 	return p;
+}
+
+/* fork() mock for spawn() testing.
+ * When mock_fork_return == -1 (default), returns -1 to indicate error.
+ * Tests that need real fork() should set mock_fork_return = 0 and handle
+ * child/parent logic themselves, or use mock_die_abort. */
+#undef fork
+pid_t
+fork(void)
+{
+	return (pid_t)mock_fork_return;
 }
 
 void
@@ -902,4 +1024,194 @@ xcb_res_client_id_value_value(void *data)
 		return NULL;
 	/* value data is inline after the struct */
 	return (uint32_t *)((char *)mock_cid_value + sizeof(xcb_res_client_id_value_t));
+}
+
+/* ------------------------------------------------------------------ */
+/* Xft / Fontconfig stubs  (for drw.c testing)                         */
+/* ------------------------------------------------------------------ */
+
+struct _XftDraw { void *dummy; };  /* complete the forward decl from mock_x11.h */
+
+XftDraw *
+XftDrawCreate(void *dpy, unsigned long drawable, void *visual, unsigned long colormap)
+{
+	static struct _XftDraw draw;
+	(void)dpy; (void)drawable; (void)visual; (void)colormap;
+	return &draw;
+}
+
+void
+XftDrawDestroy(XftDraw *draw)
+{
+	(void)draw;
+}
+
+void
+XftDrawStringUtf8(XftDraw *draw, void *color, void *font,
+		  int x, int y, const FcChar8 *string, int len)
+{
+	(void)draw; (void)color; (void)font;
+	(void)x; (void)y; (void)string; (void)len;
+}
+
+int
+XftCharExists(void *dpy, void *xfont, unsigned long codepoint)
+{
+	(void)dpy; (void)xfont; (void)codepoint;
+	return 1;
+}
+
+void
+XftTextExtentsUtf8(void *dpy, void *xfont,
+		   const FcChar8 *text, int len, void *ext)
+{
+	(void)dpy; (void)xfont; (void)text; (void)len;
+	(void)ext;
+}
+
+int
+XftColorAllocName(void *dpy, void *visual, unsigned long colormap,
+		  const char *name, void *dest)
+{
+	(void)dpy; (void)visual; (void)colormap; (void)name; (void)dest;
+	return 1;
+}
+
+void
+XftColorFree(void *dpy, void *visual, unsigned long colormap, void *color)
+{
+	(void)dpy; (void)visual; (void)colormap; (void)color;
+}
+
+void *
+XftFontOpenName(void *dpy, int screen, const char *name)
+{
+	(void)dpy; (void)screen; (void)name;
+	return NULL;
+}
+
+void *
+XftFontOpenPattern(void *dpy, void *pattern)
+{
+	(void)dpy; (void)pattern;
+	return NULL;
+}
+
+void
+XftFontClose(void *dpy, void *font)
+{
+	(void)dpy; (void)font;
+}
+
+void *
+XftFontMatch(void *dpy, int screen, void *pattern, void *result)
+{
+	(void)dpy; (void)screen; (void)pattern; (void)result;
+	return NULL;
+}
+
+void *
+FcNameParse(const FcChar8 *name)
+{
+	(void)name;
+	return NULL;
+}
+
+FcBool
+FcConfigSubstitute(void *config, void *pattern, FcMatchKind kind)
+{
+	(void)config; (void)pattern; (void)kind;
+	return 0;
+}
+
+void
+FcDefaultSubstitute(void *pattern)
+{
+	(void)pattern;
+}
+
+void *
+FcFontMatch(void *config, void *pattern, FcResult *result)
+{
+	(void)config; (void)pattern;
+	if (result) *result = 0;
+	return NULL;
+}
+
+void
+FcPatternDestroy(void *pattern)
+{
+	(void)pattern;
+}
+
+void *
+FcPatternDuplicate(const void *pattern)
+{
+	(void)pattern;
+	return NULL;
+}
+
+FcBool
+FcPatternGetBool(const void *p, const char *object, int n, FcBool *b)
+{
+	(void)p; (void)object; (void)n;
+	if (b) *b = FcFalse;
+	return 0;
+}
+
+FcBool
+FcPatternAddBool(void *p, const char *object, FcBool b)
+{
+	(void)p; (void)object; (void)b;
+	return 0;
+}
+
+FcBool
+FcPatternAddCharSet(void *p, const char *object, FcCharSet *c)
+{
+	(void)p; (void)object; (void)c;
+	return 0;
+}
+
+FcBool
+FcPatternGetCharSet(const void *p, const char *object, int n, FcCharSet **c)
+{
+	(void)p; (void)object; (void)n;
+	if (c) *c = NULL;
+	return 0;
+}
+
+FcBool
+FcPatternGetString(const void *p, const char *object, int n, FcChar8 **s)
+{
+	(void)p; (void)object; (void)n;
+	if (s) *s = NULL;
+	return 0;
+}
+
+FcBool
+FcPatternGetInteger(const void *p, const char *object, int n, int *i)
+{
+	(void)p; (void)object; (void)n;
+	if (i) *i = 0;
+	return 0;
+}
+
+FcCharSet *
+FcCharSetCreate(void)
+{
+	return calloc(1, 4);
+}
+
+void
+FcCharSetDestroy(FcCharSet *cs)
+{
+	free(cs);
+}
+
+FcBool
+FcCharSetAddChar(FcCharSet *cs, FcChar32 ucs4)
+{
+	(void)cs; (void)ucs4;
+	return 0;
 }

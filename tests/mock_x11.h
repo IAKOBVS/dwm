@@ -28,6 +28,7 @@ typedef struct { unsigned long pixel; unsigned short red, green, blue; char alph
 typedef struct _FcPattern FcPattern;
 typedef struct { void *xfont; int ascent, descent; } XftFont;
 typedef void *Visual;
+typedef struct _XftDraw XftDraw;
 typedef unsigned long KeySym;
 typedef unsigned char KeyCode;
 
@@ -349,7 +350,11 @@ typedef struct {
 } XWindowAttributes;
 
 #define IsUnmapped   0
+#define IsUnviewable 0
 #define IsViewable   2
+#define LineSolid   0
+#define CapButt     0
+#define JoinMiter   0
 #define IconicState  3
 #define NormalState  1
 #define WithdrawnState 0
@@ -633,7 +638,9 @@ extern int  mock_gettransient_return; /* 0=fail, 1=success */
 extern Window mock_gettransient_win;
 extern long mock_wmhints_flags;   /* XGetWMHints returns this as wmh->flags */
 extern Bool  mock_wmhints_input;  /* XGetWMHints returns this as wmh->input */
+extern int   mock_wmhints_return_null; /* 1 = XGetWMHints returns NULL */
 extern int  mock_override_redirect; /* XGetWindowAttributes override_redirect */
+extern int  mock_map_state;         /* XGetWindowAttributes map_state (IsViewable default) */
 extern const char *mock_textlist_text; /* XmbTextPropertyToTextList: text to return in list */
 extern int  mock_textlist_count;   /* XmbTextPropertyToTextList: count to return */
 extern uint32_t mock_winpid_value; /* winpid return value (via xcb stubs) */
@@ -648,6 +655,32 @@ extern int  mock_die_abort; /* 0=normal abort, 1=mock: set to 2 and return inste
 extern int   mock_wmprotocols_return; /* 0=fail, 1=success */
 extern Atom *mock_wmprotocols_list;   /* array of atoms to return */
 extern int   mock_wmprotocols_count;  /* number of atoms in list */
+
+/* Event queue for XMaskEvent / XNextEvent / XCheckMaskEvent */
+extern int   mock_event_queue_count;
+extern XEvent mock_event_queue[8];
+
+/* XQueryPointer control */
+extern int mock_querypointer_return;   /* 0=False, 1=True */
+extern int mock_querypointer_root_x;
+extern int mock_querypointer_root_y;
+
+/* XQueryTree control */
+extern int    mock_querytree_return;   /* 0=False, 1=True */
+extern Window mock_querytree_root;
+extern Window *mock_querytree_children;
+extern unsigned int mock_querytree_nchildren;
+
+/* fork() control for spawn */
+extern int mock_fork_return;  /* 0=child, >0=parent, -1=error (default) */
+
+/* XGrabPointer return control */
+extern int mock_grabpointer_return;  /* 0=GrabSuccess (default), non-zero=failure */
+extern int mock_fontset_fail;        /* 0=normal (default), 1=drw_fontset_create returns NULL */
+
+/* XGetWindowAttributes call-count control */
+extern int mock_getwindowattr_call_count;  /* incremented on each call */
+extern int mock_getwindowattr_fail_at;     /* fail (return 0) on call N; 0=never fail */
 
 void mock_x11_reset(void);
 

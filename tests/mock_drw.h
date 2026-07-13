@@ -58,6 +58,14 @@ static inline Fnt *
 drw_fontset_create(Drw *drw, const char *fonts[], size_t fontcount)
 {
 	(void)fonts; (void)fontcount;
+	if (mock_fontset_fail) {
+		/* Provide a safe fallback so setup() survives DIE's mock return */
+		if (!drw->fonts) {
+			drw->fonts = calloc(1, sizeof(Fnt));
+			drw->fonts->h = 15;
+		}
+		return NULL;
+	}
 	Fnt *fnt = calloc(1, sizeof(Fnt));
 	fnt->h = 15;
 	drw->fonts = fnt;
