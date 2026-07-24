@@ -125,6 +125,11 @@ static const char *termcmd[] = {
 	"alacritty" , "msg", "create-window", NULL
 };
 
+/* processes to kill on fullscreen enter, restart on fullscreen exit */
+static const KillEntry killatfullscreen[] = {
+	{ "dwmblocks-fast", "dwmblocks-fast" },
+};
+
 static const Key keys[] = {
 	/* modifier                     key                function              argument */
 	{ MODKEY,              XK_p,      spawn,          { .v = dmenucmd } },

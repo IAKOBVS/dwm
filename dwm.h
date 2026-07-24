@@ -92,6 +92,11 @@ typedef struct {
 } Layout;
 
 typedef struct {
+	const char *name;
+	const char *script;
+} KillEntry;
+
+typedef struct {
 	int isgap;
 	int realgap;
 	int gappx;
@@ -195,6 +200,9 @@ static void sendmon(Client *c, Monitor *m);
 static void setclientstate(Client *c, long state);
 static void setfocus(Client *c);
 static void setfullscreen(Client *c, int fullscreen);
+static void killall(const char *name);
+static void killatfullscreen_stop(void);
+static void killatfullscreen_start(void);
 static void setgaps(const Arg *arg);
 static void setlayout(const Arg *arg);
 static void setmfact(const Arg *arg);

@@ -44,7 +44,7 @@ asan_%: %.c $(MOCK_OBJ)
 asan_test_emoji_render_cache: test_emoji_render_cache.c
 	$(CC) $(CFLAGS) $(ASAN_CFLAGS) -o $@ $< $(LDFLAGS) $(ASAN_LDFLAGS)
 
-run: $(TEST_BIN)
+test run: $(TEST_BIN)
 	@for t in $(TEST_BIN); do \
 		printf "\033[1;34mRUNNING\033[0m $$t\n"; \
 		./$$t; \
@@ -79,4 +79,4 @@ asan: $(MOCK_OBJ)
 clean:
 	rm -f $(TEST_BIN) cov_test_* asan_test_* *.o *.gcda *.gcno *.gcov
 
-.PHONY: all run coverage clean
+.PHONY: all test run coverage clean

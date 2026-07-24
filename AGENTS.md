@@ -52,7 +52,7 @@ that agents apply when working.
 
 ```sh
 cd tests
-make run       # build and run all unit tests
+make test      # build and run all unit tests (also `make run`)
 make coverage  # clean build, run tests with gcov, show dwm.c coverage
 ```
 
@@ -67,7 +67,7 @@ X server needed). Every test `.c` file follows this pattern:
    calls test functions
 4. `ASSERT()` / `ASSERT_EQ()` macros for pass/fail
 
-### Current Test Files (833 tests total, 9 binaries)
+### Current Test Files (878 tests total, 9 binaries)
 
 - **test_pure_logic.c** (~1100 lines, 101 tests) — core dwm logic: linked-list
   ops (attach, detach, attachstack, detachstack), nexttiled, dirtomon,
@@ -115,7 +115,7 @@ X server needed). Every test `.c` file follows this pattern:
   enternotify (non-Normal mode, NotifyInferior, entering sel returns early,
   entering barwin returns early)
 
-- **test_comprehensive.c** (~7136 lines, 428 tests) — broad dwm.c coverage
+- **test_comprehensive.c** (~7630 lines, 473 tests) — broad dwm.c coverage
   across all 107 functions: applyrules/applysizehints, swallow/unswallow,
   buttonpress/click types/tag iteration, configure/configurenotify,
   configurerequest (floating/full/non-client), createmon, destroynotify,
