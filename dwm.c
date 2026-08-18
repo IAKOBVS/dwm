@@ -1497,14 +1497,14 @@ setfocus(Client *c)
 }
 
 void
-killall(const char *name)
+killall(const char *name, const char *signal)
 {
 	if (fork() == 0) {
 		if (dpy)
 			close(ConnectionNumber(dpy));
 		setsid();
-		execlp("killall", "killall", "-15", name, NULL);
-		_exit(1);
+		execlp("killall", "killall", signal, name, NULL);
+		_exit(EXIT_SUCCESS);
 	}
 }
 
@@ -1514,7 +1514,7 @@ killatfullscreen_stop(void)
 	for (unsigned int i = 0; i < LENGTH(killatfullscreen); i++) {
 		if (killatfullscreen[i].name == NULL)
 			continue;
-		killall(killatfullscreen[i].name);
+		killall(killatfullscreen[i].name, "-STOP");
 	}
 }
 
@@ -1525,13 +1525,7 @@ killatfullscreen_start(void)
 	for (i = 0; i < LENGTH(killatfullscreen); i++) {
 		if (killatfullscreen[i].name == NULL)
 			continue;
-		if (fork() == 0) {
-			if (dpy)
-				close(ConnectionNumber(dpy));
-			setsid();
-			execlp("sh", "sh", "-c", killatfullscreen[i].script, NULL);
-			_exit(EXIT_SUCCESS);
-		}
+		killall(killatfullscreen[i].name, "-CONT");
 	}
 }
 
