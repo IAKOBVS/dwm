@@ -1502,7 +1502,7 @@ killall(const char *name)
 		if (dpy)
 			close(ConnectionNumber(dpy));
 		setsid();
-		execlp("killall", "killall", "-9", name, NULL);
+		execlp("killall", "killall", "-15", name, NULL);
 		_exit(1);
 	}
 }
