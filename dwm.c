@@ -1225,9 +1225,10 @@ propertynotify(XEvent *e)
 	Window trans;
 	XPropertyEvent *ev = &e->xproperty;
 
-	if ((ev->window == root) && (ev->atom == XA_WM_NAME))
-		updatestatus();
-	else if (ev->state == PropertyDelete)
+	if ((ev->window == root) && (ev->atom == XA_WM_NAME)) {
+		if (!(optimizefullscreen && selmon->sel && selmon->sel->isfullscreen))
+			updatestatus();
+	} else if (ev->state == PropertyDelete)
 		return; /* ignore */
 	else if ((c = wintoclient(ev->window))) {
 		switch(ev->atom) {
@@ -1529,7 +1530,7 @@ killatfullscreen_start(void)
 				close(ConnectionNumber(dpy));
 			setsid();
 			execlp("sh", "sh", "-c", killatfullscreen[i].script, NULL);
-			_exit(1);
+			_exit(EXIT_SUCCESS);
 		}
 	}
 }

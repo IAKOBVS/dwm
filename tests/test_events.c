@@ -37,6 +37,19 @@ static int total = 0, failed = 0;
 
 static Monitor *saved_selmon;
 
+static void
+save_selmon(void)
+{
+	saved_selmon = selmon;
+}
+
+static void
+restore_selmon(void)
+{
+	selmon = saved_selmon;
+	mons = saved_selmon;
+}
+
 /* --- focusin --- */
 
 static void
@@ -582,6 +595,61 @@ test_propertynotify_client_wmname_not_selected(void)
 	free(c);
 }
 
+/* --- optimizefullscreen propertynotify skip --- */
+
+static void
+test_propertynotify_root_wmname_fullscreen_skip(void)
+{
+	/* optimizefullscreen=1 (default config) + fullscreen client -> skip updatestatus */
+	save_selmon();
+	selmon = ecalloc(1, sizeof(Monitor));
+	mons = selmon;
+	selmon->tagset[0] = selmon->tagset[1] = 1;
+	selmon->mfact = 0.55f;
+	selmon->nmaster = 1;
+	selmon->showbar = 1;
+	selmon->topbar = 1;
+	selmon->lt[0] = selmon->lt[1] = &layouts[0];
+	selmon->gap = ecalloc(1, sizeof(Gap));
+
+	Client c = { .win = 1, .isfullscreen = 1 };
+	selmon->sel = &c;
+
+	bar_dirty_segments = 0;
+
+	XEvent ev;
+	memset(&ev, 0, sizeof ev);
+	ev.xproperty.window = root;
+	ev.xproperty.atom = XA_WM_NAME;
+
+	propertynotify(&ev);
+
+	ASSERT_EQ(bar_dirty_segments, 0,
+		"propertynotify root XA_WM_NAME skipped when optimizefullscreen + fullscreen");
+
+	free(selmon->gap);
+	free(selmon);
+	restore_selmon();
+}
+
+static void
+test_propertynotify_root_wmname_no_fullscreen_not_skipped(void)
+{
+	/* optimizefullscreen=1 but no fullscreen client -> updatestatus called */
+	selmon->sel = NULL;
+	bar_dirty_segments = 0;
+
+	XEvent ev;
+	memset(&ev, 0, sizeof ev);
+	ev.xproperty.window = root;
+	ev.xproperty.atom = XA_WM_NAME;
+
+	propertynotify(&ev);
+
+	ASSERT(bar_dirty_segments & DIRTY_STATUS,
+		"propertynotify root XA_WM_NAME not skipped when no fullscreen client");
+}
+
 /* --- setfullscreen --- */
 
 static void
@@ -858,6 +926,9 @@ main(void)
 	test_propertynotify_client_wm_hints();
 	test_propertynotify_client_wmname_selected();
 	test_propertynotify_client_wmname_not_selected();
+
+	test_propertynotify_root_wmname_fullscreen_skip();
+	test_propertynotify_root_wmname_no_fullscreen_not_skipped();
 
 	test_setfullscreen_enter();
 	test_setfullscreen_exit();
