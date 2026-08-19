@@ -1504,28 +1504,23 @@ killall(const char *name, const char *signal)
 			close(ConnectionNumber(dpy));
 		setsid();
 		execlp("killall", "killall", signal, name, NULL);
-		_exit(EXIT_SUCCESS);
+		DIE("execvp():dwm: execvp 'killall %s %s' failed:", signal, name);
 	}
 }
 
 void
 killatfullscreen_stop(void)
 {
-	for (unsigned int i = 0; i < LENGTH(killatfullscreen); i++) {
-		if (killatfullscreen[i].name == NULL)
-			continue;
-		killall(killatfullscreen[i].name, "-STOP");
-	}
+	for (unsigned int i = 0; i < LENGTH(killatfullscreen); i++)
+		killall(killatfullscreen[i], "-STOP");
 }
 
 void
 killatfullscreen_start(void)
 {
-	unsigned int i;
-	for (i = 0; i < LENGTH(killatfullscreen); i++) {
-		if (killatfullscreen[i].name == NULL)
-			continue;
-		killall(killatfullscreen[i].name, "-CONT");
+	for (unsigned int i = 0; i < LENGTH(killatfullscreen); i++) {
+		killall(killatfullscreen[i], "-CONT");
+		killall(killatfullscreen[i], "-HUP");
 	}
 }
 
@@ -1533,6 +1528,7 @@ void
 setfullscreen(Client *c, int fullscreen)
 {
 	if (fullscreen && !c->isfullscreen) {
+		killatfullscreen_stop();
 		XChangeProperty(dpy, c->win, netatom[NetWMState], XA_ATOM, 32,
 			PropModeReplace, (unsigned char*)&netatom[NetWMFullscreen], 1);
 		c->isfullscreen = 1;
@@ -1542,8 +1538,8 @@ setfullscreen(Client *c, int fullscreen)
 		c->isfloating = 1;
 		resizeclient(c, c->mon->mx, c->mon->my, c->mon->mw, c->mon->mh);
 		XRaiseWindow(dpy, c->win);
-		killatfullscreen_stop();
 	} else if (!fullscreen && c->isfullscreen){
+		killatfullscreen_start();
 		XChangeProperty(dpy, c->win, netatom[NetWMState], XA_ATOM, 32,
 			PropModeReplace, (unsigned char*)0, 0);
 		c->isfullscreen = 0;
@@ -1557,7 +1553,6 @@ setfullscreen(Client *c, int fullscreen)
 		/* refresh status text (was skipped during fullscreen) and force full redraw */
 		updatestatus();
 		bar_dirty_segments = DIRTY_STATUS | DIRTY_TAGS | DIRTY_TITLE;
-		killatfullscreen_start();
 		arrange(c->mon);
 	}
 }

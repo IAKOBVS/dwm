@@ -92,11 +92,6 @@ typedef struct {
 } Layout;
 
 typedef struct {
-	const char *name;
-	/* const char *script; */
-} KillEntry;
-
-typedef struct {
 	int isgap;
 	int realgap;
 	int gappx;
