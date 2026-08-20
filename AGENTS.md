@@ -186,6 +186,14 @@ X server needed). Every test `.c` file follows this pattern:
 - `drawbar()` accesses `drw->fonts->h` at line 605, before the `showbar` and
   `bar_dirty_segments` early-returns — the global `drw` must have a valid
   font chain even for bar-drawing callers
+- `focus()` must always run `setfocus()`/`grabbuttons()`/`XSetWindowBorder`
+  even when `c == selmon->sel` — `selmon->sel` can be stale relative to
+  actual X input focus. Only skip `bar_dirty_segments` (the bar redraw), not
+  the X11 focus reassertion calls
+- `enternotify()` must NOT be guarded with `if (!mons->next) return` — it
+  handles same-monitor focus-follows-mouse via `focus(c)`. The `m != selmon`
+  cross-monitor branch is already dead code on single-monitor (only one
+  monitor exists), so no guard is needed
 - LSP errors about `GC` redefinition and missing `ft2build.h` are false
   positives from clangd seeing system X11 headers instead of mock redirects;
   actual compilation with `c99 -I include` succeeds

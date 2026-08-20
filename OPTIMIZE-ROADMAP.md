@@ -181,60 +181,49 @@ with the same content (e.g., clock that ticks but produces identical emoji).
 
 ---
 
-### 3. `focus()` idempotent guard
+### 3. `focus()` dirty-only guard
 
-**Status:** OPEN
-**Estimated impact:** 2–4% of total CPU
+**Status:** APPLIED (revised from idempotent guard)
+**Estimated impact:** 0.5–1% of total CPU
 **Confidence:** High
-**Lines changed:** ~3 (dwm.c:745)
+**Lines changed:** ~3 (dwm.c:focus)
 **Risk:** Low
 
 **Problem:** `focus()` sets `bar_dirty_segments |= DIRTY_TITLE | DIRTY_TAGS`
-at line 747 even when `selmon->sel` hasn't changed. This happens on every
+even when `selmon->sel` hasn't changed. This happens on every
 `enternotify`, `buttonpress`, and `motionnotify` — often several times per
 second with the same focused client.
 
 **Savings breakdown:**
-- Each redundant `focus()` call triggers: `setfocus()` (or `XSetInputFocus`) + `bar_dirty_segments` set + `drawbar()` at event-loop tail
-- `drawbar()` with DIRTY_TITLE|DIRTY_TAGS renders tags segment (`TEXTW` per tag + `drw_text`) and title segment (`drw_text` on client name)
-- At 60 events/sec with ~40% redundant focus calls: 24 redundant × ~8K cycles each = 192K cycles/sec saved
-- **Estimated: 2–4% of 1.7M cycles**
+- Each redundant `focus()` call triggers: `drawbar()` at event-loop tail
+  with DIRTY_TITLE|DIRTY_TAGS
+- `drawbar()` renders tags segment (`TEXTW` per tag + `drw_text`) and title
+  segment (`drw_text` on client name)
+- At 60 events/sec with ~40% redundant focus calls: 24 redundant × drawbar
+  cost saved per call
+- **Estimated: 0.5–1% of 1.7M cycles**
 
-**Current code:**
+**Applied solution:**
 
 ```c
 void focus(Client *c) {
-    /* ... setfocus / XSetInputFocus ... */
+    /* ... unfocus / setfocus / grabbuttons / border ... */
+    /* only dirty bar if focus actually changed — skip redundant redraws */
+    if (c != selmon->sel)
+        bar_dirty_segments |= DIRTY_TITLE | DIRTY_TAGS;
     selmon->sel = c;
-    bar_dirty_segments |= DIRTY_TITLE | DIRTY_TAGS;  /* always */
     bar_draw_pending = 1;
 }
 ```
 
-**Proposed:**
-
-```c
-void focus(Client *c) {
-    if (selmon->sel == c)
-        return;  /* no change — skip dirty + draw chain */
-    /* ... rest of focus ... */
-    selmon->sel = c;
-    bar_dirty_segments |= DIRTY_TITLE | DIRTY_TAGS;
-    bar_draw_pending = 1;
-}
-```
-
-**Caveat:** `focus()` is also called with `c = NULL` to find a visible client.
-The guard must handle the NULL case: `if (c == NULL && selmon->sel == NULL)
-return;` and the transition case `if (c == selmon->sel) return;` (NULL to
-non-NULL or non-NULL to NULL). A simpler approach: only skip if `c ==
-selmon->sel` (both non-NULL and equal). The NULL-to-NULL case is already
-rare.
-
-**Risk:** Some callers pass `c` as a hint (e.g., `focus(NULL)` after
-`sendmon()` to find the best visible client). The early return could skip
-necessary focus repair. Must audit that `focusin()` handles focus repair
-independently (it does — line 757).
+**Why not an early return:** The original proposal (`if (c == selmon->sel)
+return;`) was rejected because it skipped `setfocus()`, `grabbuttons()`,
+and border reassertion. `selmon->sel` can be stale relative to actual X
+input focus (closed grab, dismissed dialog, override-redirect window,
+client calling `XSetInputFocus`). Callers like `buttonpress()` invoke
+`focus(c)` on click specifically to reassert focus even when `c ==
+selmon->sel`. The dirty-only guard preserves all X11 calls (idempotent)
+while skipping only the expensive bar redraw.
 
 ---
 
@@ -508,43 +497,31 @@ the same layout (e.g., double-tap of layout toggle key).
 
 ### 8. Single-monitor `enternotify()` guard
 
-**Status:** OPEN
-**Estimated impact:** 0.5–1% of total CPU (single-monitor only)
-**Confidence:** Very High
-**Lines changed:** ~2 (dwm.c:694)
-**Risk:** None
+**Status:** REJECTED
+**Estimated impact:** N/A
+**Confidence:** N/A
+**Lines changed:** 0
+**Risk:** High (breaks core feature)
 
-**Problem:** Unlike `motionnotify()` (line 1120: `if (!mons->next) return`),
-`enternotify()` has no single-monitor fast-path. On single-monitor setups,
-every `EnterWindowMask` event runs through the full `wintoclient`/`wintomon`/
-`focus` chain.
+**Problem (as originally stated):** Unlike `motionnotify()` (line 1120:
+`if (!mons->next) return`), `enternotify()` has no single-monitor fast-path.
 
-**Savings breakdown:**
-- `EnterWindowMask` fires on every mouse pointer enter/leave across windows
-- On single monitor, there's only one monitor to check — `wintomon()` always
-  returns the same result, and focus changes are usually no-ops
-- Each event costs: `wintoclient()` (O(n)) + `wintomon()` (O(monitors)) +
-  `focus()` (setfocus + dirty segments + drawbar)
-- At ~10 enter events/sec on active desktop: 10 × ~5K cycles = 50K cycles/sec
-- **Estimated: 0.5–1% of 1.7M cycles** (single-monitor setups only)
+**Why rejected:** The proposed `if (!mons->next) return;` guard disables
+focus-follows-mouse (sloppy focus) on single-monitor setups — the most
+common hardware configuration. `enternotify()` is the mechanism for
+hover-to-focus: the `else if (!c || c == selmon->sel) return` branch and
+`focus(c)` call at the end of the function are the actual focus-follows-mouse
+logic, and they fire correctly on single-monitor.
 
-**Proposed:**
+The `m != selmon` cross-monitor branch (lines 707-709) is already dead code
+on single-monitor — there's only one monitor, so `m` always equals `selmon`.
+No guard is needed. The existing code handles single-monitor correctly
+without any changes.
 
-```c
-void enternotify(XEvent *e) {
-    Client *c;
-    Monitor *m;
-    XCrossingEvent *ev = &e->xcrossing;
-
-    if (!mons->next)
-        return;
-    /* ... rest of function ... */
-}
-```
-
-**Note:** `EnterWindowMask` is also drained internally by `movemouse()`/
-`resizemouse()` (line 1360: `while (XCheckMaskEvent(dpy, EnterWindowMask, &ev))`).
-Those are drained before the guard fires, so no conflict.
+**Lesson:** "The function is a no-op on single-monitor" was false. The
+`m != selmon` check is a no-op, but the function as a whole is not — it
+handles same-monitor focus changes via `focus(c)`. Always trace the full
+control flow, not just the branch you want to skip.
 
 ---
 
@@ -591,19 +568,19 @@ are safe to skip.
 
 ## Cumulative Impact Summary
 
-| # | Optimization | % of Total CPU | Risk | Confidence |
-|---|---|---|---|---|
-| 1 | `arrange()` coalescing | 3–5% | Medium | High |
-| 2 | `updatestatus()` comparison | 2–3% | None | Very High |
-| 3 | `focus()` idempotent guard | 2–4% | Low | High |
-| 4 | `wintoclient()` hash table | 0.5–1% | Medium | Medium |
-| 5 | Cached visible-client count | 1–2% | Low | High |
-| 6 | `propertynotify()` atom filter | 1–2% | Low | High |
-| 7 | `setlayout()` dirty guard | <0.5% | None | Very High |
-| 8 | `enternotify()` single-monitor | 0.5–1% | None | Very High |
-| 9 | Gaming mode (fullscreen only) | 5–10% | Medium | Medium |
-| | **Cumulative (#1–8)** | **10–15%** | | |
-| | **Cumulative (#1–9, with gaming)** | **15–25%** | | |
+| # | Optimization | % of Total CPU | Risk | Confidence | Status |
+|---|---|---|---|---|---|
+| 1 | `arrange()` coalescing | 3–5% | Medium | High | OPEN |
+| 2 | `updatestatus()` comparison | 1–2% | None | Very High | APPLIED |
+| 3 | `focus()` dirty-only guard | 0.5–1% | Low | High | APPLIED |
+| 4 | `wintoclient()` hash table | 0.5–1% | Medium | Medium | OPEN |
+| 5 | Cached visible-client count | 1–2% | Low | High | OPEN |
+| 6 | `propertynotify()` atom filter | 1–2% | Low | High | OPEN |
+| 7 | `setlayout()` dirty guard | <0.5% | None | Very High | APPLIED |
+| 8 | `enternotify()` single-monitor | N/A | High | N/A | REJECTED |
+| 9 | Gaming mode (fullscreen only) | 1–2% | Medium | Medium | OPEN |
+| | **Cumulative (remaining OPEN)** | **6–11%** | | | |
+| | **Cumulative (all except #8)** | **9–15%** | | | |
 
 ### Projected after all optimizations
 
@@ -632,12 +609,11 @@ Recommended sequence based on impact, confidence, and risk:
 | Phase | Optimization | % CPU | Risk | Cumulative |
 |---|---|---|---|---|
 | 1 | #7 `setlayout()` dirty guard | <0.5% | None | <0.5% |
-| 2 | #2 `updatestatus()` comparison | 2–3% | None | 2.5–3.5% |
-| 3 | #3 `focus()` idempotent guard | 2–4% | Low | 4.5–7.5% |
-| 4 | #8 `enternotify()` single-monitor | 0.5–1% | None | 5–8.5% |
-| 5 | #6 `propertynotify()` atom filter | 1–2% | Low | 6–10.5% |
-| 6 | #5 Cached visible-client count | 1–2% | Low | 7–12.5% |
-| 7 | #1 `arrange_pending` coalescing | 3–5% | Medium | 10–17.5% |
+| 2 | #2 `updatestatus()` comparison | 1–2% | None | 1.5–2.5% |
+| 3 | #3 `focus()` dirty-only guard | 0.5–1% | Low | 2–3.5% |
+| 4 | #6 `propertynotify()` atom filter | 1–2% | Low | 3–5.5% |
+| 5 | #5 Cached visible-client count | 1–2% | Low | 4–7.5% |
+| 6 | #1 `arrange_pending` coalescing | 3–5% | Medium | 7–12.5% |
 | 8 | #4 `wintoclient()` hash table | 0.5–1% | Medium | 10.5–18.5% |
 | 9 | #9 Gaming mode | 5–10% | Medium | 15.5–28.5% |
 
@@ -655,10 +631,15 @@ the largest conditional win but requires the most testing.
   or a new `tests/test_optimize.c`
 - `arrange_pending` coalescing needs a test that fires multiple events and
   verifies only one `arrange()` call is made
-- `updatestatus()` comparison needs a test with identical stext
-- `focus()` idempotent guard needs a test with `focus(selmon->sel)`
+- `updatestatus()` comparison needs a test with identical stext (verify
+  bar_dirty_segments is NOT set) and different stext (verify it IS set)
+- `focus()` dirty-only guard needs a test with `focus(selmon->sel)` that
+  verifies X11 calls still run (setfocus, grabbuttons) but bar_dirty_segments
+  is NOT set. Also test that `focus(different)` DOES set dirty.
 - `wintoclient()` hash needs tests for insert/delete/lookup/collision
 - Cached visible-client count needs tests for attach/detach/showhide updates
+- `enternotify()` single-monitor guard was REJECTED — do NOT add a
+  `!mons->next` guard; it breaks focus-follows-mouse
 - Run `make test` and `make coverage` after each change
 
 ---
@@ -743,15 +724,14 @@ bottleneck is the kernel/userspace transitions and protocol round-trips.
 |---|---|---|---|---|---|
 | 1 | `arrange()` coalescing | 3–5% | **3–5%** | — | Mock confirms burst cost; X11 calls dominate |
 | 2 | `updatestatus()` comparison | 2–3% | **1–2%** | ↓ | Mock shows dirty chain is cheap; real savings are drw_text |
-| 3 | `focus()` idempotent guard | 2–4% | **0.5–1%** | ↓ | Mock shows dirty chain is cheap; real savings are XSetInputFocus |
+| 3 | `focus()` dirty-only guard | 2–4% | **0.5–1%** | ↓ | Dirty-only guard skips drawbar but keeps X11 calls |
 | 4 | `wintoclient()` hash | 0.5–1% | **<0.5%** | ↓ | Mock confirms O(n) but real cost is lower than estimated |
 | 5 | Cached visible count | 1–2% | **0.5–1%** | ↓ | Mock confirms linear scaling but real cost is lower |
 | 6 | `propertynotify()` filter | 1–2% | **<0.5%** | ↓ | Mock shows wintoclient is the bottleneck; XGetWindowProperty is cheap |
 | 7 | `setlayout()` guard | <0.5% | **<0.5%** | — | Confirmed negligible |
-| 8 | `enternotify()` guard | 0.5–1% | **0.5–1%** | — | Mock can't measure; estimate based on real X11 cost |
+| 8 | `enternotify()` guard | 0.5–1% | **N/A** | ✗ | REJECTED — breaks focus-follows-mouse on single-monitor |
 | 9 | Gaming mode | 5–10% | **1–2%** | ↓ | Mock shows most handlers already guarded or cheap |
-| | **Cumulative (#1–8)** | **10–15%** | **5–10%** | ↓ | Most estimates were 1.5–2× too high |
-| | **Cumulative (#1–9)** | **15–25%** | **6–12%** | ↓ | Gaming mode savings are smaller than estimated |
+| | **Cumulative (remaining)** | **15–25%** | **6–11%** | ↓ | #8 rejected, most estimates 1.5–2× too high |
 
 ### What the benchmarks actually prove
 

@@ -71,11 +71,12 @@ savings come from avoiding ~3K cycles per emoji in the status string.
 
 ---
 
-## 3. `focus()` Idempotent Guard
+## 3. `focus()` Dirty-Only Guard
 
-**What it does:** If `focus()` is called with the same client that's already
-focused, return immediately without setting dirty segments or triggering
-drawbar.
+**What it does:** Only skip the `bar_dirty_segments` + `bar_draw_pending`
+bookkeeping when the focused client hasn't changed. All X11 calls
+(`setfocus`, `grabbuttons`, `XSetWindowBorder`, `detachstack`/`attachstack`)
+still run unconditionally to reassert focus state.
 
 **Why it matters:** `focus()` is called on every `enternotify`,
 `buttonpress`, and `motionnotify`. Many of these events arrive with the same
@@ -89,15 +90,24 @@ clicks. Each redundant call sets `DIRTY_TITLE | DIRTY_TAGS` → drawbar.
 
 **Performance:**
 - **dwm %:** 0.5–1% of total CPU
-- **Function speedup:** Eliminates entire call when client hasn't changed.
-  Real cost per skipped call: ~200 cycles (`XSetInputFocus`) + drawbar trigger.
+- **Function speedup:** Skips bar redraw on redundant calls. X11 calls still
+  run (idempotent, ~200 cycles each) but the expensive `drawbar()` chain
+  is avoided.
 
 **Original estimate:** 2–4%
-**Revised estimate:** **0.5–1%** (too high — real savings are ~200 cycles for
-`XSetInputFocus` avoidance, not the 8K assumed)
+**Revised estimate:** **0.5–1%** (too high — real savings are the drawbar
+  chain, not the X11 calls which still run)
 
-**Verdict:** Worth implementing. Low risk, one-line guard, prevents
-unnecessary X11 calls and bar redraws.
+**Implementation note:** The initial implementation used an early return
+`if (c && c == selmon->sel) return;` which skipped `setfocus()`,
+`grabbuttons()`, and border reassertion. This broke focus repair when
+`selmon->sel` was stale relative to actual X input focus (e.g., a closed
+grab, dismissed dialog, or client calling `XSetInputFocus` itself). The
+fix: guard only `bar_dirty_segments` before the `selmon->sel = c`
+assignment, letting all X11 calls run unconditionally.
+
+**Verdict:** Worth implementing. Low risk (dirty-only guard), prevents
+unnecessary bar redraws while preserving focus reassertion.
 
 ---
 
@@ -222,33 +232,26 @@ savings. Implement as a code-hygiene improvement, not a performance win.
 
 ---
 
-## 8. Single-Monitor `enternotify()` Guard
+## 8. `enternotify()` — Not a Viable Optimization
 
-**What it does:** Skip the entire `enternotify()` handler on single-monitor
-setups (early return at function entry).
+**What was proposed:** Skip the entire `enternotify()` handler on
+single-monitor setups (early return at function entry).
 
-**Why it matters:** Unlike `motionnotify()` which already has this guard,
-`enternotify()` runs the full `wintoclient` → `wintomon` → `focus` chain
-on every pointer enter/leave. On single-monitor, `wintomon()` always returns
-the same monitor and focus changes are usually no-ops.
+**Why it was rejected:** `enternotify()` is the mechanism for
+focus-follows-mouse (sloppy focus). On single-monitor, the `m != selmon`
+branch is dead code (only one monitor), but the `else if (!c || c ==
+selmon->sel) return` branch and `focus(c)` call are the actual
+hover-to-focus logic. A `!mons->next` early return disables sloppy-focus
+on the most common hardware configuration.
 
-**What benchmarks showed:**
-- Single monitor: 10 ns (mock)
-- Two monitors: 10 ns (mock)
-- No difference — mock chain is too cheap to measure
+**The `m != selmon` branch is already a no-op on single-monitor.** There
+is only one monitor, so `m` always equals `selmon`. No guard is needed —
+the existing code handles single-monitor correctly without any changes.
 
-**Performance:**
-- **dwm %:** 0.5–1% of total CPU (single-monitor setups only)
-- **Function speedup:** Eliminates entire call on single-monitor.
-  Real cost per skipped event: ~1K cycles (`wintoclient` + `wintomon` +
-  `focus` chain).
-
-**Original estimate:** 0.5–1%
-**Revised estimate:** **0.5–1%** (mock can't measure; estimate based on real
-X11 cost of `wintoclient` + `focus` chain)
-
-**Verdict:** Worth implementing. Two-line guard, zero risk, real savings on
-single-monitor setups (which are common).
+**Verdict:** Not implemented. The proposed optimization removes a core WM
+feature (hover-to-focus) instead of eliminating redundant work. The
+`m != selmon` cross-monitor branch is inherently skipped on single-monitor
+by the equality check, making the entire proposal unnecessary.
 
 ---
 
@@ -292,15 +295,15 @@ don't expect a noticeable improvement.
 |---|---|---|---|---|---|---|
 | 1 | `arrange()` coalescing | 3–5% | **3–5%** | **11.8× faster** (burst) | Medium | **Yes — highest impact** |
 | 2 | `updatestatus()` comparison | 2–3% | **1–2%** | eliminates call (identical) | None | **Yes — trivial, real savings** |
-| 3 | `focus()` idempotent guard | 2–4% | **0.5–1%** | eliminates call (redundant) | Low | **Yes — one-line guard** |
+| 3 | `focus()` dirty-only guard | 2–4% | **0.5–1%** | skips bar redraw (redundant) | Low | **Yes — dirty-only guard** |
 | 4 | `wintoclient()` hash | 0.5–1% | **<0.5%** | **1.6–28.6× faster** | Medium | No — O(n) is real but cheap |
 | 5 | Cached visible count | 1–2% | **0.5–1%** | **397–1,931× faster** | Low | Maybe — if you have many clients |
 | 6 | `propertynotify()` filter | 1–2% | **<0.5%** | **7× faster** (uninteresting) | Low | Maybe — zero risk but marginal |
 | 7 | `setlayout()` dirty guard | <0.5% | **<0.5%** | eliminates call (redundant) | None | Maybe — code hygiene only |
-| 8 | `enternotify()` guard | 0.5–1% | **0.5–1%** | eliminates call (single-mon) | None | **Yes — two-line guard** |
+| 8 | `enternotify()` guard | 0.5–1% | **N/A** | breaks focus-follows-mouse | High | **No — removes core feature** |
 | 9 | Gaming mode | 5–10% | **1–2%** | **25× faster** (fullscreen) | Medium | Conditional — if you game |
 
-**Total dwm % revised: 6–12%** (down from original 15–25%)
+**Total dwm % revised: 5–10%** (down from original 15–25%)
 
 ---
 
@@ -330,13 +333,12 @@ Recommended sequence based on impact, confidence, and risk:
 |---|---|---|---|---|---|
 | 1 | #7 `setlayout()` guard | <0.5% | eliminates redundant | None | <0.5% |
 | 2 | #2 `updatestatus()` comparison | 1–2% | eliminates identical | None | 1.5–2.5% |
-| 3 | #3 `focus()` idempotent guard | 0.5–1% | eliminates redundant | Low | 2–3.5% |
-| 4 | #8 `enternotify()` guard | 0.5–1% | eliminates single-mon | None | 2.5–4.5% |
-| 5 | #6 `propertynotify()` filter | <0.5% | **7× faster** | Low | 3–5% |
-| 6 | #5 Cached visible count | 0.5–1% | **397–1,931× faster** | Low | 3.5–6% |
-| 7 | #1 `arrange()` coalescing | 3–5% | **11.8× faster** | Medium | 6.5–11% |
-| 8 | #4 `wintoclient()` hash | <0.5% | **1.6–28.6× faster** | Medium | 7–11.5% |
-| 9 | #9 Gaming mode | 1–2% | **25× faster** | Medium | 8–13.5% |
+| 3 | #3 `focus()` dirty-only guard | 0.5–1% | skips bar redraw | Low | 2–3.5% |
+| 4 | #6 `propertynotify()` filter | <0.5% | **7× faster** | Low | 2.5–4% |
+| 5 | #5 Cached visible count | 0.5–1% | **397–1,931× faster** | Low | 3–5% |
+| 6 | #1 `arrange()` coalescing | 3–5% | **11.8× faster** | Medium | 6–10% |
+| 7 | #4 `wintoclient()` hash | <0.5% | **1.6–28.6× faster** | Medium | 6.5–10.5% |
+| 8 | #9 Gaming mode | 1–2% | **25× faster** | Medium | 7.5–12.5% |
 
 Phases 1–5 are all low-risk guard conditions. Phase 7 (arrange coalescing)
 is the only high-impact change but requires the most careful audit.

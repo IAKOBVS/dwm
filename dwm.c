@@ -699,9 +699,6 @@ enternotify(XEvent *e)
 
 	if ((ev->mode != NotifyNormal || ev->detail == NotifyInferior) && ev->window != root)
 		return;
-	/* single monitor: no cross-monitor moves, focus changes are no-ops */
-	if (!mons->next)
-		return;
 	c = wintoclient(ev->window);
 	m = c ? c->mon : wintomon(ev->window);
 	if (m != selmon) {
@@ -729,9 +726,6 @@ focus(Client *c)
 {
 	if (!c || !ISVISIBLE(c))
 		for (c = selmon->stack; c && !ISVISIBLE(c); c = c->snext);
-	/* already focused — skip unfocus/setfocus/dirty chain */
-	if (c && c == selmon->sel)
-		return;
 	if (selmon->sel && selmon->sel != c)
 		unfocus(selmon->sel, 0);
 	if (c) {
@@ -748,9 +742,10 @@ focus(Client *c)
 		XSetInputFocus(dpy, root, RevertToPointerRoot, CurrentTime);
 		XDeleteProperty(dpy, root, netatom[NetActiveWindow]);
 	}
+	/* only dirty bar if focus actually changed — skip redundant redraws */
+	if (c != selmon->sel)
+		bar_dirty_segments |= DIRTY_TITLE | DIRTY_TAGS;
 	selmon->sel = c;
-	/* new selected client: title and occupancy-box (tag rects) changed */
-	bar_dirty_segments |= DIRTY_TITLE | DIRTY_TAGS;
 	bar_draw_pending = 1;
 }
 
