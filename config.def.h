@@ -125,8 +125,8 @@ static const char *termcmd[] = {
 };
 
 /* processes to kill on fullscreen enter, restart on fullscreen exit */
-static const KillEntry killatfullscreen[] = {
-	{ "dwmblocks-fast", "dwmblocks-fast >/tmp/dwmblocks-fast.log 2>&1" },
+static const char *killatfullscreen[] = {
+	"dwmblocks-fast",
 };
 
 static const Key keys[] = {
