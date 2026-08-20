@@ -1506,7 +1506,7 @@ killall(const char *name, const char *signal)
 			close(ConnectionNumber(dpy));
 		setsid();
 		execlp("killall", "killall", signal, name, NULL);
-		DIE("execvp():dwm: execvp 'killall %s %s' failed:", signal, name);
+		exit(EXIT_SUCCESS);
 	}
 }
 
@@ -1520,9 +1520,13 @@ killatfullscreen_stop(void)
 void
 killatfullscreen_start(void)
 {
-	for (unsigned int i = 0; i < LENGTH(killatfullscreen); i++) {
-		killall(killatfullscreen[i], "-CONT");
-		killall(killatfullscreen[i], "-HUP");
+	if (fork() == 0) {
+		for (unsigned int i = 0; i < LENGTH(killatfullscreen); i++)
+			killall(killatfullscreen[i], "-CONT");
+		sleep(1);
+		for (unsigned int i = 0; i < LENGTH(killatfullscreen); i++)
+			killall(killatfullscreen[i], "-HUP");
+		exit(EXIT_SUCCESS);
 	}
 }
 
