@@ -20,7 +20,6 @@
 
 /* scripts from from dwmblocks-fast */
 #define MIC_MUTE     "dwmblocks-fast-mic-mute"
-#define MIC_MUTE     "dwmblocks-fast-mic-mute"
 #define VOLUME_UP    "dwmblocks-fast-audio-vol-up"
 #define VOLUME_DOWN  "dwmblocks-fast-audio-vol-down"
 #define AUDIO_MUTE   "dwmblocks-fast-audio-mute"

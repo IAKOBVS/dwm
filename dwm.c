@@ -1514,16 +1514,20 @@ killall(const char *name, const char *signal)
 void
 killatfullscreen_stop(void)
 {
-	for (unsigned int i = 0; i < LENGTH(killatfullscreen); i++)
-		killall(killatfullscreen[i], "-STOP");
+	for (unsigned int i = 0; i < LENGTH(killatfullscreen); i++) {
+		if (killatfullscreen[i].name)
+			killall(killatfullscreen[i].name, "-STOP");
+	}
 }
 
 void
 killatfullscreen_start(void)
 {
 	for (unsigned int i = 0; i < LENGTH(killatfullscreen); i++) {
-		killall(killatfullscreen[i], "-CONT");
-		killall(killatfullscreen[i], "-HUP");
+		if (killatfullscreen[i].name) {
+			killall(killatfullscreen[i].name, "-CONT");
+			killall(killatfullscreen[i].name, "-HUP");
+		}
 	}
 }
 
