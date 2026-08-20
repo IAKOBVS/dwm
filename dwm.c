@@ -543,8 +543,7 @@ createmon(void)
 	m->nmaster = nmaster;
 	m->showbar = showbar;
 	m->topbar = topbar;
-	m->gap = malloc(sizeof(Gap));
-	gap_copy(m->gap, &default_gap);
+	gap_copy(&m->gap, &default_gap);
 	m->lt[0] = &layouts[0];
 	m->lt[1] = &layouts[1 % LENGTH(layouts)];
 	strncpy(m->ltsymbol, layouts[0].symbol, sizeof m->ltsymbol);
@@ -1571,7 +1570,7 @@ gap_copy(Gap *to, const Gap *from)
 void
 setgaps(const Arg *arg)
 {
-	Gap *p = selmon->gap;
+	Gap *p = &selmon->gap;
 	switch(arg->i)
 	{
 		case GAP_TOGGLE:
@@ -1795,18 +1794,18 @@ tile(Monitor *m)
 	if (n > m->nmaster)
 		mw = m->nmaster ? m->ww * m->mfact : 0;
 	else
-		mw = m->ww - m->gap->gappx;
-	for (i = 0, my = ty = m->gap->gappx, c = nexttiled(m->clients); c; c = nexttiled(c->next), i++)
+		mw = m->ww - m->gap.gappx;
+	for (i = 0, my = ty = m->gap.gappx, c = nexttiled(m->clients); c; c = nexttiled(c->next), i++)
 		if (i < m->nmaster) {
-			h = (m->wh - my) / (MIN(n, m->nmaster) - i) - m->gap->gappx;
-			resize(c, m->wx + m->gap->gappx, m->wy + my, mw - (2*c->bw) - m->gap->gappx, h - (2*c->bw), 0);
-			if (my + HEIGHT(c) + m->gap->gappx < m->wh)
-				my += HEIGHT(c) + m->gap->gappx;
+			h = (m->wh - my) / (MIN(n, m->nmaster) - i) - m->gap.gappx;
+			resize(c, m->wx + m->gap.gappx, m->wy + my, mw - (2*c->bw) - m->gap.gappx, h - (2*c->bw), 0);
+			if (my + HEIGHT(c) + m->gap.gappx < m->wh)
+				my += HEIGHT(c) + m->gap.gappx;
 		} else {
-			h = (m->wh - ty) / (n - i) - m->gap->gappx;
-			resize(c, m->wx + mw + m->gap->gappx, m->wy + ty, m->ww - mw - (2*c->bw) - 2*m->gap->gappx, h - (2*c->bw), 0);
-			if (ty + HEIGHT(c) + m->gap->gappx < m->wh)
-				ty += HEIGHT(c) + m->gap->gappx;
+			h = (m->wh - ty) / (n - i) - m->gap.gappx;
+			resize(c, m->wx + mw + m->gap.gappx, m->wy + ty, m->ww - mw - (2*c->bw) - 2*m->gap.gappx, h - (2*c->bw), 0);
+			if (ty + HEIGHT(c) + m->gap.gappx < m->wh)
+				ty += HEIGHT(c) + m->gap.gappx;
 		}
 }
 

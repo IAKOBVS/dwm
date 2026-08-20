@@ -65,7 +65,7 @@ struct Client {
 	int basew, baseh, incw, inch, maxw, maxh, minw, minh, hintsvalid;
 	int bw, oldbw;
 	unsigned int tags;
-	int isfixed, isfloating, isurgent, neverfocus, oldstate, isfullscreen, isterminal, noswallow;
+	unsigned char isfixed, isfloating, isurgent, neverfocus, oldstate, isfullscreen, isterminal, noswallow;
 	pid_t pid;
 	Client *next;
 	Client *snext;
@@ -92,9 +92,9 @@ typedef struct {
 } Layout;
 
 typedef struct {
-	int isgap;
-	int realgap;
-	int gappx;
+	unsigned short realgap;
+	unsigned short gappx;
+	unsigned char isgap;
 } Gap;
 
 struct Monitor {
@@ -105,12 +105,12 @@ struct Monitor {
 	int by;               /* bar geometry */
 	int mx, my, mw, mh;   /* screen size */
 	int wx, wy, ww, wh;   /* window area  */
-	Gap *gap;
+	Gap gap;
 	unsigned int seltags;
 	unsigned int sellt;
 	unsigned int tagset[2];
-	int showbar;
-	int topbar;
+	unsigned char showbar;
+	unsigned char topbar;
 	Client *clients;
 	Client *sel;
 	Client *stack;
@@ -118,7 +118,7 @@ struct Monitor {
 	Window barwin;
 	const Layout *lt[2];
 	int bar_dirty_segments;
-	int bar_exposed;
+	unsigned char bar_exposed;
 };
 
 typedef struct {
@@ -126,9 +126,9 @@ typedef struct {
 	const char *instance;
 	const char *title;
 	unsigned int tags;
-	int isfloating;
-	int isterminal;
-	int noswallow;
+	unsigned char isfloating;
+	unsigned char isterminal;
+	unsigned char noswallow;
 	int monitor;
 } Rule;
 
