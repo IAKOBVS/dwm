@@ -699,6 +699,9 @@ enternotify(XEvent *e)
 
 	if ((ev->mode != NotifyNormal || ev->detail == NotifyInferior) && ev->window != root)
 		return;
+	/* single monitor: no cross-monitor moves, focus changes are no-ops */
+	if (!mons->next)
+		return;
 	c = wintoclient(ev->window);
 	m = c ? c->mon : wintomon(ev->window);
 	if (m != selmon) {
@@ -726,6 +729,9 @@ focus(Client *c)
 {
 	if (!c || !ISVISIBLE(c))
 		for (c = selmon->stack; c && !ISVISIBLE(c); c = c->snext);
+	/* already focused — skip unfocus/setfocus/dirty chain */
+	if (c && c == selmon->sel)
+		return;
 	if (selmon->sel && selmon->sel != c)
 		unfocus(selmon->sel, 0);
 	if (c) {
@@ -1589,13 +1595,15 @@ setgaps(const Arg *arg)
 void
 setlayout(const Arg *arg)
 {
+	const Layout *old = selmon->lt[selmon->sellt];
 	if (!arg || !arg->v || arg->v != selmon->lt[selmon->sellt])
 		selmon->sellt ^= 1;
 	if (arg && arg->v)
 		selmon->lt[selmon->sellt] = (Layout *)arg->v;
 	strncpy(selmon->ltsymbol, selmon->lt[selmon->sellt]->symbol, sizeof selmon->ltsymbol);
-	/* layout symbol in tag area changed */
-	bar_dirty_segments |= DIRTY_TAGS;
+	/* layout symbol in tag area changed — only dirty if layout actually changed */
+	if (selmon->lt[selmon->sellt] != old)
+		bar_dirty_segments |= DIRTY_TAGS;
 	if (selmon->sel)
 		arrange(selmon);
 	else
@@ -2124,11 +2132,17 @@ updatesizehints(Client *c)
 void
 updatestatus(void)
 {
+	char newstext[sizeof(stext)];
 	/* skip when fullscreen - bar is frozen, status would never be drawn */
 	if (optimizefullscreen && selmon->sel && selmon->sel->isfullscreen)
 		return;
-	if (!gettextprop(root, XA_WM_NAME, stext, sizeof(stext)))
-		strcpy(stext, "dwm-"VERSION);
+	if (!gettextprop(root, XA_WM_NAME, newstext, sizeof(newstext)))
+		strcpy(newstext, "dwm-"VERSION);
+	/* status unchanged — skip dirty + draw chain */
+	if (strcmp(stext, newstext) == 0)
+		return;
+	strncpy(stext, newstext, sizeof(stext) - 1);
+	stext[sizeof(stext) - 1] = '\0';
 	/* status changed; title boundary may shift if width differs */
 	bar_dirty_segments |= DIRTY_STATUS | DIRTY_TITLE;
 	bar_draw_pending = 1;            /* coalesce with other pending draws */

@@ -198,6 +198,142 @@ X server needed). Every test `.c` file follows this pattern:
 3. Run `make` to verify it compiles
 4. Add `cov_test_<feature>` to the `coverage` make target
 
+### Benchmarking Optimizations
+
+Before implementing any performance optimization, **always create a benchmark
+first** and compare the measured baseline against the estimated impact. This
+prevents investing time in optimizations that don't move the needle.
+
+#### Quick Start
+
+```sh
+cd tests
+make bench_optimize   # build benchmark suite
+./bench_optimize      # run baseline (31 benchmarks, ~2 sec)
+```
+
+#### Workflow
+
+1. **Estimate the potential** — write down the expected % CPU savings in
+   `OPTIMIZE-ROADMAP.md` with a justification (which code path is avoided,
+   how often it fires, what the cycle cost is)
+
+2. **Run the baseline** — `./bench_optimize` before any code changes.
+   Record the ns/call numbers for the relevant benchmarks
+
+3. **Implement the optimization** — add the code change
+
+4. **Re-run benchmarks** — `./bench_optimize` after the change. Compare
+   ns/call before and after for the affected benchmarks
+
+5. **Compare against estimate** — if the mock improvement is significantly
+   different from the estimated real-world %, reconcile the two (see
+   "Mock vs Real Cost Ratio" below)
+
+6. **Add correctness tests** — create correctness tests in
+   `tests/test_<feature>.c` (see "Correctness Tests for Optimizations"
+   below)
+
+7. **Update docs** — add the optimization to `OPTIMIZE-ROADMAP.md` with
+   the measured numbers and any revised estimates
+
+#### Mock vs Real Cost Ratio
+
+Mock benchmarks measure **pure dwm logic cost** — linked-list walks,
+comparisons, branch prediction. They skip X11/Xft calls which dominate
+real CPU time. The mock:real ratio varies by function:
+
+| Function | Mock ns/call | Real cycles (est.) | Mock:Real ratio | Why |
+|---|---|---|---|---|
+| `arrange()` 10c | 45 | ~8,000 | 1:178 | XConfigureWindow + XSync per client |
+| `tile()` 10c | 397 | ~5,000 | 1:12 | resize → XConfigureWindow per client |
+| `focus()` | 90 | ~500 | 1:5.5 | XSetInputFocus + drawbar trigger |
+| `wintoclient()` 10c | 8–20 | ~400 | 1:20–50 | Pointer chasing + cache misses |
+| `updatestatus()` | 31 | ~3,000 | 1:97 | drw_text → Xft pipeline |
+| `propertynotify()` | 14 | ~700 | 1:50 | wintoclient + XGetWindowProperty |
+| `setlayout()` | 7 | ~500 | 1:71 | drawbar trigger |
+
+**Interpreting the ratio:**
+- **Low ratio (1:5–1:12):** Mock is a good proxy. The function's real cost
+  is mostly dwm logic (e.g., `tile`, `focus`). Optimization targets here
+  have predictable returns
+- **High ratio (1:50–1:200):** Mock underestimates real cost. The function's
+  real cost is dominated by X11/Xft calls (e.g., `arrange`, `updatestatus`).
+  Skipping the X11 call via a guard condition has much larger real-world
+  impact than the mock ns/call suggests
+- **Ratio near 1:1:** Mock is accurate. The function is pure logic with no
+  X11 calls (e.g., `setlayout` dirty guard)
+
+#### When Estimates Are Wrong
+
+Original estimates in `OPTIMIZE-ROADMAP.md` were often 1.5–2× too high
+because they assumed the mock ns/call represented the full cost. The
+calibrated estimates (in "Revised estimates" in `tests/BENCH-RESULTS.md`)
+account for the mock:real ratio:
+
+| # | Optimization | Original | Revised | Why wrong |
+|---|---|---|---|---|
+| 2 | `updatestatus()` comparison | 2–3% | 1–2% | Mock dirty chain is31 ns; real savings are drw_text |
+| 3 | `focus()` idempotent guard | 2–4% | 0.5–1% | Mock dirty chain is90 ns; real savings are XSetInputFocus |
+| 4 | `wintoclient()` hash | 0.5–1% | <0.5% | Mock confirms O(n) but absolute cost is 8–143 ns |
+| 6 | `propertynotify()` filter | 1–2% | <0.5% | Mock shows 21 ns savings; real XGetWindowProperty is ~300 cycles |
+| 9 | Gaming mode | 5–10% | 1–2% | Mock shows most handlers already guarded or cheap |
+
+#### Key Rule
+
+**If the mock benchmark shows <5 ns savings per call, the real-world impact
+is likely <0.5% of total CPU** — unless the function gates an expensive X11
+call that fires frequently. Always check the mock:real ratio before claiming
+a large performance win.
+
+### Correctness Tests for Optimizations
+
+Every optimization MUST include correctness tests that verify the optimization
+doesn't break existing behavior. Benchmarks prove speed; correctness tests
+prove correctness. Both are required.
+
+#### What to test for each optimization type
+
+**Guard conditions** (skip when no-op):
+- Verify the guard fires on identical/redundant input
+- Verify the guard does NOT fire on different input
+- Verify downstream side effects are correctly skipped/preserved
+
+**Caching** (avoid repeated computation):
+- Verify cache hit returns same result as uncached path
+- Verify cache invalidation works (manage/unmanage, font change, etc.)
+- Verify cache consistency after mutation (attach, detach, show, hide)
+
+**Coalescing** (batch multiple calls into one):
+- Verify N calls produce exactly 1 execution
+- Verify the final state matches N sequential executions
+- Verify ordering isn't broken by deferral
+
+#### Per-optimization test checklist
+
+| # | Optimization | Correctness tests needed |
+|---|---|---|
+| 1 | `arrange()` coalescing | Multiple arrange() calls → only 1 layout pass; final geometry matches sequential; `movemouse`/`resizemouse` immediate path still works |
+| 2 | `updatestatus()` comparison | Identical text → no dirty segments; different text → dirty set; first call always sets dirty |
+| 3 | `focus()` idempotent guard | `focus(selmon->sel)` → no dirty; `focus(different)` → dirty set; `focus(NULL)` when NULL already → no dirty; `focus(NULL)` when non-NULL → dirty |
+| 4 | `wintoclient()` hash | Lookup hit/miss; insert on manage; delete on unmanage; hash collision fallback to linear walk |
+| 5 | Cached visible count | attach/detach updates count; show/hide updates count; tag switch recounts; fullscreen toggle recounts; tile/monocle read correct count |
+| 6 | `propertynotify()` filter | Known atoms still process; unknown atoms return early; PropertyDelete still returns early |
+| 7 | `setlayout()` dirty guard | Same layout → no dirty; different layout → dirty; toggle (NULL arg) always dirties |
+| 8 | `enternotify()` guard | Single-monitor → early return; multi-monitor → processes normally |
+| 9 | Gaming mode | Fullscreen → propertynotify/updatestatus skipped; non-fullscreen → processes normally; fullscreen exit → state restored |
+
+#### Test file conventions
+
+- Add tests to the appropriate existing file (`test_comprehensive.c`,
+  `test_events.c`, `test_window_ops.c`, etc.) or create
+  `tests/test_optimize_<feature>.c` for standalone optimization tests
+- Follow the existing pattern: `#include "mock_x11.h"` + `#define DRW_H` +
+  `#include "mock_drw.h"` + `#include "../dwm.h"` + `#include "../dwm.c"`
+- Use `ASSERT()` and `ASSERT_EQ()` macros
+- Each test function should test ONE scenario; name it descriptively
+- Restore global state (`selmon`, monitor lists) after each test
+
 ### Pre-existing Notices
 
 - `config.def.h` defines `termcmd[]` but it is never used (warning suppressed)

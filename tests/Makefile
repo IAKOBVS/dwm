@@ -17,7 +17,9 @@ MOCK_OBJ = mock_x11.o
 TEST_SRC = $(wildcard test_*.c)
 TEST_BIN = $(TEST_SRC:.c=)
 
-all: $(TEST_BIN)
+BENCH_BIN = bench_optimize
+
+all: $(TEST_BIN) $(BENCH_BIN)
 
 $(MOCK_OBJ): $(MOCK_SRC) mock_x11.h
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -77,6 +79,6 @@ asan: $(MOCK_OBJ)
 	done
 
 clean:
-	rm -f $(TEST_BIN) cov_test_* asan_test_* *.o *.gcda *.gcno *.gcov
+	rm -f $(TEST_BIN) $(BENCH_BIN) cov_test_* asan_test_* *.o *.gcda *.gcno *.gcov
 
 .PHONY: all test run coverage clean
