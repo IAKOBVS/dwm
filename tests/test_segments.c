@@ -135,6 +135,20 @@ test_togglebar_sets_segments(void)
 }
 
 static void
+test_view_empty_tag_sets_dirty_tags(void)
+{
+	selmon->clients = NULL;
+	selmon->stack = NULL;
+	selmon->sel = NULL;
+	selmon->bar_dirty_segments = 0;
+
+	Arg arg = { .ui = 1 << 1 };
+	view(&arg);
+	ASSERT(selmon->bar_dirty_segments & DIRTY_TAGS,
+		"view on empty tag sets DIRTY_TAGS");
+}
+
+static void
 test_bar_draw_pending_initial(void)
 {
 	/* other tests may have set bar_draw_pending; reset to check initial default */
@@ -376,6 +390,9 @@ main(void)
 
 	restore_selmon();
 	test_togglebar_sets_segments();
+
+	restore_selmon();
+	test_view_empty_tag_sets_dirty_tags();
 
 	restore_selmon();
 	test_setfullscreen_unset_sets_segments();

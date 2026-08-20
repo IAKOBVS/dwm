@@ -1868,6 +1868,7 @@ toggleview(const Arg *arg)
 
 	if (newtagset) {
 		selmon->tagset[selmon->seltags] = newtagset;
+		selmon->bar_dirty_segments |= DIRTY_TAGS;
 		focus(NULL);
 		arrange(selmon);
 	}
@@ -2199,6 +2200,7 @@ view(const Arg *arg)
 	selmon->seltags ^= 1; /* toggle sel tagset */
 	if (arg->ui & TAGMASK)
 		selmon->tagset[selmon->seltags] = arg->ui & TAGMASK;
+	selmon->bar_dirty_segments |= DIRTY_TAGS;
 	focus(NULL);
 	arrange(selmon);
 }
