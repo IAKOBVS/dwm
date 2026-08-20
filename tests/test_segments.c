@@ -33,39 +33,41 @@ restore_selmon(void)
 static void
 test_initial_state(void)
 {
-	ASSERT_EQ(bar_dirty_segments, DIRTY_STATUS | DIRTY_TAGS | DIRTY_TITLE,
-		"initial bar_dirty_segments = all dirty (7)");
+	ASSERT_EQ(selmon->bar_dirty_segments, DIRTY_STATUS | DIRTY_TAGS | DIRTY_TITLE,
+		"initial selmon->bar_dirty_segments = all dirty (7)");
 }
 
 static void
 test_drawbar_resets(void)
 {
-	bar_dirty_segments = DIRTY_STATUS | DIRTY_TAGS | DIRTY_TITLE;
+	selmon->bar_dirty_segments = DIRTY_STATUS | DIRTY_TAGS | DIRTY_TITLE;
 	drawbar(selmon);
-	/* In DWM_TEST builds, bar_dirty_segments is NOT reset to 0 after drawing.
+	/* In DWM_TEST builds, selmon->bar_dirty_segments is NOT reset to 0 after drawing.
 	 * It stays set so tests can verify it after the call. */
-	ASSERT_EQ(bar_dirty_segments, DIRTY_STATUS | DIRTY_TAGS | DIRTY_TITLE,
+	ASSERT_EQ(selmon->bar_dirty_segments, DIRTY_STATUS | DIRTY_TAGS | DIRTY_TITLE,
 		"drawbar leaves segments intact (DWM_TEST build)");
 }
 
 static void
 test_drawbar_early_return(void)
 {
-	bar_dirty_segments = 0;
+	selmon->bar_dirty_segments = 0;
 	drawbar(selmon);
-	ASSERT_EQ(bar_dirty_segments, 0,
+	ASSERT_EQ(selmon->bar_dirty_segments, 0,
 		"drawbar early return leaves segments at 0");
 }
 
 static void
 test_focus_sets_segments(void)
 {
-	bar_dirty_segments = 0;
+	Client c = { .win = 1, .mon = selmon, .tags = 1 };
+	selmon->sel = &c;
+	selmon->bar_dirty_segments = 0;
 	selmon->stack = NULL;
 	focus(NULL);
-	ASSERT(bar_dirty_segments & DIRTY_TITLE,
+	ASSERT(selmon->bar_dirty_segments & DIRTY_TITLE,
 		"focus sets DIRTY_TITLE");
-	ASSERT(bar_dirty_segments & DIRTY_TAGS,
+	ASSERT(selmon->bar_dirty_segments & DIRTY_TAGS,
 		"focus sets DIRTY_TAGS");
 }
 
@@ -76,11 +78,11 @@ test_focus_with_sel_sets_segments(void)
 	selmon->clients = selmon->stack = &c;
 	selmon->sel = &c;
 
-	bar_dirty_segments = 0;
+	selmon->bar_dirty_segments = 0;
 	focus(NULL);
-	ASSERT(bar_dirty_segments & DIRTY_TITLE,
+	ASSERT(selmon->bar_dirty_segments & DIRTY_TITLE,
 		"focus with sel sets DIRTY_TITLE");
-	ASSERT(bar_dirty_segments & DIRTY_TAGS,
+	ASSERT(selmon->bar_dirty_segments & DIRTY_TAGS,
 		"focus with sel sets DIRTY_TAGS");
 
 	selmon->sel = NULL;
@@ -90,12 +92,12 @@ test_focus_with_sel_sets_segments(void)
 static void
 test_updatestatus_sets_segments(void)
 {
-	bar_dirty_segments = 0;
+	selmon->bar_dirty_segments = 0;
 	stext[0] = '\0';
 	updatestatus();
-	ASSERT(bar_dirty_segments & DIRTY_STATUS,
+	ASSERT(selmon->bar_dirty_segments & DIRTY_STATUS,
 		"updatestatus sets DIRTY_STATUS");
-	ASSERT(bar_dirty_segments & DIRTY_TITLE,
+	ASSERT(selmon->bar_dirty_segments & DIRTY_TITLE,
 		"updatestatus sets DIRTY_TITLE");
 	ASSERT(stext[0] != '\0',
 		"updatestatus sets stext");
@@ -104,13 +106,16 @@ test_updatestatus_sets_segments(void)
 static void
 test_setlayout_sets_segments(void)
 {
-	bar_dirty_segments = 0;
+	selmon->bar_dirty_segments = 0;
 	Arg arg = { .v = NULL };
 	selmon->sel = NULL;
 	selmon->sellt = 0;
+	selmon->lt[0] = (Layout *)&layouts[0];
+	selmon->lt[1] = (Layout *)&layouts[1];
 	setlayout(&arg);
-	ASSERT(bar_dirty_segments & DIRTY_TAGS,
+	ASSERT(selmon->bar_dirty_segments & DIRTY_TAGS,
 		"setlayout sets DIRTY_TAGS");
+	selmon->lt[0] = selmon->lt[1] = &layouts[0];
 }
 
 static void
@@ -118,13 +123,13 @@ test_togglebar_sets_segments(void)
 {
 	Arg arg;
 	selmon->showbar = 0;
-	bar_dirty_segments = 0;
+	selmon->bar_dirty_segments = 0;
 	togglebar(&arg);
-	ASSERT(bar_dirty_segments & DIRTY_STATUS,
+	ASSERT(selmon->bar_dirty_segments & DIRTY_STATUS,
 		"togglebar sets DIRTY_STATUS");
-	ASSERT(bar_dirty_segments & DIRTY_TAGS,
+	ASSERT(selmon->bar_dirty_segments & DIRTY_TAGS,
 		"togglebar sets DIRTY_TAGS");
-	ASSERT(bar_dirty_segments & DIRTY_TITLE,
+	ASSERT(selmon->bar_dirty_segments & DIRTY_TITLE,
 		"togglebar sets DIRTY_TITLE");
 	selmon->showbar = 0;
 }
@@ -180,11 +185,11 @@ static void
 test_bar_exposed_full_draw_resets(void)
 {
 	selmon->showbar = 1;          /* drawbar early-returns if showbar=0 */
-	bar_dirty_segments = DIRTY_STATUS | DIRTY_TAGS | DIRTY_TITLE;
-	bar_exposed = 1;
+	selmon->bar_dirty_segments = DIRTY_STATUS | DIRTY_TAGS | DIRTY_TITLE;
+	selmon->bar_exposed = 1;
 	drawbar(selmon);
-	/* drawbar full draw path sets bar_exposed = 0 */
-	ASSERT_EQ(bar_exposed, 0, "bar_exposed reset after full draw");
+	/* drawbar full draw path sets selmon->bar_exposed = 0 */
+	ASSERT_EQ(selmon->bar_exposed, 0, "selmon->bar_exposed reset after full draw");
 }
 
 static void
@@ -197,22 +202,22 @@ test_bar_exposed_expose_then_drawbar_resets(void)
 	ev.xexpose.count = 0;
 
 	selmon->showbar = 1;
-	bar_dirty_segments = DIRTY_STATUS | DIRTY_TAGS | DIRTY_TITLE;
-	bar_exposed = 0;
+	selmon->bar_dirty_segments = DIRTY_STATUS | DIRTY_TAGS | DIRTY_TITLE;
+	selmon->bar_exposed = 0;
 	expose(&ev);
-	/* expose sets bar_exposed=1 then calls drawbar(), which resets to 0 after full draw */
-	ASSERT_EQ(bar_exposed, 0, "bar_exposed 0 after expose (drawbar clears it)");
+	/* expose sets selmon->bar_exposed=1 then calls drawbar(), which resets to 0 after full draw */
+	ASSERT_EQ(selmon->bar_exposed, 0, "selmon->bar_exposed 0 after expose (drawbar clears it)");
 }
 
 static void
 test_bar_exposed_early_return_resets(void)
 {
 	selmon->showbar = 1;          /* drawbar early-returns if showbar=0 */
-	bar_dirty_segments = 0;
-	bar_exposed = 1;
+	selmon->bar_dirty_segments = 0;
+	selmon->bar_exposed = 1;
 	drawbar(selmon);
-	/* early-return path resets bar_exposed = 0 */
-	ASSERT_EQ(bar_exposed, 0, "bar_exposed reset after early-return drawbar");
+	/* early-return path resets selmon->bar_exposed = 0 */
+	ASSERT_EQ(selmon->bar_exposed, 0, "selmon->bar_exposed reset after early-return drawbar");
 }
 
 static void
@@ -231,16 +236,77 @@ test_setfullscreen_unset_sets_segments(void)
 
 	selmon->sel = &c;
 
-	bar_dirty_segments = 0;
+	selmon->bar_dirty_segments = 0;
 	setfullscreen(&c, 0);
-	ASSERT(bar_dirty_segments & DIRTY_STATUS,
+	ASSERT(selmon->bar_dirty_segments & DIRTY_STATUS,
 		"setfullscreen(0) sets DIRTY_STATUS");
-	ASSERT(bar_dirty_segments & DIRTY_TAGS,
+	ASSERT(selmon->bar_dirty_segments & DIRTY_TAGS,
 		"setfullscreen(0) sets DIRTY_TAGS");
-	ASSERT(bar_dirty_segments & DIRTY_TITLE,
+	ASSERT(selmon->bar_dirty_segments & DIRTY_TITLE,
 		"setfullscreen(0) sets DIRTY_TITLE");
 
 	selmon->sel = NULL;
+}
+
+static void
+test_per_monitor_drawbar_isolation(void)
+{
+	int i;
+	Monitor *m_a = ecalloc(1, sizeof(Monitor));
+	Monitor *m_b = ecalloc(1, sizeof(Monitor));
+	Monitor *saved = selmon;
+	m_a->num = 0;
+	m_b->num = 1;
+	m_a->showbar = 1;
+	m_b->showbar = 1;
+	m_a->barwin = 100;
+	m_b->barwin = 200;
+	m_a->tagset[0] = m_a->tagset[1] = 1;
+	m_b->tagset[0] = m_b->tagset[1] = 1;
+	m_a->mfact = m_b->mfact = 0.55f;
+	m_a->nmaster = m_b->nmaster = 1;
+	m_a->lt[0] = m_a->lt[1] = &layouts[0];
+	m_b->lt[0] = m_b->lt[1] = &layouts[0];
+	strncpy(m_a->ltsymbol, layouts[0].symbol, sizeof m_a->ltsymbol);
+	strncpy(m_b->ltsymbol, layouts[0].symbol, sizeof m_b->ltsymbol);
+	m_a->gap = ecalloc(1, sizeof(Gap));
+	m_b->gap = ecalloc(1, sizeof(Gap));
+	m_a->gap->isgap = 1; m_a->gap->realgap = 17; m_a->gap->gappx = 17;
+	m_b->gap->isgap = 1; m_b->gap->realgap = 17; m_b->gap->gappx = 17;
+	m_a->bar_dirty_segments = 0;
+	m_b->bar_dirty_segments = 0;
+	m_a->bar_exposed = 1;
+	m_b->bar_exposed = 1;
+
+	/* Link monitors and set as selmon = m_a */
+	m_a->next = m_b;
+	m_b->next = NULL;
+	selmon = m_a;
+	mons = m_a;
+
+	/* Set dirty on both monitors */
+	m_a->bar_dirty_segments = DIRTY_TAGS;
+	m_b->bar_dirty_segments = DIRTY_TAGS;
+
+	/* drawbar(m_a) processes m_a's dirty flags — must NOT touch m_b's */
+	drawbar(m_a);
+	/* DWM_TEST: bar_dirty_segments not cleared by drawbar, but bar_exposed is */
+	ASSERT_EQ(m_a->bar_exposed, 0,
+		"per-monitor: drawbar(m_a) processed m_a (bar_exposed cleared)");
+	ASSERT(m_b->bar_dirty_segments & DIRTY_TAGS,
+		"per-monitor: drawbar(m_a) does not touch m_b dirty");
+	ASSERT_EQ(m_b->bar_exposed, 1,
+		"per-monitor: drawbar(m_a) does not touch m_b bar_exposed");
+
+	/* Now draw m_b — should process its own dirty flags */
+	drawbar(m_b);
+	ASSERT_EQ(m_b->bar_exposed, 0,
+		"per-monitor: drawbar(m_b) processed m_b (bar_exposed cleared)");
+
+	selmon = saved;
+	mons = saved;
+	free(m_a->gap); free(m_b->gap);
+	free(m_a); free(m_b);
 }
 
 int
@@ -278,6 +344,8 @@ main(void)
 	selmon->gap = ecalloc(1, sizeof(Gap));
 	selmon->gap->gappx = 0;
 	selmon->barwin = 42;
+	selmon->bar_dirty_segments = DIRTY_STATUS | DIRTY_TAGS | DIRTY_TITLE;
+	selmon->bar_exposed = 1;
 
 	orig_selmon = selmon;
 
@@ -287,10 +355,10 @@ main(void)
 
 	/* --- Tests --- */
 	test_initial_state();
-	ASSERT_EQ(bar_exposed, 1, "bar_exposed initially 1 (first draw must copy)");
+	ASSERT_EQ(selmon->bar_exposed, 1, "selmon->bar_exposed initially 1 (first draw must copy)");
 
 	/* Reset after checking initial state */
-	bar_dirty_segments = 7;
+	selmon->bar_dirty_segments = 7;
 	test_drawbar_resets();
 	test_drawbar_early_return();
 
@@ -336,6 +404,9 @@ main(void)
 
 	restore_selmon();
 	test_bar_exposed_early_return_resets();
+
+	restore_selmon();
+	test_per_monitor_drawbar_isolation();
 
 	/* Report */
 	fprintf(stderr, "=== RESULTS ===\n");

@@ -441,7 +441,10 @@ test_expose_ignores_other(void)
 static void
 test_propertynotify_root_wmname(void)
 {
-	bar_dirty_segments = 0;
+	/* reset stext so updatestatus() sees a change and sets dirty */
+	stext[0] = '\0';
+	stext_len = 0;
+	selmon->bar_dirty_segments = 0;
 
 	XEvent ev;
 	memset(&ev, 0, sizeof ev);
@@ -450,14 +453,14 @@ test_propertynotify_root_wmname(void)
 
 	propertynotify(&ev);
 
-	ASSERT(bar_dirty_segments & DIRTY_STATUS, "propertynotify root XA_WM_NAME sets DIRTY_STATUS");
-	ASSERT(bar_dirty_segments & DIRTY_TITLE, "propertynotify root XA_WM_NAME sets DIRTY_TITLE");
+	ASSERT(selmon->bar_dirty_segments & DIRTY_STATUS, "propertynotify root XA_WM_NAME sets DIRTY_STATUS");
+	ASSERT(selmon->bar_dirty_segments & DIRTY_TITLE, "propertynotify root XA_WM_NAME sets DIRTY_TITLE");
 }
 
 static void
 test_propertynotify_propertydelete_ignored(void)
 {
-	bar_dirty_segments = 0;
+	selmon->bar_dirty_segments = 0;
 
 	XEvent ev;
 	memset(&ev, 0, sizeof ev);
@@ -467,7 +470,7 @@ test_propertynotify_propertydelete_ignored(void)
 
 	propertynotify(&ev);
 
-	ASSERT_EQ(bar_dirty_segments, 0, "propertynotify PropertyDelete returns early, no dirty set");
+	ASSERT_EQ(selmon->bar_dirty_segments, 0, "propertynotify PropertyDelete returns early, no dirty set");
 }
 
 static void
@@ -500,7 +503,7 @@ test_propertynotify_client_normal_hints(void)
 static void
 test_propertynotify_client_wm_hints(void)
 {
-	bar_dirty_segments = 0;
+	selmon->bar_dirty_segments = 0;
 
 	Client *c = ecalloc(1, sizeof(Client));
 	c->win = 44;
@@ -521,7 +524,7 @@ test_propertynotify_client_wm_hints(void)
 
 	propertynotify(&ev);
 
-	ASSERT(bar_dirty_segments & DIRTY_TAGS, "propertynotify XA_WM_HINTS sets DIRTY_TAGS");
+	ASSERT(selmon->bar_dirty_segments & DIRTY_TAGS, "propertynotify XA_WM_HINTS sets DIRTY_TAGS");
 	ASSERT_EQ(c->neverfocus, 0, "propertynotify XA_WM_HINTS calls updatewmhints, neverfocus=0");
 
 	selmon->clients = NULL;
@@ -532,7 +535,7 @@ test_propertynotify_client_wm_hints(void)
 static void
 test_propertynotify_client_wmname_selected(void)
 {
-	bar_dirty_segments = 0;
+	selmon->bar_dirty_segments = 0;
 
 	Client *c = ecalloc(1, sizeof(Client));
 	c->win = 45;
@@ -554,7 +557,7 @@ test_propertynotify_client_wmname_selected(void)
 	propertynotify(&ev);
 
 	ASSERT_EQ(strcmp(c->name, "broken"), 0, "propertynotify XA_WM_NAME calls updatetitle");
-	ASSERT(bar_dirty_segments & DIRTY_TITLE, "propertynotify XA_WM_NAME on sel sets DIRTY_TITLE");
+	ASSERT(selmon->bar_dirty_segments & DIRTY_TITLE, "propertynotify XA_WM_NAME on sel sets DIRTY_TITLE");
 
 	selmon->clients = NULL;
 	selmon->stack = NULL;
@@ -565,7 +568,7 @@ test_propertynotify_client_wmname_selected(void)
 static void
 test_propertynotify_client_wmname_not_selected(void)
 {
-	bar_dirty_segments = 0;
+	selmon->bar_dirty_segments = 0;
 
 	Client *c = ecalloc(1, sizeof(Client));
 	c->win = 46;
@@ -587,7 +590,7 @@ test_propertynotify_client_wmname_not_selected(void)
 	propertynotify(&ev);
 
 	ASSERT_EQ(strcmp(c->name, "broken"), 0, "propertynotify XA_WM_NAME on non-sel calls updatetitle");
-	ASSERT(!(bar_dirty_segments & DIRTY_TITLE),
+	ASSERT(!(selmon->bar_dirty_segments & DIRTY_TITLE),
 		"propertynotify XA_WM_NAME on non-sel does not set DIRTY_TITLE");
 
 	selmon->clients = NULL;
@@ -615,7 +618,7 @@ test_propertynotify_root_wmname_fullscreen_skip(void)
 	Client c = { .win = 1, .isfullscreen = 1 };
 	selmon->sel = &c;
 
-	bar_dirty_segments = 0;
+	selmon->bar_dirty_segments = 0;
 
 	XEvent ev;
 	memset(&ev, 0, sizeof ev);
@@ -624,7 +627,7 @@ test_propertynotify_root_wmname_fullscreen_skip(void)
 
 	propertynotify(&ev);
 
-	ASSERT_EQ(bar_dirty_segments, 0,
+	ASSERT_EQ(selmon->bar_dirty_segments, 0,
 		"propertynotify root XA_WM_NAME skipped when optimizefullscreen + fullscreen");
 
 	free(selmon->gap);
@@ -636,8 +639,10 @@ static void
 test_propertynotify_root_wmname_no_fullscreen_not_skipped(void)
 {
 	/* optimizefullscreen=1 but no fullscreen client -> updatestatus called */
+	/* reset stext so updatestatus() sees a change and sets dirty */
+	stext[0] = '\0';
 	selmon->sel = NULL;
-	bar_dirty_segments = 0;
+	selmon->bar_dirty_segments = 0;
 
 	XEvent ev;
 	memset(&ev, 0, sizeof ev);
@@ -646,7 +651,7 @@ test_propertynotify_root_wmname_no_fullscreen_not_skipped(void)
 
 	propertynotify(&ev);
 
-	ASSERT(bar_dirty_segments & DIRTY_STATUS,
+	ASSERT(selmon->bar_dirty_segments & DIRTY_STATUS,
 		"propertynotify root XA_WM_NAME not skipped when no fullscreen client");
 }
 
@@ -678,7 +683,7 @@ test_setfullscreen_enter(void)
 static void
 test_setfullscreen_exit(void)
 {
-	bar_dirty_segments = 0;
+	selmon->bar_dirty_segments = 0;
 
 	Client c;
 	memset(&c, 0, sizeof c);
@@ -701,9 +706,9 @@ test_setfullscreen_exit(void)
 	ASSERT_EQ(c.y, 200, "setfullscreen(0) restores old y");
 	ASSERT_EQ(c.w, 300, "setfullscreen(0) restores old w");
 	ASSERT_EQ(c.h, 400, "setfullscreen(0) restores old h");
-	ASSERT(bar_dirty_segments & DIRTY_STATUS, "setfullscreen(0) sets DIRTY_STATUS");
-	ASSERT(bar_dirty_segments & DIRTY_TAGS, "setfullscreen(0) sets DIRTY_TAGS");
-	ASSERT(bar_dirty_segments & DIRTY_TITLE, "setfullscreen(0) sets DIRTY_TITLE");
+	ASSERT(selmon->bar_dirty_segments & DIRTY_STATUS, "setfullscreen(0) sets DIRTY_STATUS");
+	ASSERT(selmon->bar_dirty_segments & DIRTY_TAGS, "setfullscreen(0) sets DIRTY_TAGS");
+	ASSERT(selmon->bar_dirty_segments & DIRTY_TITLE, "setfullscreen(0) sets DIRTY_TITLE");
 }
 
 static void

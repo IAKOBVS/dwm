@@ -11,10 +11,10 @@
  *   Rule    — auto-properties matched against class/instance/title
  *   Gap     — inner/outer gap state (isgap, realgap, gappx)
  *
- * Bar dirty-tracking (Phase 2-4 optimizations):
- *   bar_dirty_segments — bitmask (DIRTY_STATUS|DIRTY_TAGS|DIRTY_TITLE)
- *   bar_exposed        — flags when an Expose event invalidated the pixmap
- *   bar_draw_pending   — deferred draw coalesced at the event-loop tail
+ * Bar dirty-tracking (Phase 2-4 optimizations, per-monitor):
+ *   m->bar_dirty_segments — bitmask (DIRTY_STATUS|DIRTY_TAGS|DIRTY_TITLE)
+ *   m->bar_exposed        — flags when an Expose event invalidated the pixmap
+ *   bar_draw_pending      — deferred draw coalesced at the event-loop tail
  */
 
 #ifndef DWM_H
@@ -81,10 +81,10 @@ typedef struct {
 	const Arg arg;
 } Key;
 
-KeySym key_keysym_used;
-unsigned int key_mod_used;
-unsigned long button_button_used;
-unsigned int button_mask_used;
+static KeySym key_keysym_used;
+static unsigned int key_mod_used;
+static unsigned long button_button_used;
+static unsigned int button_mask_used;
 
 typedef struct {
 	const char *symbol;
@@ -117,6 +117,8 @@ struct Monitor {
 	Monitor *next;
 	Window barwin;
 	const Layout *lt[2];
+	int bar_dirty_segments;
+	int bar_exposed;
 };
 
 typedef struct {
@@ -243,6 +245,7 @@ static pid_t winpid(Window w);
 /* variables */
 static const char broken[] = "broken";
 static char stext[256];
+static size_t stext_len = 0;
 static int screen;
 static int sw, sh;           /* X display screen geometry width, height */
 static int bh;               /* bar height */
@@ -276,12 +279,10 @@ static Monitor *mons, *selmon;
 static Window root, wmcheckwin;
 
 static xcb_connection_t *xcon;
-/* bar_dirty_segments: bitmask tracking which bar segments have changed.
+/* bar_dirty_segments and bar_exposed are per-monitor fields in struct Monitor.
  * drawbar() skips unchanged segments and early-returns with pixmap copy when all clean. */
 #define DIRTY_STATUS 1
 #define DIRTY_TAGS   2
 #define DIRTY_TITLE  4
-static int bar_dirty_segments = 7;  /* all segments dirty initially */
-static int bar_exposed = 1;    /* barwin received expose since last draw — drw_map needed */
 
 #endif /* DWM_H */

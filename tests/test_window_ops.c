@@ -98,13 +98,13 @@ test_togglebar_toggles_showbar(void)
 static void
 test_togglebar_sets_dirty_segments(void)
 {
-	bar_dirty_segments = 0;
+	selmon->bar_dirty_segments = 0;
 	selmon->showbar = 1;
 
 	togglebar(NULL);
-	ASSERT(bar_dirty_segments & DIRTY_STATUS, "togglebar sets DIRTY_STATUS");
-	ASSERT(bar_dirty_segments & DIRTY_TAGS, "togglebar sets DIRTY_TAGS");
-	ASSERT(bar_dirty_segments & DIRTY_TITLE, "togglebar sets DIRTY_TITLE");
+	ASSERT(selmon->bar_dirty_segments & DIRTY_STATUS, "togglebar sets DIRTY_STATUS");
+	ASSERT(selmon->bar_dirty_segments & DIRTY_TAGS, "togglebar sets DIRTY_TAGS");
+	ASSERT(selmon->bar_dirty_segments & DIRTY_TITLE, "togglebar sets DIRTY_TITLE");
 }
 
 /* --- togglefloating --- */

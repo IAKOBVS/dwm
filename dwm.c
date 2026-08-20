@@ -227,7 +227,7 @@ swallow(Client *p, Client *c)
 
 	if (c->noswallow || c->isterminal)
 		return;
-	if (c->noswallow && !swallowfloating && c->isfloating)
+	if (!swallowfloating && c->isfloating)
 		return;
 
 	detach(c);
@@ -244,7 +244,7 @@ swallow(Client *p, Client *c)
 	c->win = w;
 	updatetitle(p);
 	/* parent adopted child's name; client list unchanged, tags untouched */
-	bar_dirty_segments |= DIRTY_TITLE;
+	selmon->bar_dirty_segments |= DIRTY_TITLE;
 	XMoveResizeWindow(dpy, p->win, p->x, p->y, p->w, p->h);
 	arrange(p->mon);
 	configure(p);
@@ -548,6 +548,8 @@ createmon(void)
 	m->lt[0] = &layouts[0];
 	m->lt[1] = &layouts[1 % LENGTH(layouts)];
 	strncpy(m->ltsymbol, layouts[0].symbol, sizeof m->ltsymbol);
+	m->bar_dirty_segments = DIRTY_STATUS | DIRTY_TAGS | DIRTY_TITLE;
+	m->bar_exposed = 1;
 	return m;
 }
 
@@ -617,24 +619,23 @@ drawbar(Monitor *m)
 	if (optimizefullscreen && m->sel && m->sel->isfullscreen)
 		return;
 	/* skip full re-render when content hasn't changed (expose/restack trivially copy pixmap).
-	 * restricted to selmon only — non-selmon monitors may be dirty in the global flag
-	 * but lose their segments after selmon resets it in drawbars(). */
+	 * Each monitor tracks its own dirty segments independently. */
 	/* skip drw_map when window wasn't exposed since last draw — pixmap still matches screen */
-	if (!bar_dirty_segments && m == selmon) {
-		if (bar_exposed)
+	if (!m->bar_dirty_segments) {
+		if (m->bar_exposed)
 			drw_map(drw, m->barwin, 0, 0, m->ww, bh);
-		bar_exposed = 0;
+		m->bar_exposed = 0;
 		return;
 	}
 
 	/* draw status first so it can be overdrawn by tags later */
 	if (m == selmon) { /* status is only drawn on selected monitor */
-		if (bar_dirty_segments & DIRTY_STATUS) {
+		if (m->bar_dirty_segments & DIRTY_STATUS) {
 			drw_setscheme(drw, scheme[SchemeNorm]);
 			tw = TEXTW(stext) - lrpad + 2; /* 2px right padding */
 			drw_text(drw, m->ww - tw, 0, tw, bh, 0, stext, 0);
 		}
-		if (bar_dirty_segments & (DIRTY_STATUS | DIRTY_TITLE))
+		if (m->bar_dirty_segments & (DIRTY_STATUS | DIRTY_TITLE))
 			tw = TEXTW(stext) - lrpad + 2; /* needed for title width calculation */
 	}
 
@@ -646,7 +647,7 @@ drawbar(Monitor *m)
 	x = 0;
 	for (i = 0; i < LENGTH(tags); i++) {
 		w = TEXTW(tags[i]);
-		if (bar_dirty_segments & DIRTY_TAGS) {
+		if (m->bar_dirty_segments & DIRTY_TAGS) {
 			drw_setscheme(drw, scheme[m->tagset[m->seltags] & 1 << i ? SchemeSel : SchemeNorm]);
 			drw_text(drw, x, 0, w, bh, lrpad / 2, tags[i], urg & 1 << i);
 			if (occ & 1 << i)
@@ -661,7 +662,7 @@ drawbar(Monitor *m)
 	/* x = drw_text(drw, x, 0, w, bh, lrpad / 2, m->ltsymbol, 0); */
 
 	if ((w = m->ww - tw - x) > bh) {
-		if (bar_dirty_segments & DIRTY_TITLE) {
+		if (m->bar_dirty_segments & DIRTY_TITLE) {
 			if (m->sel) {
 				drw_setscheme(drw, scheme[m == selmon ? SchemeSel : SchemeNorm]);
 				drw_text(drw, x, 0, w, bh, lrpad / 2, m->sel->name, 0);
@@ -674,10 +675,10 @@ drawbar(Monitor *m)
 		}
 	}
 	drw_map(drw, m->barwin, 0, 0, m->ww, bh);
-	bar_exposed = 0;             /* pixmap now matches screen; no copy needed until next expose */
+	m->bar_exposed = 0;             /* pixmap now matches screen; no copy needed until next expose */
 	/* content now matches pixmap; skip next expose/restack */
 #ifndef DWM_TEST
-	bar_dirty_segments = 0;
+	m->bar_dirty_segments = 0;
 #endif
 }
 
@@ -716,7 +717,7 @@ expose(XEvent *e)
 	XExposeEvent *ev = &e->xexpose;
 
 	if (ev->count == 0 && (m = wintomon(ev->window))) {
-		bar_exposed = 1;         /* window content lost; pixmap copy required */
+		m->bar_exposed = 1;         /* window content lost; pixmap copy required */
 		drawbar(m);              /* always draw immediately on expose — no deferral */
 	}
 }
@@ -744,7 +745,7 @@ focus(Client *c)
 	}
 	/* only dirty bar if focus actually changed — skip redundant redraws */
 	if (c != selmon->sel)
-		bar_dirty_segments |= DIRTY_TITLE | DIRTY_TAGS;
+		selmon->bar_dirty_segments |= DIRTY_TITLE | DIRTY_TAGS;
 	selmon->sel = c;
 	bar_draw_pending = 1;
 }
@@ -862,6 +863,7 @@ gettextprop(Window w, Atom atom, char *text, unsigned int size)
 	if (!text || size == 0)
 		return 0;
 	text[0] = '\0';
+	/* store strlen from name.nitems */
 	if (!XGetTextProperty(dpy, w, &name, atom) || !name.nitems)
 		return 0;
 	if (name.encoding == XA_STRING) {
@@ -1245,7 +1247,7 @@ propertynotify(XEvent *e)
 		case XA_WM_HINTS:
 			updatewmhints(c);
 		/* urgency indicators in tag rects changed */
-		bar_dirty_segments |= DIRTY_TAGS;
+		selmon->bar_dirty_segments |= DIRTY_TAGS;
 		bar_draw_pending = 1;    /* defer to event-loop tail for coalescing */
 			break;
 		}
@@ -1253,7 +1255,7 @@ propertynotify(XEvent *e)
 			updatetitle(c);
 			if (c == c->mon->sel) {
 				/* selected client's window title changed */
-				bar_dirty_segments |= DIRTY_TITLE;
+				selmon->bar_dirty_segments |= DIRTY_TITLE;
 				bar_draw_pending = 1;    /* defer to event-loop tail */
 			}
 		}
@@ -1553,7 +1555,7 @@ setfullscreen(Client *c, int fullscreen)
 		resizeclient(c, c->x, c->y, c->w, c->h);
 		/* refresh status text (was skipped during fullscreen) and force full redraw */
 		updatestatus();
-		bar_dirty_segments = DIRTY_STATUS | DIRTY_TAGS | DIRTY_TITLE;
+		selmon->bar_dirty_segments = DIRTY_STATUS | DIRTY_TAGS | DIRTY_TITLE;
 		arrange(c->mon);
 	}
 }
@@ -1598,7 +1600,7 @@ setlayout(const Arg *arg)
 	strncpy(selmon->ltsymbol, selmon->lt[selmon->sellt]->symbol, sizeof selmon->ltsymbol);
 	/* layout symbol in tag area changed — only dirty if layout actually changed */
 	if (selmon->lt[selmon->sellt] != old)
-		bar_dirty_segments |= DIRTY_TAGS;
+		selmon->bar_dirty_segments |= DIRTY_TAGS;
 	if (selmon->sel)
 		arrange(selmon);
 	else
@@ -1815,7 +1817,7 @@ togglebar(const Arg *arg)
 	updatebarpos(selmon);
 	XMoveResizeWindow(dpy, selmon->barwin, selmon->wx, selmon->by, selmon->ww, bh);
 	/* bar shown/hidden — all segments stale */
-	bar_dirty_segments |= DIRTY_STATUS | DIRTY_TAGS | DIRTY_TITLE;
+	selmon->bar_dirty_segments |= DIRTY_STATUS | DIRTY_TAGS | DIRTY_TITLE;
 	arrange(selmon);
 }
 
@@ -2134,12 +2136,14 @@ updatestatus(void)
 	if (!gettextprop(root, XA_WM_NAME, newstext, sizeof(newstext)))
 		strcpy(newstext, "dwm-"VERSION);
 	/* status unchanged — skip dirty + draw chain */
-	if (strcmp(stext, newstext) == 0)
+	const size_t newlen = strlen(newstext);
+	if (newlen == stext_len && memcmp(stext, newstext, newlen) == 0)
 		return;
-	strncpy(stext, newstext, sizeof(stext) - 1);
-	stext[sizeof(stext) - 1] = '\0';
+	memcpy(stext, newstext, newlen);
+	stext[newlen] = '\0';
+	stext_len = newlen;
 	/* status changed; title boundary may shift if width differs */
-	bar_dirty_segments |= DIRTY_STATUS | DIRTY_TITLE;
+	selmon->bar_dirty_segments |= DIRTY_STATUS | DIRTY_TITLE;
 	bar_draw_pending = 1;            /* coalesce with other pending draws */
 }
 
@@ -2148,7 +2152,7 @@ updatetitle(Client *c)
 {
 	if (!gettextprop(c->win, netatom[NetWMName], c->name, sizeof c->name))
 		gettextprop(c->win, XA_WM_NAME, c->name, sizeof c->name);
-	if (c->name[0] == '\0') /* hack to mark broken clients */
+	if (unlikely(c->name[0] == '\0')) /* hack to mark broken clients */
 		strcpy(c->name, broken);
 }
 
