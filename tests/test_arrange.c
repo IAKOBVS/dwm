@@ -58,8 +58,7 @@ make_monitor(int num)
 	m->mw = m->ww = 1920;
 	m->mh = m->wh = 1080;
 	m->lt[0] = m->lt[1] = &layouts[0];
-	m->gap = ecalloc(1, sizeof(Gap));
-	m->gap->isgap = 1; m->gap->realgap = 17; m->gap->gappx = 17;
+	m->gap.isgap = 1; m->gap.realgap = 17; m->gap.gappx = 17;
 	strncpy(m->ltsymbol, layouts[0].symbol, sizeof m->ltsymbol);
 	m->sel = NULL;
 	m->clients = NULL;
@@ -71,7 +70,6 @@ make_monitor(int num)
 static void
 cleanup_monitor(Monitor *m)
 {
-	free(m->gap);
 	free(m);
 }
 
@@ -133,12 +131,10 @@ test_arrangemon_tile(void)
 	m.mx = m.wx = 0; m.my = m.wy = 0;
 	m.mw = m.ww = 1920; m.mh = m.wh = 1080;
 	m.lt[0] = &layouts[0]; m.lt[1] = &layouts[0]; m.sellt = 0;
-	m.gap = ecalloc(1, sizeof(Gap));
-	m.gap->isgap = 1; m.gap->realgap = 17; m.gap->gappx = 17;
+	m.gap.isgap = 1; m.gap.realgap = 17; m.gap.gappx = 17;
 
 	arrangemon(&m);
 	ASSERT(strcmp(m.ltsymbol, "[]=") == 0, "arrangemon tile sets ltsymbol to tile symbol");
-	free(m.gap);
 }
 
 static void
@@ -151,12 +147,10 @@ test_arrangemon_floating(void)
 	m.mx = m.wx = 0; m.my = m.wy = 0;
 	m.mw = m.ww = 1920; m.mh = m.wh = 1080;
 	m.lt[0] = &layouts[1]; m.lt[1] = &layouts[1]; m.sellt = 0;
-	m.gap = ecalloc(1, sizeof(Gap));
-	m.gap->isgap = 1; m.gap->realgap = 17; m.gap->gappx = 17;
+	m.gap.isgap = 1; m.gap.realgap = 17; m.gap.gappx = 17;
 
 	arrangemon(&m);
 	ASSERT(strcmp(m.ltsymbol, "><>") == 0, "arrangemon floating sets ltsymbol to floating symbol");
-	free(m.gap);
 }
 
 /* --- tile with clients --- */
@@ -171,19 +165,17 @@ test_tile_one_client(void)
 	m.mx = m.wx = 0; m.my = m.wy = 0;
 	m.mw = m.ww = 1920; m.mh = m.wh = 1080;
 	m.lt[0] = &layouts[0]; m.lt[1] = &layouts[0]; m.sellt = 0;
-	m.gap = ecalloc(1, sizeof(Gap));
-	m.gap->isgap = 1; m.gap->realgap = 17; m.gap->gappx = 17;
+	m.gap.isgap = 1; m.gap.realgap = 17; m.gap.gappx = 17;
 
 	Client c1 = { .win = 1, .mon = &m, .tags = 1, .bw = 0 };
 	m.clients = &c1;
 	m.stack = &c1;
 
 	tile(&m);
-	ASSERT_EQ(c1.x, m.wx + m.gap->gappx, "tile one client: x = wx + gappx");
-	ASSERT_EQ(c1.y, m.wy + m.gap->gappx, "tile one client: y = wy + gappx");
-	ASSERT_EQ(c1.w, m.mw - 2 * m.gap->gappx - 2 * c1.bw, "tile one client: w = mw - 2*gappx");
-	ASSERT_EQ(c1.h, m.mh - 2 * m.gap->gappx - 2 * c1.bw, "tile one client: h = mh - 2*gappx");
-	free(m.gap);
+	ASSERT_EQ(c1.x, m.wx + m.gap.gappx, "tile one client: x = wx + gappx");
+	ASSERT_EQ(c1.y, m.wy + m.gap.gappx, "tile one client: y = wy + gappx");
+	ASSERT_EQ(c1.w, m.mw - 2 * m.gap.gappx - 2 * c1.bw, "tile one client: w = mw - 2*gappx");
+	ASSERT_EQ(c1.h, m.mh - 2 * m.gap.gappx - 2 * c1.bw, "tile one client: h = mh - 2*gappx");
 }
 
 static void
@@ -196,8 +188,7 @@ test_tile_two_clients_master_stack(void)
 	m.mx = m.wx = 0; m.my = m.wy = 0;
 	m.mw = m.ww = 1920; m.mh = m.wh = 1080;
 	m.lt[0] = &layouts[0]; m.lt[1] = &layouts[0]; m.sellt = 0;
-	m.gap = ecalloc(1, sizeof(Gap));
-	m.gap->isgap = 1; m.gap->realgap = 17; m.gap->gappx = 17;
+	m.gap.isgap = 1; m.gap.realgap = 17; m.gap.gappx = 17;
 
 	Client c1 = { .win = 1, .mon = &m, .tags = 1, .bw = 0 };
 	Client c2 = { .win = 2, .mon = &m, .tags = 1, .bw = 0 };
@@ -210,12 +201,11 @@ test_tile_two_clients_master_stack(void)
 	tile(&m);
 	/* master area width = mw * mfact = 1920 * 0.55 = 1056 */
 	int mw = m.ww * m.mfact;
-	ASSERT_EQ(c2.x, m.wx + m.gap->gappx, "tile two: master x = wx + gappx");
-	ASSERT_EQ(c2.w, mw - 2 * c2.bw - m.gap->gappx, "tile two: master w = mw - gappx");
+	ASSERT_EQ(c2.x, m.wx + m.gap.gappx, "tile two: master x = wx + gappx");
+	ASSERT_EQ(c2.w, mw - 2 * c2.bw - m.gap.gappx, "tile two: master w = mw - gappx");
 	/* stack client starts to the right of master */
-	ASSERT_EQ(c1.x, m.wx + mw + m.gap->gappx, "tile two: stack x = wx + mw + gappx");
-	ASSERT_EQ(c1.w, m.ww - mw - 2 * c1.bw - 2 * m.gap->gappx, "tile two: stack w = ww - mw - 2*gappx");
-	free(m.gap);
+	ASSERT_EQ(c1.x, m.wx + mw + m.gap.gappx, "tile two: stack x = wx + mw + gappx");
+	ASSERT_EQ(c1.w, m.ww - mw - 2 * c1.bw - 2 * m.gap.gappx, "tile two: stack w = ww - mw - 2*gappx");
 }
 
 static void
@@ -228,17 +218,15 @@ test_tile_nmaster_zero(void)
 	m.mx = m.wx = 0; m.my = m.wy = 0;
 	m.mw = m.ww = 1920; m.mh = m.wh = 1080;
 	m.lt[0] = &layouts[0]; m.lt[1] = &layouts[0]; m.sellt = 0;
-	m.gap = ecalloc(1, sizeof(Gap));
-	m.gap->isgap = 1; m.gap->realgap = 17; m.gap->gappx = 17;
+	m.gap.isgap = 1; m.gap.realgap = 17; m.gap.gappx = 17;
 
 	Client c1 = { .win = 1, .mon = &m, .tags = 1, .bw = 0 };
 	m.clients = &c1;
 	m.stack = &c1;
 
 	tile(&m);
-	ASSERT_EQ(c1.x, m.wx + m.gap->gappx, "tile nmaster=0: client x goes to stack area");
-	ASSERT_EQ(c1.y, m.wy + m.gap->gappx, "tile nmaster=0: client y = wy + gappx");
-	free(m.gap);
+	ASSERT_EQ(c1.x, m.wx + m.gap.gappx, "tile nmaster=0: client x goes to stack area");
+	ASSERT_EQ(c1.y, m.wy + m.gap.gappx, "tile nmaster=0: client y = wy + gappx");
 }
 
 static void
@@ -251,8 +239,7 @@ test_tile_nmaster_exceeds_n(void)
 	m.mx = m.wx = 0; m.my = m.wy = 0;
 	m.mw = m.ww = 1920; m.mh = m.wh = 1080;
 	m.lt[0] = &layouts[0]; m.lt[1] = &layouts[0]; m.sellt = 0;
-	m.gap = ecalloc(1, sizeof(Gap));
-	m.gap->isgap = 1; m.gap->realgap = 17; m.gap->gappx = 17;
+	m.gap.isgap = 1; m.gap.realgap = 17; m.gap.gappx = 17;
 
 	Client c1 = { .win = 1, .mon = &m, .tags = 1, .bw = 0 };
 	m.clients = &c1;
@@ -260,10 +247,9 @@ test_tile_nmaster_exceeds_n(void)
 
 	tile(&m);
 	/* n=1, nmaster=5, so n <= nmaster -> mw = ww - gappx = 1903 */
-	int mw = m.ww - m.gap->gappx;
-	ASSERT_EQ(c1.x, m.wx + m.gap->gappx, "tile nmaster > n: client in master area");
-	ASSERT_EQ(c1.w, mw - 2 * c1.bw - m.gap->gappx, "tile nmaster > n: full-width");
-	free(m.gap);
+	int mw = m.ww - m.gap.gappx;
+	ASSERT_EQ(c1.x, m.wx + m.gap.gappx, "tile nmaster > n: client in master area");
+	ASSERT_EQ(c1.w, mw - 2 * c1.bw - m.gap.gappx, "tile nmaster > n: full-width");
 }
 
 /* --- monocle with clients --- */
@@ -278,8 +264,7 @@ test_monocle_one_client(void)
 	m.mx = m.wx = 0; m.my = m.wy = 0;
 	m.mw = m.ww = 1920; m.mh = m.wh = 1080;
 	m.lt[0] = &layouts[1]; m.lt[1] = &layouts[1]; m.sellt = 0;
-	m.gap = ecalloc(1, sizeof(Gap));
-	m.gap->isgap = 1; m.gap->realgap = 17; m.gap->gappx = 17;
+	m.gap.isgap = 1; m.gap.realgap = 17; m.gap.gappx = 17;
 
 	Client c1 = { .win = 1, .mon = &m, .tags = 1, .bw = 0, .w = 100, .h = 100 };
 	m.clients = &c1;
@@ -290,7 +275,6 @@ test_monocle_one_client(void)
 	ASSERT_EQ(c1.y, m.wy, "monocle: client y = wy");
 	ASSERT_EQ(c1.w, m.ww - 2 * c1.bw, "monocle: client w = ww - 2*bw");
 	ASSERT_EQ(c1.h, m.wh - 2 * c1.bw, "monocle: client h = wh - 2*bw");
-	free(m.gap);
 }
 
 static void
@@ -303,7 +287,6 @@ test_monocle_two_clients_count(void)
 	m.mx = m.wx = 0; m.my = m.wy = 0;
 	m.mw = m.ww = 1920; m.mh = m.wh = 1080;
 	m.lt[0] = &layouts[1]; m.lt[1] = &layouts[1]; m.sellt = 0;
-	m.gap = ecalloc(1, sizeof(Gap));
 
 	Client c1 = { .win = 1, .mon = &m, .tags = 1, .bw = 0 };
 	Client c2 = { .win = 2, .mon = &m, .tags = 1, .bw = 0 };
@@ -312,7 +295,6 @@ test_monocle_two_clients_count(void)
 
 	monocle(&m);
 	ASSERT(strcmp(m.ltsymbol, "[2]") == 0, "monocle two clients shows [2]");
-	free(m.gap);
 }
 
 /* --- resize / resizeclient --- */
@@ -397,14 +379,12 @@ test_showhide_visible(void)
 	memset(&m, 0, sizeof m);
 	m.tagset[0] = 1; m.seltags = 0;
 	m.lt[0] = &layouts[0]; m.lt[1] = &layouts[0]; m.sellt = 0;
-	m.gap = ecalloc(1, sizeof(Gap));
 
 	Client c = { .win = 1, .mon = &m, .tags = 1 };
 	c.snext = NULL;
 
 	showhide(&c);
 	ASSERT(1, "showhide visible client does not crash");
-	free(m.gap);
 }
 
 static void
@@ -414,7 +394,6 @@ test_showhide_invisible(void)
 	memset(&m, 0, sizeof m);
 	m.tagset[0] = 1; m.seltags = 0;
 	m.lt[0] = &layouts[0]; m.lt[1] = &layouts[0]; m.sellt = 0;
-	m.gap = ecalloc(1, sizeof(Gap));
 
 	Client c = { .win = 1, .mon = &m, .tags = 1 };
 	c.tags = 0;
@@ -422,7 +401,6 @@ test_showhide_invisible(void)
 
 	showhide(&c);
 	ASSERT(1, "showhide invisible client does not crash");
-	free(m.gap);
 }
 
 /* --- focus --- */
@@ -510,10 +488,9 @@ main(void)
 	selmon->mh = selmon->wh = 1080;
 	selmon->lt[0] = selmon->lt[1] = &layouts[0];
 	strncpy(selmon->ltsymbol, layouts[0].symbol, sizeof selmon->ltsymbol);
-	selmon->gap = ecalloc(1, sizeof(Gap));
-	selmon->gap->isgap = 1;
-	selmon->gap->realgap = 17;
-	selmon->gap->gappx = 17;
+	selmon->gap.isgap = 1;
+	selmon->gap.realgap = 17;
+	selmon->gap.gappx = 17;
 
 	scheme = ecalloc(2, sizeof(Clr *));
 	for (i = SchemeNorm; i <= SchemeSel; i++)

@@ -202,7 +202,7 @@ arrange(Monitor *m)
 void
 arrangemon(Monitor *m)
 {
-	strncpy(m->ltsymbol, m->lt[m->sellt]->symbol, sizeof m->ltsymbol);
+	stpncpy_len(m->ltsymbol, sizeof m->ltsymbol, m->lt[m->sellt]->symbol, strlen(m->lt[m->sellt]->symbol));
 	if (m->lt[m->sellt]->arrange)
 		m->lt[m->sellt]->arrange(m);
 }
@@ -546,7 +546,7 @@ createmon(void)
 	gap_copy(&m->gap, &default_gap);
 	m->lt[0] = &layouts[0];
 	m->lt[1] = &layouts[1 % LENGTH(layouts)];
-	strncpy(m->ltsymbol, layouts[0].symbol, sizeof m->ltsymbol);
+	stpncpy_len(m->ltsymbol, sizeof m->ltsymbol, layouts[0].symbol, strlen(layouts[0].symbol));
 	m->bar_dirty_segments = DIRTY_STATUS | DIRTY_TAGS | DIRTY_TITLE;
 	m->bar_exposed = 1;
 	return m;
@@ -840,8 +840,8 @@ getstate(Window w)
 	unsigned long n, extra;
 	Atom real;
 
-	if (XGetWindowProperty(dpy, w, wmatom[WMState], 0L, 2L, False, wmatom[WMState],
-		&real, &format, &n, &extra, (unsigned char **)&p) != Success)
+	if (unlikely(XGetWindowProperty(dpy, w, wmatom[WMState], 0L, 2L, False, wmatom[WMState],
+		&real, &format, &n, &extra, (unsigned char **)&p) != Success))
 		return -1;
 	if (n != 0)
 		result = *p;
@@ -851,29 +851,31 @@ getstate(Window w)
 
 /* Fetch a text property from window w into the given buffer.
  * Handles XA_STRING and compound-text (Xmb) encoding.
- * Returns 1 on success (text filled), 0 on failure. */
-int
+ * Returns string length on success, 0 on failure. */
+size_t
 gettextprop(Window w, Atom atom, char *text, unsigned int size)
 {
 	char **list = NULL;
 	int n;
 	XTextProperty name;
+	size_t len;
 
 	if (!text || size == 0)
 		return 0;
 	text[0] = '\0';
-	/* store strlen from name.nitems */
 	if (!XGetTextProperty(dpy, w, &name, atom) || !name.nitems)
 		return 0;
 	if (name.encoding == XA_STRING) {
-		strncpy(text, (char *)name.value, size - 1);
+		len = stpncpy_len(text, size, (char *)name.value, name.nitems) - text;
 	} else if (XmbTextPropertyToTextList(dpy, &name, &list, &n) >= Success && n > 0 && *list) {
-		strncpy(text, *list, size - 1);
+		len = stpncpy_len(text, size, *list, strlen(*list)) - text;
 		XFreeStringList(list);
+	} else {
+		XFree(name.value);
+		return 0;
 	}
-	text[size - 1] = '\0';
 	XFree(name.value);
-	return 1;
+	return len;
 }
 
 /* Grab/release mouse buttons for a client window.
@@ -917,7 +919,7 @@ grabkeys(void)
 		XUngrabKey(dpy, AnyKey, AnyModifier, root);
 		XDisplayKeycodes(dpy, &start, &end);
 		syms = XGetKeyboardMapping(dpy, start, end - start + 1, &skip);
-		if (!syms)
+		if (unlikely(!syms))
 			return;
 		for (k = start; k <= end; k++)
 			for (i = 0; i < LENGTH(keys); i++) {
@@ -986,7 +988,7 @@ killclient(const Arg *arg)
 {
 	if (!selmon->sel)
 		return;
-	if (!sendevent(selmon->sel, wmatom[WMDelete])) {
+	if (unlikely(!sendevent(selmon->sel, wmatom[WMDelete]))) {
 		XGrabServer(dpy);
 		XSetErrorHandler(xerrordummy);
 		XSetCloseDownMode(dpy, DestroyAll);
@@ -1087,7 +1089,9 @@ maprequest(XEvent *e)
 	static XWindowAttributes wa;
 	XMapRequestEvent *ev = &e->xmaprequest;
 
-	if (!XGetWindowAttributes(dpy, ev->window, &wa) || wa.override_redirect)
+	if (unlikely(!XGetWindowAttributes(dpy, ev->window, &wa)))
+		return;
+	if (wa.override_redirect)
 		return;
 	if (!wintoclient(ev->window))
 		manage(ev->window, &wa);
@@ -1152,8 +1156,8 @@ movemouse(const Arg *arg)
 	restack(selmon);
 	ocx = c->x;
 	ocy = c->y;
-	if (XGrabPointer(dpy, root, False, MOUSEMASK, GrabModeAsync, GrabModeAsync,
-		None, cursor[CurMove]->cursor, CurrentTime) != GrabSuccess)
+	if (unlikely(XGrabPointer(dpy, root, False, MOUSEMASK, GrabModeAsync, GrabModeAsync,
+		None, cursor[CurMove]->cursor, CurrentTime) != GrabSuccess))
 		return;
 	if (!getrootptr(&x, &y))
 		return;
@@ -1326,8 +1330,8 @@ resizemouse(const Arg *arg)
 	restack(selmon);
 	ocx = c->x;
 	ocy = c->y;
-	if (XGrabPointer(dpy, root, False, MOUSEMASK, GrabModeAsync, GrabModeAsync,
-		None, cursor[CurResize]->cursor, CurrentTime) != GrabSuccess)
+	if (unlikely(XGrabPointer(dpy, root, False, MOUSEMASK, GrabModeAsync, GrabModeAsync,
+		None, cursor[CurResize]->cursor, CurrentTime) != GrabSuccess))
 		return;
 	XWarpPointer(dpy, None, c->win, 0, 0, 0, 0, c->w + c->bw - 1, c->h + c->bw - 1);
 	do {
@@ -1583,11 +1587,13 @@ setgaps(const Arg *arg)
 		case GAP_RESET:
 			gap_copy(p, &default_gap);
 			break;
-		default:
-			p->realgap += arg->i;
+	default:
+		{
+			int newgap = (int)p->realgap + arg->i;
+			p->realgap = newgap > 0 ? newgap : 0;
 			p->isgap = 1;
+		}
 	}
-	p->realgap = MAX(p->realgap, 0);
 	p->gappx = p->realgap * p->isgap;
 	arrange(selmon);
 }
@@ -1600,7 +1606,7 @@ setlayout(const Arg *arg)
 		selmon->sellt ^= 1;
 	if (arg && arg->v)
 		selmon->lt[selmon->sellt] = (Layout *)arg->v;
-	strncpy(selmon->ltsymbol, selmon->lt[selmon->sellt]->symbol, sizeof selmon->ltsymbol);
+	stpncpy_len(selmon->ltsymbol, sizeof selmon->ltsymbol, selmon->lt[selmon->sellt]->symbol, strlen(selmon->lt[selmon->sellt]->symbol));
 	/* layout symbol in tag area changed — only dirty if layout actually changed */
 	if (selmon->lt[selmon->sellt] != old)
 		selmon->bar_dirty_segments |= DIRTY_TAGS;
@@ -1714,7 +1720,7 @@ seturgent(Client *c, int urg)
 	XWMHints *wmh;
 
 	c->isurgent = urg;
-	if (!(wmh = XGetWMHints(dpy, c->win)))
+	if (unlikely(!(wmh = XGetWMHints(dpy, c->win))))
 		return;
 	wmh->flags = urg ? (wmh->flags | XUrgencyHint) : (wmh->flags & ~XUrgencyHint);
 	XSetWMHints(dpy, c->win, wmh);
@@ -2134,17 +2140,18 @@ void
 updatestatus(void)
 {
 	char newstext[sizeof(stext)];
+	size_t newlen;
 	/* skip when fullscreen - bar is frozen, status would never be drawn */
 	if (optimizefullscreen && selmon->sel && selmon->sel->isfullscreen)
 		return;
-	if (!gettextprop(root, XA_WM_NAME, newstext, sizeof(newstext)))
-		strcpy(newstext, "dwm-"VERSION);
+	if (!(newlen = gettextprop(root, XA_WM_NAME, newstext, sizeof(newstext)))) {
+		stpcpy_len(newstext, "dwm-"VERSION, sizeof("dwm-"VERSION) - 1);
+		newlen = sizeof("dwm-"VERSION) - 1;
+	}
 	/* status unchanged — skip dirty + draw chain */
-	const size_t newlen = strlen(newstext);
 	if (newlen == stext_len && memcmp(stext, newstext, newlen) == 0)
 		return;
-	memcpy(stext, newstext, newlen);
-	stext[newlen] = '\0';
+	stpcpy_len(stext, newstext, newlen);
 	stext_len = newlen;
 	/* status changed; title boundary may shift if width differs */
 	selmon->bar_dirty_segments |= DIRTY_STATUS | DIRTY_TITLE;
@@ -2157,7 +2164,7 @@ updatetitle(Client *c)
 	if (!gettextprop(c->win, netatom[NetWMName], c->name, sizeof c->name))
 		gettextprop(c->win, XA_WM_NAME, c->name, sizeof c->name);
 	if (unlikely(c->name[0] == '\0')) /* hack to mark broken clients */
-		strcpy(c->name, broken);
+		stpcpy_len(c->name, broken, sizeof(broken));
 }
 
 void
@@ -2219,7 +2226,7 @@ winpid(Window w)
 	xcb_res_query_client_ids_cookie_t c = xcb_res_query_client_ids(xcon, 1, &spec);
 	xcb_res_query_client_ids_reply_t *r = xcb_res_query_client_ids_reply(xcon, c, &e);
 
-	if (!r)
+	if (unlikely(!r))
 		return (pid_t)0;
 
 	xcb_res_client_id_value_iterator_t i = xcb_res_query_client_ids_ids_iterator(r);
@@ -2267,7 +2274,7 @@ getparentprocess(pid_t p)
 	char buf[256];
 	snprintf(buf, sizeof(buf) - 1, "/proc/%u/stat", (unsigned)p);
 
-	if (!(f = fopen(buf, "r")))
+	if (unlikely(!(f = fopen(buf, "r"))))
 		return 0;
 
 	fscanf(f, "%*u %*s %*c %u", &v);
@@ -2280,7 +2287,7 @@ getparentprocess(pid_t p)
 	struct kinfo_proc *kp;
 
 	kd = kvm_openfiles(NULL, NULL, NULL, KVM_NO_FILES, NULL);
-	if (!kd)
+	if (unlikely(!kd))
 		return 0;
 
 	kp = kvm_getprocs(kd, KERN_PROC_PID, p, sizeof(*kp), &n);

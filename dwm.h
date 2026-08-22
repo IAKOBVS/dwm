@@ -21,6 +21,7 @@
 #define DWM_H 1
 
 #include <sys/types.h>
+#include <string.h>
 #include <X11/Xlib.h>
 #include <X11/Xlib-xcb.h>
 #include <X11/Xft/Xft.h>
@@ -29,6 +30,35 @@
 
 #define GAP_TOGGLE 100
 #define GAP_RESET  0
+
+/* safe string helpers — memcpy + NUL-terminate with known source length */
+static inline void
+strcpy_len(char *dst, const char *src, size_t src_len)
+{
+	memcpy(dst, src, src_len);
+	dst[src_len] = '\0';
+}
+
+/* like strcpy_len but returns pointer to the NUL terminator */
+static inline char *
+stpcpy_len(char *dst, const char *src, size_t src_len)
+{
+	memcpy(dst, src, src_len);
+	dst[src_len] = '\0';
+	return dst + src_len;
+}
+
+/* bounded copy — like strncpy but with explicit source length, no padding */
+static inline char *
+stpncpy_len(char *dst, size_t dstsize, const char *src, size_t src_len)
+{
+	size_t len = src_len;
+	if (len >= dstsize)
+		len = dstsize - 1;
+	memcpy(dst, src, len);
+	dst[len] = '\0';
+	return dst + len;
+}
 
 /* declarations */
 enum { CurNormal, CurResize, CurMove, CurLast }; /* cursor */
@@ -105,20 +135,20 @@ struct Monitor {
 	int by;               /* bar geometry */
 	int mx, my, mw, mh;   /* screen size */
 	int wx, wy, ww, wh;   /* window area  */
-	Gap gap;
+	int bar_dirty_segments;
 	unsigned int seltags;
 	unsigned int sellt;
 	unsigned int tagset[2];
 	unsigned char showbar;
 	unsigned char topbar;
+	unsigned char bar_exposed;
+	Gap gap;
 	Client *clients;
 	Client *sel;
 	Client *stack;
 	Monitor *next;
 	Window barwin;
 	const Layout *lt[2];
-	int bar_dirty_segments;
-	unsigned char bar_exposed;
 };
 
 typedef struct {
@@ -168,7 +198,7 @@ static void gap_copy(Gap *to, const Gap *from);
 static Atom getatomprop(Client *c, Atom prop);
 static int getrootptr(int *x, int *y);
 static long getstate(Window w);
-static int gettextprop(Window w, Atom atom, char *text, unsigned int size);
+static size_t gettextprop(Window w, Atom atom, char *text, unsigned int size);
 static void grabbuttons(Client *c, int focused);
 static void grabkeys(void);
 static void incnmaster(const Arg *arg);
