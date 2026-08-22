@@ -1585,12 +1585,10 @@ setgaps(const Arg *arg)
 			gap_copy(p, &default_gap);
 			break;
 		default:
-			if (arg->i < 0 && (unsigned short)(-arg->i) > p->realgap)
-				p->realgap = 0;
-			else
-				p->realgap += arg->i;
+			p->realgap += arg->i;
 			p->isgap = 1;
 	}
+	p->realgap = MAX(p->realgap, 0);
 	p->gappx = p->realgap * p->isgap;
 	arrange(selmon);
 }

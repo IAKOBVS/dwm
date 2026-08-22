@@ -92,8 +92,8 @@ typedef struct {
 } Layout;
 
 typedef struct {
-	unsigned short realgap;
-	unsigned short gappx;
+	short realgap;
+	short gappx;
 	unsigned char isgap;
 } Gap;
 
