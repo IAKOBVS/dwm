@@ -613,7 +613,36 @@ test_createmon_defaults(void)
 }
 
 /* --- isdescprocess / getparentprocess --- */
-/* These would need /proc stubs - skip for now, test structure only */
+static void
+test_isdescprocess_invalid_pids(void)
+{
+	ASSERT_EQ(isdescprocess(0, 100), 0, "isdescprocess(0, 100) returns 0");
+	ASSERT_EQ(isdescprocess(100, 0), 0, "isdescprocess(100, 0) returns 0");
+	ASSERT_EQ(isdescprocess(-1, 100), 0, "isdescprocess(-1, 100) returns 0");
+	ASSERT_EQ(isdescprocess(100, -1), 0, "isdescprocess(100, -1) returns 0");
+	ASSERT_EQ(getparentprocess(0), 0, "getparentprocess(0) returns 0");
+	ASSERT_EQ(getparentprocess(-5), 0, "getparentprocess(-5) returns 0");
+}
+
+static void
+test_isdescprocess_self_and_parent(void)
+{
+	pid_t self = getpid();
+	pid_t parent = getppid();
+
+	ASSERT(self > 0 && parent > 0, "test_isdescprocess: valid self and parent PIDs");
+	ASSERT_EQ(isdescprocess(self, self), 1, "isdescprocess(self, self) returns 1");
+	ASSERT_EQ(isdescprocess(parent, self), 1, "isdescprocess(parent, self) returns 1");
+	ASSERT_EQ(getparentprocess(self), parent, "getparentprocess(self) returns parent PID");
+}
+
+static void
+test_isdescprocess_unrelated(void)
+{
+	pid_t self = getpid();
+	/* PID 999999 or non-ancestor */
+	ASSERT_EQ(isdescprocess(999999, self), 0, "isdescprocess returns 0 for non-ancestor");
+}
 
 /* --- swallow related --- */
 static void
@@ -1178,9 +1207,12 @@ main(void)
 	test_focusstack_forward();
 	test_focusstack_fullscreen_lock();
 
-	/* swallow */
+	/* swallow & process hierarchy */
 	test_swallowingclient();
 	test_swallowingclient_notfound();
+	test_isdescprocess_invalid_pids();
+	test_isdescprocess_self_and_parent();
+	test_isdescprocess_unrelated();
 
 	/* Some tests (focusstack) changed selmon/mons to stack-locals.
 	 * Restore to the heap-allocated version for subsequent tests.

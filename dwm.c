@@ -20,6 +20,7 @@
  *
  * To understand everything else, start reading main().
  */
+#include <fcntl.h>
 #include <locale.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -2264,21 +2265,35 @@ winpid(Window w)
 	return result;
 }
 
+/* Retrieve parent process PID (ppid) for a given process PID 'p'.
+ * Returns parent PID on success, or 0 if parent PID cannot be determined. */
 pid_t
 getparentprocess(pid_t p)
 {
 	unsigned int v = 0;
 
-#ifdef __linux__
-	FILE *f;
-	char buf[256];
-	snprintf(buf, sizeof(buf) - 1, "/proc/%u/stat", (unsigned)p);
-
-	if (unlikely(!(f = fopen(buf, "r"))))
+	if (p <= 0)
 		return 0;
 
-	fscanf(f, "%*u %*s %*c %u", &v);
-	fclose(f);
+#ifdef __linux__
+	int fd;
+	char buf[4096];
+	ssize_t n;
+	snprintf(buf, sizeof(buf) - 1, "/proc/%u/stat", (unsigned)p);
+
+	if ((fd = open(buf, O_RDONLY)) < 0)
+		return 0;
+
+	if ((n = read(fd, buf, sizeof(buf) - 1)) > 0) {
+		buf[n] = '\0';
+		/* Process name in /proc/[pid]/stat is enclosed in parentheses '(...)'
+		 * and may contain spaces or parentheses. Find the last ')' to safely
+		 * parse state and ppid after it. */
+		char *s = strrchr(buf, ')');
+		if (s)
+			sscanf(s + 1, " %*c %u", &v);
+	}
+	close(fd);
 #endif /* __linux__*/
 
 #ifdef __OpenBSD__
@@ -2291,19 +2306,30 @@ getparentprocess(pid_t p)
 		return 0;
 
 	kp = kvm_getprocs(kd, KERN_PROC_PID, p, sizeof(*kp), &n);
+	if (!kp || n <= 0) {
+		kvm_close(kd);
+		return 0;
+	}
 	v = kp->p_ppid;
+	kvm_close(kd);
 #endif /* __OpenBSD__ */
 
 	return (pid_t)v;
 }
 
+/* Checks if process 'c' is a descendant of process 'p'.
+ * Returns non-zero (true) if 'p' is an ancestor of 'c',
+ * or 0 (false) if 'p' is not an ancestor or if relationship cannot be determined. */
 int
 isdescprocess(pid_t p, pid_t c)
 {
+	if (p <= 0 || c <= 0)
+		return 0;
+
 	while (p != c && c != 0)
 		c = getparentprocess(c);
 
-	return (int)c;
+	return (p == c && c != 0);
 }
 
 Client *
