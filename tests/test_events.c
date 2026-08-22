@@ -251,8 +251,7 @@ test_unmapnotify_normal_unmanages(void)
 	m->mx = m->wx = 0; m->my = m->wy = 0;
 	m->mw = m->ww = 1920; m->mh = m->wh = 1080;
 	m->lt[0] = m->lt[1] = &layouts[0];
-	m->gap = ecalloc(1, sizeof(Gap));
-	m->gap->isgap = 1; m->gap->realgap = 17; m->gap->gappx = 17;
+	m->gap.isgap = 1; m->gap.realgap = 17; m->gap.gappx = 17;
 
 	Client *cp = ecalloc(1, sizeof(Client));
 	cp->win = 42; cp->mon = m; cp->tags = 1;
@@ -273,7 +272,6 @@ test_unmapnotify_normal_unmanages(void)
 	ASSERT_EQ(m->stack, NULL, "unmapnotify without send_event clears stack");
 
 	selmon = mons = saved_selmon;
-	free(m->gap);
 	free(m);
 }
 
@@ -289,8 +287,7 @@ test_destroynotify_unmanages(void)
 	m.mx = m.wx = 0; m.my = m.wy = 0;
 	m.mw = m.ww = 1920; m.mh = m.wh = 1080;
 	m.lt[0] = m.lt[1] = &layouts[0];
-	m.gap = ecalloc(1, sizeof(Gap));
-	m.gap->isgap = 1; m.gap->realgap = 17; m.gap->gappx = 17;
+	m.gap.isgap = 1; m.gap.realgap = 17; m.gap.gappx = 17;
 
 	Client *cp = ecalloc(1, sizeof(Client));
 	cp->win = 42; cp->mon = &m; cp->tags = 1;
@@ -306,7 +303,6 @@ test_destroynotify_unmanages(void)
 	destroynotify(&ev);
 	ASSERT_EQ(m.clients, NULL, "destroynotify unmanages client");
 
-	free(m.gap);
 	mons = selmon = saved_selmon;
 }
 
@@ -325,7 +321,6 @@ test_configurerequest_updates_floating_geometry(void)
 	m.wx = 0; m.wy = 0;
 	m.ww = 1920; m.wh = 1080;
 	m.lt[0] = &layouts[0]; m.lt[1] = &layouts[0]; m.sellt = 0;
-	m.gap = ecalloc(1, sizeof(Gap));
 
 	Client c = { .win = 42, .mon = &m, .tags = 1, .bw = 2,
 		.isfloating = 1, .oldx = 0, .oldy = 0, .oldw = 0, .oldh = 0,
@@ -355,7 +350,6 @@ test_configurerequest_updates_floating_geometry(void)
 	ASSERT_EQ(c.oldx, 100, "configurerequest preserves oldx before change");
 	ASSERT_EQ(c.oldy, 200, "configurerequest preserves oldy before change");
 
-	free(m.gap);
 	mons = selmon = saved_selmon;
 }
 
@@ -372,7 +366,6 @@ test_configurerequest_partial_mask(void)
 	m.wx = 0; m.wy = 0;
 	m.ww = 1920; m.wh = 1080;
 	m.lt[0] = &layouts[0]; m.lt[1] = &layouts[0]; m.sellt = 0;
-	m.gap = ecalloc(1, sizeof(Gap));
 
 	Client c = { .win = 42, .mon = &m, .tags = 1, .bw = 2,
 		.isfloating = 1,
@@ -396,7 +389,6 @@ test_configurerequest_partial_mask(void)
 	ASSERT_EQ(c.w, 800, "configurerequest partial mask updates w");
 	ASSERT_EQ(c.h, 600, "configurerequest partial mask updates h");
 
-	free(m.gap);
 	mons = selmon = saved_selmon;
 }
 
@@ -613,7 +605,6 @@ test_propertynotify_root_wmname_fullscreen_skip(void)
 	selmon->showbar = 1;
 	selmon->topbar = 1;
 	selmon->lt[0] = selmon->lt[1] = &layouts[0];
-	selmon->gap = ecalloc(1, sizeof(Gap));
 
 	Client c = { .win = 1, .isfullscreen = 1 };
 	selmon->sel = &c;
@@ -630,7 +621,6 @@ test_propertynotify_root_wmname_fullscreen_skip(void)
 	ASSERT_EQ(selmon->bar_dirty_segments, 0,
 		"propertynotify root XA_WM_NAME skipped when optimizefullscreen + fullscreen");
 
-	free(selmon->gap);
 	free(selmon);
 	restore_selmon();
 }
@@ -891,10 +881,9 @@ main(void)
 	selmon->lt[0] = selmon->lt[1] = &layouts[0];
 	strncpy(selmon->ltsymbol, layouts[0].symbol, sizeof selmon->ltsymbol);
 	selmon->barwin = 123;
-	selmon->gap = ecalloc(1, sizeof(Gap));
-	selmon->gap->isgap = 1;
-	selmon->gap->realgap = 17;
-	selmon->gap->gappx = 17;
+	selmon->gap.isgap = 1;
+	selmon->gap.realgap = 17;
+	selmon->gap.gappx = 17;
 
 	scheme = ecalloc(2, sizeof(Clr *));
 	for (i = SchemeNorm; i <= SchemeSel; i++)

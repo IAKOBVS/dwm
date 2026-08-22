@@ -65,8 +65,7 @@ make_monitor(int num)
 	m->mw = m->ww = 1920;
 	m->mh = m->wh = 1080;
 	m->lt[0] = m->lt[1] = &layouts[0];
-	m->gap = ecalloc(1, sizeof(Gap));
-	m->gap->isgap = 1; m->gap->realgap = 17; m->gap->gappx = 17;
+	m->gap.isgap = 1; m->gap.realgap = 17; m->gap.gappx = 17;
 	strncpy(m->ltsymbol, layouts[0].symbol, sizeof m->ltsymbol);
 	m->sel = NULL;
 	m->clients = NULL;
@@ -78,7 +77,6 @@ make_monitor(int num)
 static void
 cleanup_mon(Monitor *m)
 {
-	free(m->gap);
 	free(m);
 }
 
@@ -341,10 +339,9 @@ main(void)
 	selmon->mh = selmon->wh = 1080;
 	selmon->lt[0] = selmon->lt[1] = &layouts[0];
 	strncpy(selmon->ltsymbol, layouts[0].symbol, sizeof selmon->ltsymbol);
-	selmon->gap = ecalloc(1, sizeof(Gap));
-	selmon->gap->isgap = 1;
-	selmon->gap->realgap = 17;
-	selmon->gap->gappx = 17;
+	selmon->gap.isgap = 1;
+	selmon->gap.realgap = 17;
+	selmon->gap.gappx = 17;
 
 	scheme = ecalloc(2, sizeof(Clr *));
 	for (i = SchemeNorm; i <= SchemeSel; i++)

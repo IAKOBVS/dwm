@@ -283,10 +283,8 @@ test_per_monitor_drawbar_isolation(void)
 	m_b->lt[0] = m_b->lt[1] = &layouts[0];
 	strncpy(m_a->ltsymbol, layouts[0].symbol, sizeof m_a->ltsymbol);
 	strncpy(m_b->ltsymbol, layouts[0].symbol, sizeof m_b->ltsymbol);
-	m_a->gap = ecalloc(1, sizeof(Gap));
-	m_b->gap = ecalloc(1, sizeof(Gap));
-	m_a->gap->isgap = 1; m_a->gap->realgap = 17; m_a->gap->gappx = 17;
-	m_b->gap->isgap = 1; m_b->gap->realgap = 17; m_b->gap->gappx = 17;
+	m_a->gap.isgap = 1; m_a->gap.realgap = 17; m_a->gap.gappx = 17;
+	m_b->gap.isgap = 1; m_b->gap.realgap = 17; m_b->gap.gappx = 17;
 	m_a->bar_dirty_segments = 0;
 	m_b->bar_dirty_segments = 0;
 	m_a->bar_exposed = 1;
@@ -319,7 +317,6 @@ test_per_monitor_drawbar_isolation(void)
 
 	selmon = saved;
 	mons = saved;
-	free(m_a->gap); free(m_b->gap);
 	free(m_a); free(m_b);
 }
 
@@ -355,8 +352,7 @@ main(void)
 	selmon->mh = selmon->wh = 1080;
 	selmon->lt[0] = selmon->lt[1] = &layouts[0];
 	strncpy(selmon->ltsymbol, layouts[0].symbol, sizeof selmon->ltsymbol);
-	selmon->gap = ecalloc(1, sizeof(Gap));
-	selmon->gap->gappx = 0;
+	selmon->gap.gappx = 0;
 	selmon->barwin = 42;
 	selmon->bar_dirty_segments = DIRTY_STATUS | DIRTY_TAGS | DIRTY_TITLE;
 	selmon->bar_exposed = 1;

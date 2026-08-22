@@ -56,8 +56,7 @@ make_monitor(int num)
 	m->mw = m->ww = 1920;
 	m->mh = m->wh = 1080;
 	m->lt[0] = m->lt[1] = &layouts[0];
-	m->gap = ecalloc(1, sizeof(Gap));
-	gap_copy(m->gap, &default_gap);
+	gap_copy(&m->gap, &default_gap);
 	strncpy(m->ltsymbol, layouts[0].symbol, sizeof m->ltsymbol);
 	m->sel = NULL;
 	m->clients = NULL;
@@ -301,19 +300,17 @@ test_setgaps_toggle(void)
 	m.lt[0] = &layouts[0]; m.lt[1] = &layouts[0]; m.sellt = 0;
 	m.tagset[0] = 1; m.seltags = 0;
 	m.showbar = 0;
-	m.gap = ecalloc(1, sizeof(Gap));
-	m.gap->isgap = 1; m.gap->realgap = 17; m.gap->gappx = 17;
+	m.gap.isgap = 1; m.gap.realgap = 17; m.gap.gappx = 17;
 	mons = selmon = &m;
 
 	Arg arg = { .i = GAP_TOGGLE };
 	setgaps(&arg);
-	ASSERT(m.gap->isgap == 0, "setgaps toggle: isgap becomes 0");
-	ASSERT(m.gap->gappx == 0, "setgaps toggle: gappx becomes 0");
+	ASSERT(m.gap.isgap == 0, "setgaps toggle: isgap becomes 0");
+	ASSERT(m.gap.gappx == 0, "setgaps toggle: gappx becomes 0");
 
 	setgaps(&arg);
-	ASSERT(m.gap->isgap == 1, "setgaps toggle: isgap back to 1");
-	ASSERT(m.gap->gappx == m.gap->realgap, "setgaps toggle: gappx restored");
-	free(m.gap);
+	ASSERT(m.gap.isgap == 1, "setgaps toggle: isgap back to 1");
+	ASSERT(m.gap.gappx == m.gap.realgap, "setgaps toggle: gappx restored");
 }
 
 static void
@@ -323,15 +320,13 @@ test_setgaps_adjust(void)
 	memset(&m, 0, sizeof m);
 	m.lt[0] = &layouts[0]; m.lt[1] = &layouts[0]; m.sellt = 0;
 	m.tagset[0] = 1; m.seltags = 0;
-	m.gap = ecalloc(1, sizeof(Gap));
-	m.gap->isgap = 1; m.gap->realgap = 17; m.gap->gappx = 17;
+	m.gap.isgap = 1; m.gap.realgap = 17; m.gap.gappx = 17;
 	mons = selmon = &m;
 
 	Arg arg = { .i = 5 };
 	setgaps(&arg);
-	ASSERT(m.gap->realgap == 22, "setgaps adjust +5");
-	ASSERT(m.gap->gappx == 22, "setgaps adjust: gappx matches realgap");
-	free(m.gap);
+	ASSERT(m.gap.realgap == 22, "setgaps adjust +5");
+	ASSERT(m.gap.gappx == 22, "setgaps adjust: gappx matches realgap");
 }
 
 static void
@@ -341,14 +336,12 @@ test_setgaps_negative_clamp(void)
 	memset(&m, 0, sizeof m);
 	m.lt[0] = &layouts[0]; m.lt[1] = &layouts[0]; m.sellt = 0;
 	m.tagset[0] = 1; m.seltags = 0;
-	m.gap = ecalloc(1, sizeof(Gap));
-	m.gap->isgap = 1; m.gap->realgap = 3; m.gap->gappx = 3;
+	m.gap.isgap = 1; m.gap.realgap = 3; m.gap.gappx = 3;
 	mons = selmon = &m;
 
 	Arg arg = { .i = -10 };
 	setgaps(&arg);
-	ASSERT(m.gap->realgap == 0, "setgaps negative clamp to 0");
-	free(m.gap);
+	ASSERT(m.gap.realgap == 0, "setgaps negative clamp to 0");
 }
 
 /* --- tag / toggletag / toggleview / view --- */
@@ -481,15 +474,13 @@ test_zoom_single_client(void)
 	mons = selmon = &m;
 	Client c = { .win = 1, .mon = &m, .tags = 1, .isfloating = 0, .next = NULL };
 	m.clients = &c; m.sel = &c;
-	m.gap = ecalloc(1, sizeof(Gap));
-	m.gap->gappx = 0;
+	m.gap.gappx = 0;
 
 	Arg arg;
 	/* zoom on single client should be no-op (returns early) */
 	/* Just verify it doesn't crash */
 	zoom(&arg);
 	ASSERT(m.sel == &c, "zoom single client: sel unchanged");
-	free(m.gap);
 }
 
 static void
@@ -505,15 +496,13 @@ test_zoom_swaps(void)
 	m.clients = &c1; c1.next = &c2;
 	m.sel = &c2;
 	m.stack = &c2; c2.snext = &c1;
-	m.gap = ecalloc(1, sizeof(Gap));
-	m.gap->gappx = 0;
+	m.gap.gappx = 0;
 
 	Arg arg;
 	zoom(&arg);
 	/* After zoom, c2 (sel) becomes first in clients list */
 	ASSERT(m.clients == &c2, "zoom moves sel to front");
 	ASSERT(c2.next == &c1, "zoom: c2.next == c1");
-	free(m.gap);
 }
 
 static void
@@ -560,14 +549,12 @@ test_tile_no_clients(void)
 	m.mx = m.wx = 0; m.my = m.wy = 0;
 	m.mw = m.ww = 1920; m.mh = m.wh = 1080;
 	m.lt[0] = &layouts[0]; m.lt[1] = &layouts[0]; m.sellt = 0;
-	m.gap = ecalloc(1, sizeof(Gap));
-	m.gap->isgap = 1; m.gap->realgap = 17; m.gap->gappx = 17;
+	m.gap.isgap = 1; m.gap.realgap = 17; m.gap.gappx = 17;
 	m.clients = NULL;
 	mons = selmon = &m;
 
 	tile(&m);
 	ASSERT(1, "tile with no clients does not crash");
-	free(m.gap);
 }
 
 /* --- monocle --- */
@@ -580,7 +567,6 @@ test_monocle_count(void)
 	m.mx = m.wx = 0; m.my = m.wy = 0;
 	m.mw = m.ww = 1920; m.mh = m.wh = 1080;
 	m.lt[0] = &layouts[0]; m.lt[1] = &layouts[0]; m.sellt = 0;
-	m.gap = ecalloc(1, sizeof(Gap));
 	m.clients = NULL;
 	mons = selmon = &m;
 
@@ -591,7 +577,6 @@ test_monocle_count(void)
 
 	monocle(&m);
 	ASSERT(strcmp(m.ltsymbol, "[3]") == 0, "monocle shows client count [3]");
-	free(m.gap);
 }
 
 static void
@@ -603,13 +588,11 @@ test_monocle_no_clients(void)
 	m.mx = m.wx = 0; m.my = m.wy = 0;
 	m.mw = m.ww = 1920; m.mh = m.wh = 1080;
 	m.lt[0] = &layouts[0]; m.lt[1] = &layouts[0]; m.sellt = 0;
-	m.gap = ecalloc(1, sizeof(Gap));
 	m.clients = NULL;
 	mons = selmon = &m;
 
 	monocle(&m);
 	ASSERT(1, "monocle with no clients does not crash");
-	free(m.gap);
 }
 
 /* --- createmon --- */
@@ -624,14 +607,42 @@ test_createmon_defaults(void)
 	ASSERT_EQ(m->nmaster, 1, "createmon: nmaster");
 	ASSERT_EQ(m->showbar, 1, "createmon: showbar");
 	ASSERT_EQ(m->topbar, 1, "createmon: topbar");
-	ASSERT(m->gap->isgap == 1, "createmon: gap.isgap == 1");
-	ASSERT_EQ(m->gap->realgap, 17, "createmon: gap.realgap");
-	free(m->gap);
+	ASSERT(m->gap.isgap == 1, "createmon: gap.isgap == 1");
+	ASSERT_EQ(m->gap.realgap, 17, "createmon: gap.realgap");
 	free(m);
 }
 
 /* --- isdescprocess / getparentprocess --- */
-/* These would need /proc stubs - skip for now, test structure only */
+static void
+test_isdescprocess_invalid_pids(void)
+{
+	ASSERT_EQ(isdescprocess(0, 100), 0, "isdescprocess(0, 100) returns 0");
+	ASSERT_EQ(isdescprocess(100, 0), 0, "isdescprocess(100, 0) returns 0");
+	ASSERT_EQ(isdescprocess(-1, 100), 0, "isdescprocess(-1, 100) returns 0");
+	ASSERT_EQ(isdescprocess(100, -1), 0, "isdescprocess(100, -1) returns 0");
+	ASSERT_EQ(getparentprocess(0), 0, "getparentprocess(0) returns 0");
+	ASSERT_EQ(getparentprocess(-5), 0, "getparentprocess(-5) returns 0");
+}
+
+static void
+test_isdescprocess_self_and_parent(void)
+{
+	pid_t self = getpid();
+	pid_t parent = getppid();
+
+	ASSERT(self > 0 && parent > 0, "test_isdescprocess: valid self and parent PIDs");
+	ASSERT_EQ(isdescprocess(self, self), 1, "isdescprocess(self, self) returns 1");
+	ASSERT_EQ(isdescprocess(parent, self), 1, "isdescprocess(parent, self) returns 1");
+	ASSERT_EQ(getparentprocess(self), parent, "getparentprocess(self) returns parent PID");
+}
+
+static void
+test_isdescprocess_unrelated(void)
+{
+	pid_t self = getpid();
+	/* PID 999999 or non-ancestor */
+	ASSERT_EQ(isdescprocess(999999, self), 0, "isdescprocess returns 0 for non-ancestor");
+}
 
 /* --- swallow related --- */
 static void
@@ -783,21 +794,19 @@ test_setgaps_reset(void)
 	memset(&m, 0, sizeof m);
 	m.lt[0] = &layouts[0]; m.lt[1] = &layouts[0]; m.sellt = 0;
 	m.tagset[0] = 1; m.seltags = 0;
-	m.gap = ecalloc(1, sizeof(Gap));
-	m.gap->isgap = 1; m.gap->realgap = 17; m.gap->gappx = 17;
+	m.gap.isgap = 1; m.gap.realgap = 17; m.gap.gappx = 17;
 	mons = selmon = &m;
 
 	/* First adjust gap */
 	Arg adj = { .i = 10 };
 	setgaps(&adj);
-	ASSERT_EQ(m.gap->realgap, 27, "setgaps adjust before reset");
+	ASSERT_EQ(m.gap.realgap, 27, "setgaps adjust before reset");
 
 	/* Then reset */
 	Arg reset = { .i = GAP_RESET };
 	setgaps(&reset);
-	ASSERT_EQ(m.gap->realgap, 17, "setgaps reset gap value");
-	ASSERT_EQ(m.gap->gappx, 17, "setgaps reset gappx");
-	free(m.gap);
+	ASSERT_EQ(m.gap.realgap, 17, "setgaps reset gap value");
+	ASSERT_EQ(m.gap.gappx, 17, "setgaps reset gappx");
 }
 
 /* --- ISVISIBLE macro --- */
@@ -886,15 +895,13 @@ test_togglefloating(void)
 
 	Client c = { .win = 1, .mon = &m, .tags = 1, .isfloating = 0 };
 	m.clients = &c; m.stack = &c; m.sel = &c;
-	m.gap = ecalloc(1, sizeof(Gap));
-	m.gap->isgap = 0; m.gap->realgap = 0; m.gap->gappx = 0;
+	m.gap.isgap = 0; m.gap.realgap = 0; m.gap.gappx = 0;
 
 	togglefloating(NULL);
 	ASSERT_EQ(c.isfloating, 1, "togglefloating: becomes floating");
 
 	togglefloating(NULL);
 	ASSERT_EQ(c.isfloating, 0, "togglefloating: becomes non-floating");
-	free(m.gap);
 }
 
 /* --- applysizehints --- */
@@ -1125,10 +1132,9 @@ main(void)
 	selmon->mh = selmon->wh = 1080;
 	selmon->lt[0] = selmon->lt[1] = &layouts[0];
 	strncpy(selmon->ltsymbol, layouts[0].symbol, sizeof selmon->ltsymbol);
-	selmon->gap = ecalloc(1, sizeof(Gap));
-	selmon->gap->isgap = 1;
-	selmon->gap->realgap = 17;
-	selmon->gap->gappx = 17;
+	selmon->gap.isgap = 1;
+	selmon->gap.realgap = 17;
+	selmon->gap.gappx = 17;
 
 	/* scheme array: needed by unfocus/focus */
 	scheme = ecalloc(2, sizeof(Clr *));
@@ -1201,9 +1207,12 @@ main(void)
 	test_focusstack_forward();
 	test_focusstack_fullscreen_lock();
 
-	/* swallow */
+	/* swallow & process hierarchy */
 	test_swallowingclient();
 	test_swallowingclient_notfound();
+	test_isdescprocess_invalid_pids();
+	test_isdescprocess_self_and_parent();
+	test_isdescprocess_unrelated();
 
 	/* Some tests (focusstack) changed selmon/mons to stack-locals.
 	 * Restore to the heap-allocated version for subsequent tests.
