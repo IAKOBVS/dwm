@@ -20,6 +20,7 @@
  *
  * To understand everything else, start reading main().
  */
+#include <fcntl.h>
 #include <locale.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -2270,14 +2271,16 @@ getparentprocess(pid_t p)
 		return 0;
 
 #ifdef __linux__
-	FILE *f;
-	char buf[256];
+	int fd;
+	char buf[4096];
+	ssize_t n;
 	snprintf(buf, sizeof(buf) - 1, "/proc/%u/stat", (unsigned)p);
 
-	if (!(f = fopen(buf, "r")))
+	if ((fd = open(buf, O_RDONLY)) < 0)
 		return 0;
 
-	if (fgets(buf, sizeof(buf), f)) {
+	if ((n = read(fd, buf, sizeof(buf) - 1)) > 0) {
+		buf[n] = '\0';
 		/* Process name in /proc/[pid]/stat is enclosed in parentheses '(...)'
 		 * and may contain spaces or parentheses. Find the last ')' to safely
 		 * parse state and ppid after it. */
@@ -2285,7 +2288,7 @@ getparentprocess(pid_t p)
 		if (s)
 			sscanf(s + 1, " %*c %u", &v);
 	}
-	fclose(f);
+	close(fd);
 #endif /* __linux__*/
 
 #ifdef __OpenBSD__
