@@ -53,6 +53,7 @@ test_drw_create_zero_dim(void)
 	ASSERT(drw->xftd != NULL, "drw_create(0x0): xftd created");
 	ASSERT(drw->emoji_cache[0].codepoint == -1, "drw_create: emoji cache init");
 	drw_free(drw);
+	XCloseDisplay(dpy);
 }
 
 static void
@@ -67,6 +68,7 @@ test_drw_create_normal(void)
 	ASSERT(drw->screen == 1, "drw_create normal: screen stored");
 	ASSERT(drw->root == 200, "drw_create normal: root stored");
 	drw_free(drw);
+	XCloseDisplay(dpy);
 }
 
 static void
@@ -101,6 +103,7 @@ test_drw_rect_zero_dim(void)
 	drw_rect(drw, 0, 0, 0, 0, 0, 0);
 	ASSERT(1, "drw_rect(0x0): no crash");
 	drw_free(drw);
+	XCloseDisplay(dpy);
 }
 
 static void
@@ -111,6 +114,7 @@ test_drw_rect_negative_pos(void)
 	drw_rect(drw, -1, -1, 10, 10, 1, 0);
 	ASSERT(1, "drw_rect(-1,-1): no crash");
 	drw_free(drw);
+	XCloseDisplay(dpy);
 }
 
 static void
@@ -128,6 +132,7 @@ test_drw_map_zero_dim(void)
 	drw_map(drw, 200, 0, 0, 0, 0);
 	ASSERT(1, "drw_map(0x0): no crash");
 	drw_free(drw);
+	XCloseDisplay(dpy);
 }
 
 static void
@@ -145,6 +150,7 @@ test_drw_text_null_text(void)
 	int w = drw_text(drw, 0, 0, 100, 20, 0, NULL, 0);
 	ASSERT(w == 0, "drw_text(NULL text): returns 0");
 	drw_free(drw);
+	XCloseDisplay(dpy);
 }
 
 static void
@@ -155,6 +161,7 @@ test_drw_text_empty(void)
 	int w = drw_text(drw, 0, 0, 100, 20, 0, "", 0);
 	ASSERT(w == 0, "drw_text(empty): returns 0");
 	drw_free(drw);
+	XCloseDisplay(dpy);
 }
 
 static void
@@ -165,6 +172,7 @@ test_drw_text_zero_width(void)
 	int w = drw_text(drw, 0, 0, 0, 20, 0, "hello", 0);
 	ASSERT(w == 0, "drw_text(w=0): returns 0");
 	drw_free(drw);
+	XCloseDisplay(dpy);
 }
 
 static void
@@ -176,6 +184,7 @@ test_drw_text_null_scheme(void)
 	int w = drw_text(drw, 0, 0, 100, 20, 0, "hi", 0);
 	ASSERT(w == 0, "drw_text(NULL scheme): returns 0");
 	drw_free(drw);
+	XCloseDisplay(dpy);
 }
 
 static void
@@ -187,6 +196,7 @@ test_drw_text_null_fonts(void)
 	int w = drw_text(drw, 0, 0, 100, 20, 0, "hi", 0);
 	ASSERT(w == 0, "drw_text(NULL fonts): returns 0");
 	drw_free(drw);
+	XCloseDisplay(dpy);
 }
 
 static void
@@ -214,6 +224,7 @@ test_drw_fontset_getwidth_null_text(void)
 	unsigned int w = drw_fontset_getwidth(drw, NULL);
 	ASSERT(w == 0, "drw_fontset_getwidth(NULL text): returns 0");
 	drw_free(drw);
+	XCloseDisplay(dpy);
 }
 
 static void
@@ -224,6 +235,7 @@ test_drw_fontset_getwidth_empty(void)
 	unsigned int w = drw_fontset_getwidth(drw, "");
 	ASSERT(w == 0, "drw_fontset_getwidth(empty): returns 0");
 	drw_free(drw);
+	XCloseDisplay(dpy);
 }
 
 static void
@@ -234,6 +246,7 @@ test_drw_setfontset_null(void)
 	drw_setfontset(drw, NULL);
 	ASSERT(drw->fonts == NULL, "drw_setfontset(NULL): fonts cleared");
 	drw_free(drw);
+	XCloseDisplay(dpy);
 }
 
 static void
@@ -244,6 +257,7 @@ test_drw_setscheme_null(void)
 	drw_setscheme(drw, NULL);
 	ASSERT(drw->scheme == NULL, "drw_setscheme(NULL): scheme cleared");
 	drw_free(drw);
+	XCloseDisplay(dpy);
 }
 
 static void
@@ -253,6 +267,7 @@ test_drw_free_normal(void)
 	Drw *drw = drw_create(dpy, 0, 100, 800, 30);
 	drw_free(drw);
 	ASSERT(1, "drw_free normal: no crash");
+	XCloseDisplay(dpy);
 }
 
 int

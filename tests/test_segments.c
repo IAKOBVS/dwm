@@ -33,6 +33,8 @@ restore_selmon(void)
 static void
 test_initial_state(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	ASSERT_EQ(selmon->bar_dirty_segments, DIRTY_STATUS | DIRTY_TAGS | DIRTY_TITLE,
 		"initial selmon->bar_dirty_segments = all dirty (7)");
 }
@@ -40,6 +42,8 @@ test_initial_state(void)
 static void
 test_drawbar_resets(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	selmon->bar_dirty_segments = DIRTY_STATUS | DIRTY_TAGS | DIRTY_TITLE;
 	drawbar(selmon);
 	/* In DWM_TEST builds, selmon->bar_dirty_segments is NOT reset to 0 after drawing.
@@ -51,6 +55,8 @@ test_drawbar_resets(void)
 static void
 test_drawbar_early_return(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	selmon->bar_dirty_segments = 0;
 	drawbar(selmon);
 	ASSERT_EQ(selmon->bar_dirty_segments, 0,
@@ -60,6 +66,8 @@ test_drawbar_early_return(void)
 static void
 test_focus_sets_segments(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c = { .win = 1, .mon = selmon, .tags = 1 };
 	selmon->sel = &c;
 	selmon->bar_dirty_segments = 0;
@@ -74,6 +82,8 @@ test_focus_sets_segments(void)
 static void
 test_focus_with_sel_sets_segments(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c = { .win = 1, .mon = selmon, .tags = 1 };
 	selmon->clients = selmon->stack = &c;
 	selmon->sel = &c;
@@ -92,6 +102,8 @@ test_focus_with_sel_sets_segments(void)
 static void
 test_updatestatus_sets_segments(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	selmon->bar_dirty_segments = 0;
 	stext[0] = '\0';
 	updatestatus();
@@ -104,8 +116,109 @@ test_updatestatus_sets_segments(void)
 }
 
 static void
+test_updatestatus_identical_text_no_dirty(void)
+{
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
+	/* prime stext with a known value */
+	mock_gettextprop_return = 1;
+	mock_gettextprop_value = "stable-status";
+	updatestatus();
+
+	/* second call with identical text must be a full no-op */
+	selmon->bar_dirty_segments = 0;
+	bar_draw_pending = 0;
+	updatestatus();
+	ASSERT_EQ(selmon->bar_dirty_segments, 0,
+		"identical text skips dirty segments");
+	ASSERT_EQ(bar_draw_pending, 0, "identical text skips deferred draw");
+
+	/* same length but different content must still dirty */
+	mock_gettextprop_value = "stable-statuX";
+	selmon->bar_dirty_segments = 0;
+	bar_draw_pending = 0;
+	updatestatus();
+	ASSERT(selmon->bar_dirty_segments & DIRTY_STATUS,
+		"different text sets DIRTY_STATUS");
+	ASSERT_EQ(bar_draw_pending, 1, "different text requests deferred draw");
+
+	/* restore gettextprop defaults so later tests are unaffected */
+	mock_gettextprop_return = 0;
+	mock_gettextprop_value = NULL;
+}
+
+static void
+test_updatestatus_different_text_sets_dirty(void)
+{
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
+	mock_gettextprop_return = 1;
+	mock_gettextprop_value = "first";
+	updatestatus(); /* primes stext = "first" */
+	selmon->bar_dirty_segments = 0;
+
+	mock_gettextprop_value = "second";
+	updatestatus();
+	ASSERT(selmon->bar_dirty_segments & DIRTY_STATUS,
+		"changed status sets DIRTY_STATUS");
+	ASSERT(selmon->bar_dirty_segments & DIRTY_TITLE,
+		"changed status sets DIRTY_TITLE (boundary may shift)");
+
+	/* first-ever call with empty stext always dirties */
+	stext[0] = '\0';
+	stext_len = 0;
+	selmon->bar_dirty_segments = 0;
+	updatestatus();
+	ASSERT(selmon->bar_dirty_segments & DIRTY_STATUS,
+		"empty-to-text transition dirties");
+
+	mock_gettextprop_return = 0;
+	mock_gettextprop_value = NULL;
+}
+
+static void
+test_swallow_sets_dirty_title(void)
+{
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
+	Client *p, *c;
+
+	/* parent (window holder) and child (terminal being swallowed);
+	 * both attached so detach() inside swallow() is well-defined */
+	p = ecalloc(1, sizeof(Client));
+	c = ecalloc(1, sizeof(Client));
+	p->win = 700;
+	c->win = 701;
+	p->mon = selmon;
+	c->mon = selmon;
+	p->tags = c->tags = 1;
+	p->isfloating = 0;
+	c->isfloating = 0;
+	c->isterminal = 0;   /* must be 0 or swallow() returns early */
+	c->noswallow = 0;
+	selmon->clients = p;
+	p->next = c;
+	c->next = NULL;
+
+	selmon->bar_dirty_segments = 0;
+	swallow(p, c);
+
+	ASSERT(selmon->bar_dirty_segments & DIRTY_TITLE,
+		"swallow sets DIRTY_TITLE (parent adopted child's name)");
+
+	/* restore client list */
+	detach(c);
+	free(p);
+	winclient_remove(c);
+	free(c);
+	selmon->clients = NULL;
+}
+
+static void
 test_setlayout_sets_segments(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	selmon->bar_dirty_segments = 0;
 	Arg arg = { .v = NULL };
 	selmon->sel = NULL;
@@ -121,6 +234,8 @@ test_setlayout_sets_segments(void)
 static void
 test_togglebar_sets_segments(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Arg arg;
 	selmon->showbar = 0;
 	selmon->bar_dirty_segments = 0;
@@ -137,6 +252,8 @@ test_togglebar_sets_segments(void)
 static void
 test_view_empty_tag_sets_dirty_tags(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	selmon->clients = NULL;
 	selmon->stack = NULL;
 	selmon->sel = NULL;
@@ -151,6 +268,8 @@ test_view_empty_tag_sets_dirty_tags(void)
 static void
 test_bar_draw_pending_initial(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	/* other tests may have set bar_draw_pending; reset to check initial default */
 	bar_draw_pending = 0;
 	ASSERT_EQ(bar_draw_pending, 0, "bar_draw_pending initially 0");
@@ -159,6 +278,8 @@ test_bar_draw_pending_initial(void)
 static void
 test_bar_draw_pending_on_focus(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	bar_draw_pending = 0;
 	selmon->stack = NULL;
 	focus(NULL);
@@ -168,6 +289,8 @@ test_bar_draw_pending_on_focus(void)
 static void
 test_bar_draw_pending_on_updatestatus(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	bar_draw_pending = 0;
 	stext[0] = '\0';
 	updatestatus();
@@ -177,6 +300,8 @@ test_bar_draw_pending_on_updatestatus(void)
 static void
 test_bar_draw_pending_on_setlayout_no_sel(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	bar_draw_pending = 0;
 	selmon->sel = NULL;
 	Arg arg = { .v = NULL };
@@ -188,6 +313,8 @@ test_bar_draw_pending_on_setlayout_no_sel(void)
 static void
 test_bar_draw_pending_on_restack(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m;
 	memset(&m, 0, sizeof(m));
 	bar_draw_pending = 0;
@@ -198,6 +325,8 @@ test_bar_draw_pending_on_restack(void)
 static void
 test_bar_exposed_full_draw_resets(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	selmon->showbar = 1;          /* drawbar early-returns if showbar=0 */
 	selmon->bar_dirty_segments = DIRTY_STATUS | DIRTY_TAGS | DIRTY_TITLE;
 	selmon->bar_exposed = 1;
@@ -209,6 +338,8 @@ test_bar_exposed_full_draw_resets(void)
 static void
 test_bar_exposed_expose_then_drawbar_resets(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	XEvent ev;
 	memset(&ev, 0, sizeof(ev));
 	ev.type = Expose;
@@ -226,6 +357,8 @@ test_bar_exposed_expose_then_drawbar_resets(void)
 static void
 test_bar_exposed_early_return_resets(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	selmon->showbar = 1;          /* drawbar early-returns if showbar=0 */
 	selmon->bar_dirty_segments = 0;
 	selmon->bar_exposed = 1;
@@ -237,6 +370,8 @@ test_bar_exposed_early_return_resets(void)
 static void
 test_setfullscreen_unset_sets_segments(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c;
 	memset(&c, 0, sizeof c);
 	c.isfullscreen = 1;
@@ -265,6 +400,8 @@ test_setfullscreen_unset_sets_segments(void)
 static void
 test_per_monitor_drawbar_isolation(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	int i;
 	Monitor *m_a = ecalloc(1, sizeof(Monitor));
 	Monitor *m_b = ecalloc(1, sizeof(Monitor));
@@ -380,6 +517,9 @@ main(void)
 
 	restore_selmon();
 	test_updatestatus_sets_segments();
+	test_updatestatus_identical_text_no_dirty();
+	test_updatestatus_different_text_sets_dirty();
+	test_swallow_sets_dirty_title();
 
 	restore_selmon();
 	test_setlayout_sets_segments();

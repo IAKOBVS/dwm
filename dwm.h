@@ -113,7 +113,15 @@ typedef struct {
 
 static KeySym key_keysym_used;
 static unsigned int key_mod_used;
-static unsigned long button_button_used;
+/* Exact binding index: open-addressed set of packed (keysym, CLEANMASK(mod))
+ * pairs rebuilt by cachekeys(); lets keypress() reject non-bindings in O(1)
+ * instead of the lossy OR-masks above (which pass any keysym once enough
+ * bindings are merged, and can't reject chords merely sharing a mod bit). */
+#define KEYSET_SIZE 256 /* power of two */
+static unsigned long long keyset[KEYSET_SIZE];
+static unsigned int keyset_count;
+static unsigned char keyset_saturated; /* set full: masks remain the guard */
+static unsigned long long button_button_used;
 static unsigned int button_mask_used;
 
 typedef struct {

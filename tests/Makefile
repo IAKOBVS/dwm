@@ -17,6 +17,12 @@ MOCK_OBJ = mock_x11.o
 TEST_SRC = $(wildcard test_*.c)
 TEST_BIN = $(TEST_SRC:.c=)
 
+# Coverage/ASan targets are derived from the source list so new test files
+# picked up by the wildcard are automatically covered (no manual lists).
+COV_TARGETS  = $(addprefix cov_,$(TEST_BIN))
+ASAN_TARGETS = $(addprefix asan_,$(TEST_BIN))
+COV_LABELS   = $(subst test_,,$(TEST_BIN))
+
 BENCH_BIN = bench_optimize
 
 all: $(TEST_BIN) $(BENCH_BIN)
@@ -46,20 +52,22 @@ asan_%: %.c $(MOCK_OBJ)
 asan_test_emoji_render_cache: test_emoji_render_cache.c
 	$(CC) $(CFLAGS) $(ASAN_CFLAGS) -o $@ $< $(LDFLAGS) $(ASAN_LDFLAGS)
 
+# Run every suite and propagate failures: a non-zero exit from any binary
+# fails the make target (previously failures were silently ignored).
 test run: $(TEST_BIN)
-	@for t in $(TEST_BIN); do \
+	@status=0; \
+	for t in $(TEST_BIN); do \
 		printf "\033[1;34mRUNNING\033[0m $$t\n"; \
-		./$$t; \
-	done
-
-COV_LABELS = pure_logic segments arrange window_ops events drw_cache emoji_render_cache comprehensive drw_safety
+		./$$t || { printf "\033[1;31mFAILED \033[0m$$t\n"; status=1; }; \
+	done; \
+	exit $$status
 
 cov_bins: $(MOCK_OBJ)
-	$(MAKE) $(addprefix cov_test_,$(COV_LABELS))
+	$(MAKE) $(COV_TARGETS)
 
 coverage: clean
 	$(MAKE) $(MOCK_OBJ)
-	$(MAKE) $(addprefix cov_test_,$(COV_LABELS))
+	$(MAKE) $(COV_TARGETS)
 	@python3 merge_gcov.py . $(COV_LABELS)
 	@echo "=== Per-test gcov files (last run) ==="
 	@gcov -o cov_test_events-test_events ../dwm.c 2>/dev/null | grep -E 'Lines executed' || true
@@ -68,15 +76,17 @@ coverage: clean
 
 asan: $(MOCK_OBJ)
 	$(MAKE) CFLAGS="$(CFLAGS) $(ASAN_CFLAGS)" LDFLAGS="$(LDFLAGS) $(ASAN_LDFLAGS)" \
-		asan_test_pure_logic asan_test_segments asan_test_arrange \
-		asan_test_window_ops asan_test_events asan_test_drw_cache \
-		asan_test_emoji_render_cache asan_test_drw_safety
-	@for t in asan_test_*; do \
+		$(ASAN_TARGETS)
+	@# LeakSanitizer runs on every suite; fixtures are swept per-test and
+	@# dwm-created clients are drained via unmanage() where needed.
+	@status=0; \
+	for t in $(ASAN_TARGETS); do \
 		if [ -x "$$t" ]; then \
 			printf "\033[1;34mRUNNING\033[0m $$t\n"; \
-			./$$t; \
+			./$$t || { printf "\033[1;31mFAILED \033[0m$$t\n"; status=1; }; \
 		fi \
-	done
+	done; \
+	exit $$status
 
 clean:
 	rm -f $(TEST_BIN) $(BENCH_BIN) cov_test_* asan_test_* *.o *.gcda *.gcno *.gcov

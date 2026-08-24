@@ -51,7 +51,13 @@ drw_resize(Drw *drw, unsigned int w, unsigned int h)
 static inline void
 drw_free(Drw *drw)
 {
-	free(drw);
+	/* mirror the real drw_free: release the font chain too, else every
+	 * setup()/cleanup() cycle strands one Fnt per Drw */
+	if (drw) {
+		Fnt *f = drw->fonts, *fnext;
+		while (f) { fnext = f->next; free(f); f = fnext; }
+		free(drw);
+	}
 }
 
 static inline Fnt *

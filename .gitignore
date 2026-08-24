@@ -1,10 +1,29 @@
 # User files
 dwm
 config.h
-!tests/*.c
-!tests/*.h
-!tests/*.sh
 *.gcov
+
+# Test suite build products (binaries share names with their .c sources)
+/tests/test_arrange
+/tests/test_comprehensive
+/tests/test_dbg
+/tests/test_drw_cache
+/tests/test_drw_safety
+/tests/test_emoji_render_cache
+/tests/test_events
+/tests/test_pure_logic
+/tests/test_segments
+/tests/test_window_ops
+/tests/cov_test_*
+/tests/asan_test_*
+/tests/bench_optimize
+
+# Release archives and coverage/profiling intermediates
+*.tar.gz
+*.gcda
+*.gcno
+perf.data*
+gmon.out
 
 # Prerequisites
 *.d

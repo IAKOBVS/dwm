@@ -59,10 +59,9 @@ make_monitor(int num)
 	m->mh = m->wh = 1080;
 	m->lt[0] = m->lt[1] = &layouts[0];
 	strncpy(m->ltsymbol, layouts[0].symbol, sizeof m->ltsymbol);
-	m->gap = ecalloc(1, sizeof(Gap));
-	m->gap->isgap = 1;
-	m->gap->realgap = 17;
-	m->gap->gappx = 17;
+	m->gap.isgap = 1;
+	m->gap.realgap = 17;
+	m->gap.gappx = 17;
 	m->sel = NULL;
 	m->clients = NULL;
 	m->stack = NULL;
@@ -259,7 +258,7 @@ bench_updatestatus_comparison(void)
 	t0 = nanos_mono();
 	for (i = 0; i < N; i++) {
 		updatestatus();
-		bar_dirty_segments = 0;
+		selmon->bar_dirty_segments = 0;
 		bar_draw_pending = 0;
 	}
 	t1 = nanos_mono();
@@ -270,7 +269,7 @@ bench_updatestatus_comparison(void)
 	for (i = 0; i < N; i++) {
 		mock_gettextprop_value = (i % 2) ? "text-a" : "text-b";
 		updatestatus();
-		bar_dirty_segments = 0;
+		selmon->bar_dirty_segments = 0;
 		bar_draw_pending = 0;
 	}
 	t1 = nanos_mono();
@@ -297,13 +296,13 @@ bench_focus_idempotent(void)
 	add_clients(selmon, 5, 1000);
 	c = selmon->clients;
 	selmon->sel = c;
-	bar_dirty_segments = 0;
+	selmon->bar_dirty_segments = 0;
 
 	/* baseline: focus() always sets dirty segments */
 	t0 = nanos_mono();
 	for (i = 0; i < N; i++) {
 		focus(c);
-		bar_dirty_segments = 0;
+		selmon->bar_dirty_segments = 0;
 		bar_draw_pending = 0;
 	}
 	t1 = nanos_mono();
@@ -313,7 +312,7 @@ bench_focus_idempotent(void)
 	t0 = nanos_mono();
 	for (i = 0; i < N; i++) {
 		focus(NULL);
-		bar_dirty_segments = 0;
+		selmon->bar_dirty_segments = 0;
 		bar_draw_pending = 0;
 	}
 	t1 = nanos_mono();
@@ -328,7 +327,7 @@ bench_focus_idempotent(void)
 	t0 = nanos_mono();
 	for (i = 0; i < N; i++) {
 		focus(c);
-		bar_dirty_segments = 0;
+		selmon->bar_dirty_segments = 0;
 		bar_draw_pending = 0;
 	}
 	t1 = nanos_mono();
@@ -513,7 +512,7 @@ bench_propertynotify_filter(void)
 	t0 = nanos_mono();
 	for (i = 0; i < N; i++) {
 		propertynotify((XEvent *)&ev);
-		bar_dirty_segments = 0;
+		selmon->bar_dirty_segments = 0;
 		bar_draw_pending = 0;
 	}
 	t1 = nanos_mono();
@@ -551,7 +550,7 @@ bench_setlayout_guard(void)
 	t0 = nanos_mono();
 	for (i = 0; i < N; i++) {
 		setlayout(&arg);
-		bar_dirty_segments = 0;
+		selmon->bar_dirty_segments = 0;
 		bar_draw_pending = 0;
 	}
 	t1 = nanos_mono();
@@ -561,7 +560,7 @@ bench_setlayout_guard(void)
 	t0 = nanos_mono();
 	for (i = 0; i < N; i++) {
 		setlayout(NULL);  /* NULL arg toggles sellt */
-		bar_dirty_segments = 0;
+		selmon->bar_dirty_segments = 0;
 		bar_draw_pending = 0;
 	}
 	t1 = nanos_mono();
@@ -570,7 +569,7 @@ bench_setlayout_guard(void)
 	/* restore layout */
 	arg.v = &layouts[0];
 	setlayout(&arg);
-	bar_dirty_segments = 0;
+	selmon->bar_dirty_segments = 0;
 	bar_draw_pending = 0;
 }
 
@@ -611,10 +610,9 @@ bench_enternotify_guard(void)
 	selmon->next = second;
 	second->tagset[0] = second->tagset[1] = 1;
 	second->lt[0] = second->lt[1] = &layouts[0];
-	second->gap = ecalloc(1, sizeof(Gap));
-	second->gap->isgap = 1;
-	second->gap->realgap = 17;
-	second->gap->gappx = 17;
+	second->gap.isgap = 1;
+	second->gap.realgap = 17;
+	second->gap.gappx = 17;
 
 	t0 = nanos_mono();
 	for (i = 0; i < N; i++)
@@ -624,7 +622,6 @@ bench_enternotify_guard(void)
 
 	/* restore single monitor */
 	selmon->next = NULL;
-	free(second->gap);
 	free(second);
 }
 
@@ -667,7 +664,7 @@ bench_gaming_mode(void)
 	t0 = nanos_mono();
 	for (i = 0; i < N; i++) {
 		updatestatus();
-		bar_dirty_segments = 0;
+		selmon->bar_dirty_segments = 0;
 		bar_draw_pending = 0;
 	}
 	t1 = nanos_mono();
@@ -694,6 +691,104 @@ bench_gaming_mode(void)
 
 /* ── main ──────────────────────────────────────────────────────────── */
 
+/* BENCH 10: arrange() coalescing under event dispatch */
+static void
+bench_arrange_coalesce(void)
+{
+	int N = 50000;
+	int i;
+	long t0, t1;
+
+	fprintf(stderr, "\n=== 10. arrange() event-loop coalescing ===\n");
+	fprintf(stderr, "  Immediate path serves grabs; dispatched events defer\n");
+	fprintf(stderr, "  to one layout pass per event batch.\n\n");
+
+	cleanup_clients();
+	add_clients(selmon, 10, 1000);
+	selmon->showbar = 0;
+
+	/* baseline: every request lays out immediately (grab-path cost) */
+	t0 = nanos_mono();
+	for (i = 0; i < N; i++)
+		arrangenow(selmon);
+	t1 = nanos_mono();
+	report("arrangenow x N (immediate, 10 clients)", t1 - t0, N);
+
+	/* optimized burst: 3 requests coalesce into a single tail flush */
+	t0 = nanos_mono();
+	for (i = 0; i < N; i++) {
+		dispatching = 1;
+		arrange(selmon);
+		arrange(selmon);
+		arrange(selmon);
+		dispatching = 0;
+		flusheventtail();
+	}
+	t1 = nanos_mono();
+	report("event batch: 3 defers + flush x N", t1 - t0, N);
+
+	cleanup_clients();
+}
+
+/* BENCH 11: keypress() dispatch cost */
+/* Answers "would sorting keys[] by sym/mod help?": measures the masked
+ * fast-path reject vs the full-scan dispatch for an actual binding. */
+static void
+bench_keypress(void)
+{
+	int N = 50000;
+	int i;
+	long t0, t1;
+	XEvent ev;
+
+	fprintf(stderr, "\n=== 11. keypress() dispatch ===\n");
+	fprintf(stderr, "  Fast-path masks reject unmatched events without\n");
+	fprintf(stderr, "  scanning keys[]; matched events pay the full scan.\n\n");
+
+	/* unmatched modifier: both masks reject before the loop */
+	memset(&ev, 0, sizeof ev);
+	ev.xkey.type = KeyPress;
+	ev.xkey.keycode = XK_a;
+	ev.xkey.state = 0; /* no binding uses bare state */
+
+	t0 = nanos_mono();
+	for (i = 0; i < N; i++)
+		keypress(&ev);
+	t1 = nanos_mono();
+	report("keypress(unmatched mod, mask reject) x N", t1 - t0, N);
+
+	/* wrong chord sharing a mod bit: old OR-mask guard passed this to a
+	 * full keys[] scan; the exact set rejects it in O(1) */
+	selmon->showbar = 0;
+	memset(&ev, 0, sizeof ev);
+	ev.xkey.type = KeyPress;
+	ev.xkey.keycode = XK_b;
+	ev.xkey.state = MODKEY | ControlMask;
+
+	t0 = nanos_mono();
+	for (i = 0; i < N; i++)
+		keypress(&ev);
+	t1 = nanos_mono();
+	report("keypress(wrong chord, exact-set reject) x N", t1 - t0, N);
+
+	/* matched: MODKEY+b -> togglebar, pays the full keys[] scan */
+	selmon->showbar = 0;
+	memset(&ev, 0, sizeof ev);
+	ev.xkey.type = KeyPress;
+	ev.xkey.keycode = XK_b;
+	ev.xkey.state = MODKEY;
+
+	t0 = nanos_mono();
+	for (i = 0; i < N; i++) {
+		keypress(&ev);
+		selmon->showbar = 0;                    /* undo toggle */
+		selmon->bar_dirty_segments = 0;
+		bar_draw_pending = 0;
+	}
+	t1 = nanos_mono();
+	report("keypress(MODKEY+b, full scan + dispatch) x N", t1 - t0, N);
+}
+
 int main(void)
 {
 	init_globals();
@@ -711,6 +806,8 @@ int main(void)
 	bench_setlayout_guard();
 	bench_enternotify_guard();
 	bench_gaming_mode();
+	bench_arrange_coalesce();
+	bench_keypress();
 
 	fprintf(stderr, "\n=== Summary ===\n");
 	fprintf(stderr, "Total benchmarks: %d\n", bench_count);

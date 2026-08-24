@@ -71,6 +71,8 @@ make_monitor(int num)
 static void
 test_attach(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m = {0};
 	Client c = { .win = 1, .mon = &m, .tags = 1, .next = NULL };
 	m.clients = NULL;
@@ -82,6 +84,8 @@ test_attach(void)
 static void
 test_attach_multiple(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m = {0};
 	Client c1 = { .win = 1, .mon = &m, .tags = 1, .next = NULL };
 	Client c2 = { .win = 2, .mon = &m, .tags = 1, .next = NULL };
@@ -96,6 +100,8 @@ test_attach_multiple(void)
 static void
 test_detach(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m = {0};
 	Client c1 = { .win = 1, .mon = &m, .tags = 1, .next = NULL };
 	Client c2 = { .win = 2, .mon = &m, .tags = 1, .next = NULL };
@@ -108,6 +114,8 @@ test_detach(void)
 static void
 test_detach_tail(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m = {0};
 	Client c1 = { .win = 1, .mon = &m, .tags = 1, .next = NULL };
 	Client c2 = { .win = 2, .mon = &m, .tags = 1, .next = NULL };
@@ -120,6 +128,8 @@ test_detach_tail(void)
 static void
 test_attachstack(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m = {0};
 	Client c = { .win = 1, .mon = &m, .snext = NULL };
 	m.stack = NULL;
@@ -130,6 +140,8 @@ test_attachstack(void)
 static void
 test_detachstack_sel_update(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m = {0};
 	m.tagset[0] = 1; m.seltags = 0;
 	Client c1 = { .win = 1, .mon = &m, .tags = 1, .snext = NULL };
@@ -145,6 +157,8 @@ test_detachstack_sel_update(void)
 static void
 test_nexttiled_skips_floating(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m = {0};
 	m.tagset[0] = 1; m.seltags = 0;
 	Client c1 = { .win = 1, .mon = &m, .tags = 1, .isfloating = 1, .next = NULL };
@@ -157,6 +171,8 @@ test_nexttiled_skips_floating(void)
 static void
 test_nexttiled_skips_hidden_tags(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m = {0};
 	m.tagset[0] = 1; m.seltags = 0;
 	Client c1 = { .win = 1, .mon = &m, .tags = 2, .isfloating = 0, .next = NULL };
@@ -169,6 +185,8 @@ test_nexttiled_skips_hidden_tags(void)
 static void
 test_nexttiled_all_invisible(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m = {0};
 	m.tagset[0] = 1; m.seltags = 0;
 	Client c1 = { .win = 1, .mon = &m, .tags = 2, .isfloating = 0, .next = NULL };
@@ -180,6 +198,8 @@ test_nexttiled_all_invisible(void)
 static void
 test_dirtomon_next(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m1, m2;
 	memset(&m1, 0, sizeof m1);
 	memset(&m2, 0, sizeof m2);
@@ -195,6 +215,8 @@ test_dirtomon_next(void)
 static void
 test_dirtomon_wrap(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m1, m2;
 	memset(&m1, 0, sizeof m1);
 	memset(&m2, 0, sizeof m2);
@@ -210,6 +232,8 @@ test_dirtomon_wrap(void)
 static void
 test_dirtomon_prev(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m1, m2;
 	memset(&m1, 0, sizeof m1);
 	memset(&m2, 0, sizeof m2);
@@ -226,6 +250,8 @@ test_dirtomon_prev(void)
 static void
 test_recttomon_intersect(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m1, m2;
 	memset(&m1, 0, sizeof m1);
 	memset(&m2, 0, sizeof m2);
@@ -242,6 +268,8 @@ test_recttomon_intersect(void)
 static void
 test_recttomon_no_intersect(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m1;
 	memset(&m1, 0, sizeof m1);
 	m1.mx = m1.wx = 0; m1.my = m1.wy = 0; m1.mw = m1.ww = 960; m1.mh = m1.wh = 1080;
@@ -257,20 +285,26 @@ test_recttomon_no_intersect(void)
 static void
 test_wintoclient(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m;
 	memset(&m, 0, sizeof m);
 	m.clients = NULL;
 	mons = &m;
 	Client c = { .win = 42, .mon = &m, .next = NULL };
 	m.clients = &c;
+	winclient_put(&c); /* register fixture in the window index */
 
 	Client *found = wintoclient(42);
 	ASSERT(found == &c, "wintoclient finds by window");
+	winclient_remove(&c);
 }
 
 static void
 test_wintoclient_notfound(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m;
 	memset(&m, 0, sizeof m);
 	m.clients = NULL;
@@ -286,6 +320,8 @@ test_wintoclient_notfound(void)
 static void
 test_gap_copy(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Gap src = { .isgap = 1, .realgap = 10, .gappx = 10 };
 	Gap dst = { .isgap = 0, .realgap = 0, .gappx = 0 };
 	gap_copy(&dst, &src);
@@ -295,6 +331,8 @@ test_gap_copy(void)
 static void
 test_setgaps_toggle(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m;
 	memset(&m, 0, sizeof m);
 	m.lt[0] = &layouts[0]; m.lt[1] = &layouts[0]; m.sellt = 0;
@@ -316,6 +354,8 @@ test_setgaps_toggle(void)
 static void
 test_setgaps_adjust(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m;
 	memset(&m, 0, sizeof m);
 	m.lt[0] = &layouts[0]; m.lt[1] = &layouts[0]; m.sellt = 0;
@@ -332,6 +372,8 @@ test_setgaps_adjust(void)
 static void
 test_setgaps_negative_clamp(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m;
 	memset(&m, 0, sizeof m);
 	m.lt[0] = &layouts[0]; m.lt[1] = &layouts[0]; m.sellt = 0;
@@ -348,6 +390,8 @@ test_setgaps_negative_clamp(void)
 static void
 test_tag(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m;
 	memset(&m, 0, sizeof m);
 	m.lt[0] = &layouts[0]; m.lt[1] = &layouts[0]; m.sellt = 0;
@@ -365,6 +409,8 @@ test_tag(void)
 static void
 test_toggletag(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m;
 	memset(&m, 0, sizeof m);
 	m.lt[0] = &layouts[0]; m.lt[1] = &layouts[0]; m.sellt = 0;
@@ -385,6 +431,8 @@ test_toggletag(void)
 static void
 test_toggleview(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m;
 	memset(&m, 0, sizeof m);
 	m.lt[0] = &layouts[0]; m.lt[1] = &layouts[0]; m.sellt = 0;
@@ -399,6 +447,8 @@ test_toggleview(void)
 static void
 test_view_noop(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m;
 	memset(&m, 0, sizeof m);
 	m.lt[0] = &layouts[0]; m.lt[1] = &layouts[0]; m.sellt = 0;
@@ -414,6 +464,8 @@ test_view_noop(void)
 static void
 test_setmfact(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m;
 	memset(&m, 0, sizeof m);
 	m.mfact = 0.55f;
@@ -432,6 +484,8 @@ test_setmfact(void)
 static void
 test_setmfact_bounds(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m;
 	memset(&m, 0, sizeof m);
 	m.mfact = 0.55f;
@@ -447,6 +501,8 @@ test_setmfact_bounds(void)
 static void
 test_incnmaster(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m;
 	memset(&m, 0, sizeof m);
 	m.nmaster = 2;
@@ -467,6 +523,8 @@ test_incnmaster(void)
 static void
 test_zoom_single_client(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m;
 	memset(&m, 0, sizeof m);
 	m.tagset[0] = 1; m.seltags = 0;
@@ -486,6 +544,8 @@ test_zoom_single_client(void)
 static void
 test_zoom_swaps(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m;
 	memset(&m, 0, sizeof m);
 	m.tagset[0] = 1; m.seltags = 0;
@@ -508,6 +568,8 @@ test_zoom_swaps(void)
 static void
 test_zoom_floating_noop(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m;
 	memset(&m, 0, sizeof m);
 	m.tagset[0] = 1; m.seltags = 0;
@@ -525,6 +587,8 @@ test_zoom_floating_noop(void)
 static void
 test_setlayout_toggle(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m;
 	memset(&m, 0, sizeof m);
 	m.lt[0] = &layouts[0]; m.lt[1] = &layouts[0];
@@ -542,6 +606,8 @@ test_setlayout_toggle(void)
 static void
 test_tile_no_clients(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m;
 	memset(&m, 0, sizeof m);
 	m.tagset[0] = 1; m.seltags = 0;
@@ -561,6 +627,8 @@ test_tile_no_clients(void)
 static void
 test_monocle_count(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m;
 	memset(&m, 0, sizeof m);
 	m.tagset[0] = 1; m.seltags = 0;
@@ -582,6 +650,8 @@ test_monocle_count(void)
 static void
 test_monocle_no_clients(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m;
 	memset(&m, 0, sizeof m);
 	m.tagset[0] = 1; m.seltags = 0;
@@ -599,6 +669,8 @@ test_monocle_no_clients(void)
 static void
 test_createmon_defaults(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	ASSERT(m != NULL, "createmon returns non-NULL");
 	ASSERT_EQ(m->tagset[0], 1, "createmon: tagset[0] == 1");
@@ -616,6 +688,8 @@ test_createmon_defaults(void)
 static void
 test_isdescprocess_invalid_pids(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	ASSERT_EQ(isdescprocess(0, 100), 0, "isdescprocess(0, 100) returns 0");
 	ASSERT_EQ(isdescprocess(100, 0), 0, "isdescprocess(100, 0) returns 0");
 	ASSERT_EQ(isdescprocess(-1, 100), 0, "isdescprocess(-1, 100) returns 0");
@@ -627,6 +701,8 @@ test_isdescprocess_invalid_pids(void)
 static void
 test_isdescprocess_self_and_parent(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	pid_t self = getpid();
 	pid_t parent = getppid();
 
@@ -639,6 +715,8 @@ test_isdescprocess_self_and_parent(void)
 static void
 test_isdescprocess_unrelated(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	pid_t self = getpid();
 	/* PID 999999 or non-ancestor */
 	ASSERT_EQ(isdescprocess(999999, self), 0, "isdescprocess returns 0 for non-ancestor");
@@ -648,6 +726,8 @@ test_isdescprocess_unrelated(void)
 static void
 test_swallowingclient(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m;
 	memset(&m, 0, sizeof m);
 	m.clients = NULL;
@@ -671,6 +751,8 @@ test_swallowingclient(void)
 static void
 test_swallowingclient_notfound(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m;
 	memset(&m, 0, sizeof m);
 	m.clients = NULL;
@@ -684,6 +766,8 @@ test_swallowingclient_notfound(void)
 static void
 test_focusstack_forward(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m;
 	memset(&m, 0, sizeof m);
 	m.tagset[0] = 1; m.seltags = 0;
@@ -704,6 +788,8 @@ test_focusstack_forward(void)
 static void
 test_focusstack_fullscreen_lock(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m;
 	memset(&m, 0, sizeof m);
 	m.tagset[0] = 1; m.seltags = 0;
@@ -722,6 +808,8 @@ test_focusstack_fullscreen_lock(void)
 static void
 test_cachebuttons(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	button_button_used = 0;
 	button_mask_used = 0;
 	cachebuttons();
@@ -731,6 +819,8 @@ test_cachebuttons(void)
 static void
 test_cachekeys(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	key_keysym_used = 0;
 	key_mod_used = 0;
 	cachekeys();
@@ -741,6 +831,8 @@ test_cachekeys(void)
 static void
 test_updatebarpos_top(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m;
 	memset(&m, 0, sizeof m);
 	m.my = m.wy = 0;
@@ -758,6 +850,8 @@ test_updatebarpos_top(void)
 static void
 test_updatebarpos_bottom(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m;
 	memset(&m, 0, sizeof m);
 	m.my = m.wy = 0;
@@ -774,6 +868,8 @@ test_updatebarpos_bottom(void)
 static void
 test_updatebarpos_hidden(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m;
 	memset(&m, 0, sizeof m);
 	m.my = m.wy = 0;
@@ -790,6 +886,8 @@ test_updatebarpos_hidden(void)
 static void
 test_setgaps_reset(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m;
 	memset(&m, 0, sizeof m);
 	m.lt[0] = &layouts[0]; m.lt[1] = &layouts[0]; m.sellt = 0;
@@ -813,6 +911,8 @@ test_setgaps_reset(void)
 static void
 test_isvisible(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m;
 	memset(&m, 0, sizeof m);
 	m.tagset[0] = 1; m.seltags = 0;
@@ -832,6 +932,8 @@ test_isvisible(void)
 static void
 test_intersect(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m;
 	memset(&m, 0, sizeof m);
 	m.wx = 10; m.wy = 20; m.ww = 100; m.wh = 100;
@@ -853,6 +955,8 @@ test_intersect(void)
 static void
 test_setlayout_explicit(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m;
 	memset(&m, 0, sizeof m);
 	m.lt[0] = &layouts[0]; m.lt[1] = &layouts[1];
@@ -870,6 +974,8 @@ test_setlayout_explicit(void)
 static void
 test_quit(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	running = 1; restart = 0;
 	Arg arg = { .i = 0 };
 	quit(&arg);
@@ -887,6 +993,8 @@ test_quit(void)
 static void
 test_togglefloating(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m;
 	memset(&m, 0, sizeof m);
 	m.tagset[0] = 1; m.seltags = 0;
@@ -908,6 +1016,8 @@ test_togglefloating(void)
 static void
 test_applysizehints_min(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c;
 	memset(&c, 0, sizeof c);
 	c.minw = 100; c.minh = 50;
@@ -933,6 +1043,8 @@ test_applysizehints_min(void)
 static void
 test_applysizehints_interactive_bounds(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	sw = 1920; sh = 1080; bh = 22;
 	Client c;
 	memset(&c, 0, sizeof c);
@@ -957,6 +1069,8 @@ test_applysizehints_interactive_bounds(void)
 static void
 test_cachebuttons_global_flags(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	unsigned int i;
 	unsigned long expected_button = 0;
 	unsigned int expected_mask = 0;
@@ -982,6 +1096,8 @@ test_cachebuttons_global_flags(void)
 static void
 test_cachekeys_global_flags(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	unsigned int i;
 	KeySym expected_keysym = 0;
 	unsigned int expected_mod = 0;
@@ -1006,6 +1122,8 @@ test_cachekeys_global_flags(void)
 static void
 test_cachebuttons_empty_buttons(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	/* cachebuttons() skips entries with func==NULL.
 	   Re-compute from config and compare. */
 	unsigned int i;
@@ -1027,6 +1145,8 @@ test_cachebuttons_empty_buttons(void)
 static void
 test_mousebuttonmatch_mapped_button(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	/* Button1+MODKEY matches the first buttons[] entry */
 	ASSERT(mousebuttonmatch(Button1, CLEANMASK(MODKEY)) == 1,
 		"mousebuttonmatch: Button1+MODKEY is mapped");
@@ -1035,6 +1155,8 @@ test_mousebuttonmatch_mapped_button(void)
 static void
 test_mousebuttonmatch_unmapped_button(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	/* Button4/Button5 (scroll) are not in the buttons array */
 	ASSERT(mousebuttonmatch(Button4, CLEANMASK(MODKEY)) == 0,
 		"mousebuttonmatch: Button4 is not mapped");
@@ -1045,6 +1167,8 @@ test_mousebuttonmatch_unmapped_button(void)
 static void
 test_keypress_mapped_key(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	XEvent ev;
 	int old_showbar;
 
@@ -1067,6 +1191,8 @@ test_keypress_mapped_key(void)
 static void
 test_keypress_unmapped_key(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	XEvent ev;
 	int saved_showbar;
 
@@ -1084,6 +1210,8 @@ test_keypress_unmapped_key(void)
 static void
 test_keypress_unmapped_mod(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	XEvent ev;
 	int saved_showbar;
 
@@ -1096,6 +1224,65 @@ test_keypress_unmapped_mod(void)
 	keypress(&ev);
 	ASSERT_EQ(selmon->showbar, saved_showbar,
 		"keypress: correct keysym but wrong mod does not dispatch");
+}
+
+/* strcpy_len copies exactly src_len bytes and NUL-terminates */
+static void
+test_strcpy_len_basic_and_exact_fit(void)
+{
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
+	char dst[6];
+
+	strcpy_len(dst, "hello", 5);
+	ASSERT_EQ(dst[5], '\0', "strcpy_len NUL-terminates at src_len");
+	ASSERT(strcmp(dst, "hello") == 0, "strcpy_len copies full string");
+
+	/* exact fit: 5 chars + NUL in a 6-byte buffer */
+	strcpy_len(dst, "abc", 3);
+	ASSERT(strcmp(dst, "abc") == 0 && dst[3] == '\0',
+		"strcpy_len shorter source terminates after copy");
+}
+
+/* stpcpy_len returns a pointer to the terminator for chaining */
+static void
+test_stpcpy_len_returns_terminator(void)
+{
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
+	char buf[16];
+	char *end;
+
+	end = stpcpy_len(buf, "ab", 2);
+	*end = '\0'; /* caller would continue chaining; show the pointer lands on slot 2 */
+	ASSERT_EQ(end - buf, 2, "stpcpy_len returns dst + src_len");
+	stpcpy_len(buf + 2, "cd", 2);
+	buf[4] = '\0';
+	ASSERT(strcmp(buf, "abcd") == 0, "chained stpcpy_len concatenates");
+}
+
+/* stpncpy_len truncates when src does not fit and still NUL-terminates */
+static void
+test_stpncpy_len_truncation(void)
+{
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
+	char dst[4]; /* room for 3 chars + NUL */
+	char *end;
+
+	end = stpncpy_len(dst, sizeof dst, "abcdef", 6);
+	ASSERT_EQ(end - dst, 3, "returns pointer to in-buffer terminator");
+	ASSERT(strncmp(dst, "abc", 3) == 0, "content truncated to dstsize-1");
+	ASSERT_EQ(dst[3], '\0', "always NUL-terminated");
+
+	/* src_len == dstsize boundary: must truncate to dstsize-1, not overflow */
+	memset(dst, 'X', sizeof dst);
+	stpncpy_len(dst, sizeof dst, "wxyz", 4);
+	ASSERT_EQ(dst[3], '\0', "src_len == dstsize truncates, no overflow");
+
+	/* src fits: behaves like plain copy */
+	end = stpncpy_len(dst, sizeof dst, "hi", 2);
+	ASSERT_EQ(end - dst, 2, "no-truncation case returns dst + src_len");
 }
 
 /* Main */
@@ -1242,6 +1429,9 @@ main(void)
 	test_keypress_mapped_key();
 	test_keypress_unmapped_key();
 	test_keypress_unmapped_mod();
+	test_strcpy_len_basic_and_exact_fit();
+	test_stpcpy_len_returns_terminator();
+	test_stpncpy_len_truncation();
 
 	/* macros */
 	test_isvisible();

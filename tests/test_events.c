@@ -55,6 +55,8 @@ restore_selmon(void)
 static void
 test_focusin_sets_focus_on_sel(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client *c = ecalloc(1, sizeof(Client));
 	c->win = 42; c->mon = selmon; c->tags = 1; c->neverfocus = 0;
 	selmon->sel = c;
@@ -65,6 +67,7 @@ test_focusin_sets_focus_on_sel(void)
 
 	focusin(&ev);
 	ASSERT(1, "focusin with different window calls setfocus on sel");
+	winclient_remove(c);
 	free(c);
 	selmon->sel = NULL;
 }
@@ -72,6 +75,8 @@ test_focusin_sets_focus_on_sel(void)
 static void
 test_focusin_ignores_own_window(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client *c = ecalloc(1, sizeof(Client));
 	c->win = 42; c->mon = selmon; c->tags = 1; c->neverfocus = 0;
 	selmon->sel = c;
@@ -82,6 +87,7 @@ test_focusin_ignores_own_window(void)
 
 	focusin(&ev);
 	ASSERT(1, "focusin with own window does not refocus");
+	winclient_remove(c);
 	free(c);
 	selmon->sel = NULL;
 }
@@ -89,6 +95,8 @@ test_focusin_ignores_own_window(void)
 static void
 test_focusin_no_sel_ignores(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	selmon->sel = NULL;
 
 	XEvent ev;
@@ -104,9 +112,12 @@ test_focusin_no_sel_ignores(void)
 static void
 test_clientmessage_fullscreen_add(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c = { .win = 42, .mon = selmon, .tags = 1, .isfullscreen = 0 };
 	selmon->clients = &c;
 	selmon->stack = &c;
+	winclient_put(&c); /* register fixture in window index */
 
 	XEvent ev;
 	memset(&ev, 0, sizeof ev);
@@ -119,14 +130,18 @@ test_clientmessage_fullscreen_add(void)
 	ASSERT_EQ(c.isfullscreen, 1, "clientmessage fullscreen add sets isfullscreen");
 	selmon->clients = NULL;
 	selmon->stack = NULL;
+	winclient_remove(&c); /* drop fixture from window index */
 }
 
 static void
 test_clientmessage_fullscreen_remove(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c = { .win = 42, .mon = selmon, .tags = 1, .isfullscreen = 1 };
 	selmon->clients = &c;
 	selmon->stack = &c;
+	winclient_put(&c); /* register fixture in window index */
 
 	XEvent ev;
 	memset(&ev, 0, sizeof ev);
@@ -139,14 +154,18 @@ test_clientmessage_fullscreen_remove(void)
 	ASSERT_EQ(c.isfullscreen, 0, "clientmessage fullscreen remove clears isfullscreen");
 	selmon->clients = NULL;
 	selmon->stack = NULL;
+	winclient_remove(&c); /* drop fixture from window index */
 }
 
 static void
 test_clientmessage_fullscreen_toggle(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c = { .win = 42, .mon = selmon, .tags = 1, .isfullscreen = 0 };
 	selmon->clients = &c;
 	selmon->stack = &c;
+	winclient_put(&c); /* register fixture in window index */
 
 	XEvent ev;
 	memset(&ev, 0, sizeof ev);
@@ -159,11 +178,14 @@ test_clientmessage_fullscreen_toggle(void)
 	ASSERT_EQ(c.isfullscreen, 1, "clientmessage fullscreen toggle sets isfullscreen");
 	selmon->clients = NULL;
 	selmon->stack = NULL;
+	winclient_remove(&c); /* drop fixture from window index */
 }
 
 static void
 test_clientmessage_noop_on_unknown_window(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	XEvent ev;
 	memset(&ev, 0, sizeof ev);
 	ev.xclient.message_type = netatom[NetWMState];
@@ -180,9 +202,12 @@ test_clientmessage_noop_on_unknown_window(void)
 static void
 test_clientmessage_activewindow_sets_urgent(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c = { .win = 42, .mon = selmon, .tags = 1, .isurgent = 0 };
 	selmon->clients = &c;
 	selmon->stack = &c;
+	winclient_put(&c); /* register fixture in window index */
 	selmon->sel = NULL;
 
 	XEvent ev;
@@ -194,14 +219,18 @@ test_clientmessage_activewindow_sets_urgent(void)
 	ASSERT_EQ(c.isurgent, 1, "clientmessage activewindow sets urgent");
 	selmon->clients = NULL;
 	selmon->stack = NULL;
+	winclient_remove(&c); /* drop fixture from window index */
 }
 
 static void
 test_clientmessage_activewindow_skips_sel(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c = { .win = 42, .mon = selmon, .tags = 1, .isurgent = 0 };
 	selmon->clients = &c;
 	selmon->stack = &c;
+	winclient_put(&c); /* register fixture in window index */
 	selmon->sel = &c;
 
 	XEvent ev;
@@ -214,6 +243,7 @@ test_clientmessage_activewindow_skips_sel(void)
 	selmon->clients = NULL;
 	selmon->stack = NULL;
 	selmon->sel = NULL;
+	winclient_remove(&c); /* drop fixture from window index */
 }
 
 /* --- unmapnotify --- */
@@ -221,12 +251,15 @@ test_clientmessage_activewindow_skips_sel(void)
 static void
 test_unmapnotify_send_event_withdraws(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c = { .win = 42, .mon = selmon, .tags = 1, .neverfocus = 0 };
 	Client *old_clients = selmon->clients;
 	Client *old_stack = selmon->stack;
 	Client *old_sel = selmon->sel;
 	selmon->clients = &c;
 	selmon->stack = &c;
+	winclient_put(&c); /* register fixture in window index */
 	selmon->sel = &c;
 
 	XEvent ev;
@@ -240,11 +273,14 @@ test_unmapnotify_send_event_withdraws(void)
 	selmon->stack = old_stack;
 	selmon->sel = old_sel;
 	ASSERT(1, "unmapnotify with send_event does not crash");
+	winclient_remove(&c); /* drop fixture from window index */
 }
 
 static void
 test_unmapnotify_normal_unmanages(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	saved_selmon = selmon;
 	Monitor *m = ecalloc(1, sizeof(Monitor));
 	m->tagset[0] = 1; m->tagset[1] = 1;
@@ -259,6 +295,7 @@ test_unmapnotify_normal_unmanages(void)
 	m->sel = cp;
 	m->clients = cp;
 	m->stack = cp;
+	winclient_put(cp); /* register fixture in window index */
 	mons = selmon = m;
 
 	XEvent ev;
@@ -280,6 +317,8 @@ test_unmapnotify_normal_unmanages(void)
 static void
 test_destroynotify_unmanages(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	saved_selmon = selmon;
 	Monitor m;
 	memset(&m, 0, sizeof m);
@@ -294,6 +333,7 @@ test_destroynotify_unmanages(void)
 	m.sel = cp;
 	m.clients = cp;
 	m.stack = cp;
+	winclient_put(cp); /* register fixture in window index */
 	mons = selmon = &m;
 
 	XEvent ev;
@@ -311,6 +351,8 @@ test_destroynotify_unmanages(void)
 static void
 test_configurerequest_updates_floating_geometry(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	saved_selmon = selmon;
 	Monitor m;
 	memset(&m, 0, sizeof m);
@@ -329,6 +371,7 @@ test_configurerequest_updates_floating_geometry(void)
 	mons = selmon = &m;
 	m.clients = &c;
 	m.stack = &c;
+	winclient_put(&c); /* register fixture in window index */
 	c.next = NULL;
 	c.snext = NULL;
 
@@ -351,11 +394,14 @@ test_configurerequest_updates_floating_geometry(void)
 	ASSERT_EQ(c.oldy, 200, "configurerequest preserves oldy before change");
 
 	mons = selmon = saved_selmon;
+	winclient_remove(&c); /* drop fixture from window index */
 }
 
 static void
 test_configurerequest_partial_mask(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	saved_selmon = selmon;
 	Monitor m;
 	memset(&m, 0, sizeof m);
@@ -375,6 +421,7 @@ test_configurerequest_partial_mask(void)
 	mons = selmon = &m;
 	m.clients = &c;
 	m.stack = &c;
+	winclient_put(&c); /* register fixture in window index */
 
 	XEvent ev;
 	memset(&ev, 0, sizeof ev);
@@ -390,11 +437,14 @@ test_configurerequest_partial_mask(void)
 	ASSERT_EQ(c.h, 600, "configurerequest partial mask updates h");
 
 	mons = selmon = saved_selmon;
+	winclient_remove(&c); /* drop fixture from window index */
 }
 
 static void
 test_configurerequest_nonclient_configures(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	XEvent ev;
 	memset(&ev, 0, sizeof ev);
 	ev.xconfigurerequest.window = 9999; /* no client for this */
@@ -409,6 +459,8 @@ test_configurerequest_nonclient_configures(void)
 static void
 test_expose_draws_bar(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	XEvent ev;
 	memset(&ev, 0, sizeof ev);
 	ev.xexpose.window = selmon->barwin;
@@ -420,6 +472,8 @@ test_expose_draws_bar(void)
 static void
 test_expose_ignores_other(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	XEvent ev;
 	memset(&ev, 0, sizeof ev);
 	ev.xexpose.window = 9999;
@@ -433,6 +487,8 @@ test_expose_ignores_other(void)
 static void
 test_propertynotify_root_wmname(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	/* reset stext so updatestatus() sees a change and sets dirty */
 	stext[0] = '\0';
 	stext_len = 0;
@@ -452,6 +508,8 @@ test_propertynotify_root_wmname(void)
 static void
 test_propertynotify_propertydelete_ignored(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	selmon->bar_dirty_segments = 0;
 
 	XEvent ev;
@@ -468,6 +526,8 @@ test_propertynotify_propertydelete_ignored(void)
 static void
 test_propertynotify_client_normal_hints(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c;
 	memset(&c, 0, sizeof c);
 	c.win = 43;
@@ -476,6 +536,7 @@ test_propertynotify_client_normal_hints(void)
 	c.hintsvalid = 1;
 	selmon->clients = &c;
 	selmon->stack = &c;
+	winclient_put(&c); /* register fixture in window index */
 	c.next = NULL;
 	c.snext = NULL;
 
@@ -490,11 +551,14 @@ test_propertynotify_client_normal_hints(void)
 	ASSERT_EQ(c.hintsvalid, 0, "propertynotify XA_WM_NORMAL_HINTS clears hintsvalid");
 	selmon->clients = NULL;
 	selmon->stack = NULL;
+	winclient_remove(&c); /* drop fixture from window index */
 }
 
 static void
 test_propertynotify_client_wm_hints(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	selmon->bar_dirty_segments = 0;
 
 	Client *c = ecalloc(1, sizeof(Client));
@@ -507,6 +571,7 @@ test_propertynotify_client_wm_hints(void)
 	selmon->stack = c;
 	c->next = NULL;
 	c->snext = NULL;
+	winclient_put(c); /* register fixture in window index */
 
 	XEvent ev;
 	memset(&ev, 0, sizeof ev);
@@ -521,12 +586,15 @@ test_propertynotify_client_wm_hints(void)
 
 	selmon->clients = NULL;
 	selmon->stack = NULL;
+	winclient_remove(c);
 	free(c);
 }
 
 static void
 test_propertynotify_client_wmname_selected(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	selmon->bar_dirty_segments = 0;
 
 	Client *c = ecalloc(1, sizeof(Client));
@@ -539,6 +607,7 @@ test_propertynotify_client_wmname_selected(void)
 	selmon->sel = c;
 	c->next = NULL;
 	c->snext = NULL;
+	winclient_put(c); /* register fixture in window index */
 
 	XEvent ev;
 	memset(&ev, 0, sizeof ev);
@@ -554,12 +623,15 @@ test_propertynotify_client_wmname_selected(void)
 	selmon->clients = NULL;
 	selmon->stack = NULL;
 	selmon->sel = NULL;
+	winclient_remove(c);
 	free(c);
 }
 
 static void
 test_propertynotify_client_wmname_not_selected(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	selmon->bar_dirty_segments = 0;
 
 	Client *c = ecalloc(1, sizeof(Client));
@@ -572,6 +644,7 @@ test_propertynotify_client_wmname_not_selected(void)
 	selmon->sel = NULL;
 	c->next = NULL;
 	c->snext = NULL;
+	winclient_put(c); /* register fixture in window index */
 
 	XEvent ev;
 	memset(&ev, 0, sizeof ev);
@@ -587,6 +660,7 @@ test_propertynotify_client_wmname_not_selected(void)
 
 	selmon->clients = NULL;
 	selmon->stack = NULL;
+	winclient_remove(c);
 	free(c);
 }
 
@@ -595,6 +669,8 @@ test_propertynotify_client_wmname_not_selected(void)
 static void
 test_propertynotify_root_wmname_fullscreen_skip(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	/* optimizefullscreen=1 (default config) + fullscreen client -> skip updatestatus */
 	save_selmon();
 	selmon = ecalloc(1, sizeof(Monitor));
@@ -628,6 +704,8 @@ test_propertynotify_root_wmname_fullscreen_skip(void)
 static void
 test_propertynotify_root_wmname_no_fullscreen_not_skipped(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	/* optimizefullscreen=1 but no fullscreen client -> updatestatus called */
 	/* reset stext so updatestatus() sees a change and sets dirty */
 	stext[0] = '\0';
@@ -650,6 +728,8 @@ test_propertynotify_root_wmname_no_fullscreen_not_skipped(void)
 static void
 test_setfullscreen_enter(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c;
 	memset(&c, 0, sizeof c);
 	c.win = 42;
@@ -673,6 +753,8 @@ test_setfullscreen_enter(void)
 static void
 test_setfullscreen_exit(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	selmon->bar_dirty_segments = 0;
 
 	Client c;
@@ -704,6 +786,8 @@ test_setfullscreen_exit(void)
 static void
 test_setfullscreen_idempotent(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c;
 	memset(&c, 0, sizeof c);
 	c.win = 42;
@@ -720,6 +804,8 @@ test_setfullscreen_idempotent(void)
 static void
 test_togglefullscr_with_sel(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c;
 	memset(&c, 0, sizeof c);
 	c.win = 42;
@@ -744,6 +830,8 @@ test_togglefullscr_with_sel(void)
 static void
 test_togglefullscr_no_sel(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	selmon->sel = NULL;
 	togglefullscr(NULL);
 	ASSERT(1, "togglefullscr with no sel does not crash");
@@ -754,6 +842,8 @@ test_togglefullscr_no_sel(void)
 static void
 test_enternotify_non_normal_mode(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	XEvent ev;
 	memset(&ev, 0, sizeof ev);
 	ev.xcrossing.window = 9999;
@@ -767,6 +857,8 @@ test_enternotify_non_normal_mode(void)
 static void
 test_enternotify_notify_inferior(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	XEvent ev;
 	memset(&ev, 0, sizeof ev);
 	ev.xcrossing.window = 9999;
@@ -780,6 +872,8 @@ test_enternotify_notify_inferior(void)
 static void
 test_enternotify_enter_sel_returns_early(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c;
 	memset(&c, 0, sizeof c);
 	c.win = 47;
@@ -787,6 +881,7 @@ test_enternotify_enter_sel_returns_early(void)
 	c.tags = 1;
 	selmon->clients = &c;
 	selmon->stack = &c;
+	winclient_put(&c); /* register fixture in window index */
 	selmon->sel = &c;
 	c.next = NULL;
 	c.snext = NULL;
@@ -802,11 +897,14 @@ test_enternotify_enter_sel_returns_early(void)
 	selmon->clients = NULL;
 	selmon->stack = NULL;
 	selmon->sel = NULL;
+	winclient_remove(&c); /* drop fixture from window index */
 }
 
 static void
 test_enternotify_enter_barwin_returns_early(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	XEvent ev;
 	memset(&ev, 0, sizeof ev);
 	ev.xcrossing.window = selmon->barwin;
@@ -822,6 +920,8 @@ test_enternotify_enter_barwin_returns_early(void)
 static void
 test_motionnotify_no_crash_single_monitor(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	/* mons->next = NULL so the early return "!mons->next" triggers */
 	mons->next = NULL;
 
@@ -838,6 +938,8 @@ test_motionnotify_no_crash_single_monitor(void)
 static void
 test_motionnotify_no_crash_no_mons(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *saved_mons = mons;
 	mons = NULL;
 

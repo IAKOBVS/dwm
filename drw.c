@@ -87,6 +87,9 @@ glyph_getwidth(Drw *drw, long codepoint, const char *utf8str, unsigned int utf8l
 	for (font = drw->fonts; font; font = font->next) {
 		if (XftCharExists(drw->dpy, font->xfont, codepoint)) {
 			drw_font_getexts(font, utf8str, utf8len, &tmpw, NULL);
+			/* probe >= size means the walk found no empty slot — `i`
+			 * now aliases a live entry, so skip storing rather than
+			 * silently evicting it */
 			if (probe < GLYPH_CACHE_SIZE) {
 				glyph_cache[i].codepoint = codepoint;
 				glyph_cache[i].width = tmpw;
@@ -100,15 +103,20 @@ glyph_getwidth(Drw *drw, long codepoint, const char *utf8str, unsigned int utf8l
 /*
  * Look up a codepoint in the emoji render cache.  Open-addressing hash
  * with linear probing; returns the slot index on hit, -1 on miss.
+ * A hit requires the scheme pixels to match as well: the cached pixmap
+ * contains the background it was rendered over, so reusing it under a
+ * different fg/bg would draw stale colors.
  */
 static int
-emoji_cache_lookup(Drw *drw, long codepoint)
+emoji_cache_lookup(Drw *drw, long codepoint, unsigned long fg, unsigned long bg)
 {
 	unsigned int i = (unsigned int)codepoint & (EMOJI_CACHE_SIZE - 1);
 	unsigned int probe = 0;
 
 	while (drw->emoji_cache[i].codepoint != -1) {
-		if (drw->emoji_cache[i].codepoint == codepoint)
+		if (drw->emoji_cache[i].codepoint == codepoint
+		&& drw->emoji_cache[i].fg == fg
+		&& drw->emoji_cache[i].bg == bg)
 			return (int)i;
 		i = (i + 1) & (EMOJI_CACHE_SIZE - 1);
 		if (++probe >= EMOJI_CACHE_SIZE)
@@ -122,9 +130,12 @@ emoji_cache_lookup(Drw *drw, long codepoint)
  * Uses open-addressing with linear probing; evicts (and frees) any
  * existing entry at the target slot.  The pixmap must have been created
  * from the same-depth drawable and is later blitted with XCopyArea.
+ * fg/bg are stored with the entry so lookups can reject entries that
+ * were captured under a different color scheme.
  */
 static void
-emoji_cache_insert(Drw *drw, long codepoint, Pixmap pixmap, int w)
+emoji_cache_insert(Drw *drw, long codepoint, Pixmap pixmap, int w,
+                   unsigned long fg, unsigned long bg)
 {
 	unsigned int i = (unsigned int)codepoint & (EMOJI_CACHE_SIZE - 1);
 	unsigned int probe = 0;
@@ -141,6 +152,8 @@ emoji_cache_insert(Drw *drw, long codepoint, Pixmap pixmap, int w)
 	drw->emoji_cache[i].codepoint = codepoint;
 	drw->emoji_cache[i].pixmap = pixmap;
 	drw->emoji_cache[i].w = w;
+	drw->emoji_cache[i].fg = fg;
+	drw->emoji_cache[i].bg = bg;
 }
 
 /*
@@ -267,7 +280,9 @@ drw_create(Display *dpy, int screen, Window root, unsigned int w, unsigned int h
  * Resize the backing pixmap and re-create the XftDraw.  The old XftDraw
  * was tied to the old pixmap and must be destroyed — Xft will internally
  * free any cached glyph images for that drawable.  The emoji render cache
- * and glyph-width cache survive (font chain is unchanged).
+ * is invalidated: its pixmaps were captured at the old bar height, so
+ * blitting them at the new height would read past the pixmap (BadMatch).
+ * The glyph-width cache survives (font chain is unchanged).
  */
 void
 drw_resize(Drw *drw, unsigned int w, unsigned int h)
@@ -275,6 +290,7 @@ drw_resize(Drw *drw, unsigned int w, unsigned int h)
 	if (!drw)
 		return;
 
+	emoji_cache_invalidate(drw);
 	drw->w = w = w ? w : 1;
 	drw->h = h = h ? h : 1;
 	if (drw->drawable)
@@ -624,13 +640,16 @@ drw_text(Drw *drw, int x, int y, unsigned int w, unsigned int h, unsigned int lp
 						}
 						cw = glyph_getwidth(drw, cp, rp, (unsigned int)clen);
 						if (cw > 0) {
-							/* emoji render cache: if we have a cached pixmap,
-						 * blit it with XCopyArea instead of re-rendering
-						 * through Xft (which would trigger FT_Load_Glyph
-						 * → png_read → inflate).  On cache miss, render
-						 * via Xft, capture the result with XCopyArea into
-						 * a fresh pixmap, and insert into the cache. */
-							eidx = emoji_cache_lookup(drw, cp);
+							/* emoji render cache: if we have a cached pixmap
+							 * blit it with XCopyArea instead of re-rendering
+							 * through Xft (which would trigger FT_Load_Glyph
+							 * → png_read → inflate).  The cache key includes
+							 * the fg/bg pixels because the captured pixmap has
+							 * the scheme background baked in — reusing it under
+							 * another scheme would draw stale colors. */
+							unsigned long efg = drw->scheme[invert ? ColBg : ColFg].pixel;
+							unsigned long ebg = drw->scheme[invert ? ColFg : ColBg].pixel;
+							eidx = emoji_cache_lookup(drw, cp, efg, ebg);
 							if (eidx >= 0) {
 								EmojiCacheSlot *eslot = &drw->emoji_cache[eidx];
 								XCopyArea(drw->dpy, eslot->pixmap, drw->drawable, drw->gc, 0, 0, (unsigned int)eslot->w, h, cx, y);
@@ -645,7 +664,7 @@ drw_text(Drw *drw, int x, int y, unsigned int w, unsigned int h, unsigned int lp
 								                  (int)clen);
 								cpm = XCreatePixmap(drw->dpy, drw->drawable, (unsigned int)cw, h, DefaultDepth(drw->dpy, drw->screen));
 								XCopyArea(drw->dpy, drw->drawable, cpm, drw->gc, cx, y, (unsigned int)cw, h, 0, 0);
-								emoji_cache_insert(drw, cp, cpm, (int)cw);
+								emoji_cache_insert(drw, cp, cpm, (int)cw, efg, ebg);
 							}
 							cx += (int)cw;
 						}
@@ -717,6 +736,7 @@ drw_text(Drw *drw, int x, int y, unsigned int w, unsigned int h, unsigned int lp
 					xfont_free(usedfont);
 					/* remember this codepoint as a no-match so we skip the
 					 * expensive XftFontMatch call next time we see it */
+					/* ++idx cycles slots round-robin, overwriting the oldest entry */
 					nomatches.codepoint[++nomatches.idx % nomatches_len] = utf8codepoint;
 no_match:
 					text += utf8charlen;
@@ -729,6 +749,10 @@ no_match:
 	return x + (render ? w : 0);
 }
 
+/*
+ * Copy a region of the off-screen pixmap onto the target window and
+ * flush the connection (XSync) so the bar content appears immediately.
+ */
 void
 drw_map(Drw *drw, Window win, int x, int y, unsigned int w, unsigned int h)
 {
@@ -739,6 +763,11 @@ drw_map(Drw *drw, Window win, int x, int y, unsigned int w, unsigned int h)
 	XSync(drw->dpy, False);
 }
 
+/*
+ * Measure the total advance width of text under the current font chain
+ * without drawing.  ASCII characters are measured directly against the
+ * first font; non-ASCII goes through glyph_getwidth (cache-aware).
+ */
 unsigned int
 drw_fontset_getwidth(Drw *drw, const char *text)
 {
@@ -771,6 +800,12 @@ drw_fontset_invalidate_cache(void)
 		glyph_cache[i].codepoint = -1;
 }
 
+/*
+ * Measure text width capped at n, returning MIN(n, width).
+ * n is passed as drw_text()'s invert argument with zeroed coordinates,
+ * which selects measure-only mode with a width budget of n so the scan
+ * stops early once the budget is exceeded.
+ */
 unsigned int
 drw_fontset_getwidth_clamp(Drw *drw, const char *text, unsigned int n)
 {
@@ -780,6 +815,12 @@ drw_fontset_getwidth_clamp(Drw *drw, const char *text, unsigned int n)
 	return MIN(n, tmp);
 }
 
+/*
+ * Query the advance width of a text run in one specific font via
+ * XftTextExtentsUtf8.  *w receives the horizontal advance; *h receives
+ * the font's overall line height (ascent + descent), not a per-text
+ * value.  Either output pointer may be NULL to skip it.
+ */
 void
 drw_font_getexts(Fnt *font, const char *text, unsigned int len, unsigned int *w, unsigned int *h)
 {
@@ -795,6 +836,10 @@ drw_font_getexts(Fnt *font, const char *text, unsigned int len, unsigned int *w,
 		*h = font->h;
 }
 
+/*
+ * Create a cursor wrapper for a core shape constant (e.g. XC_xterm).
+ * Returns NULL if drw is NULL or allocation fails.
+ */
 Cur *
 drw_cur_create(Drw *drw, int shape)
 {
@@ -808,6 +853,10 @@ drw_cur_create(Drw *drw, int shape)
 	return cur;
 }
 
+/*
+ * Release the X cursor resource and free the wrapper.  Safe to call
+ * with a NULL cursor.
+ */
 void
 drw_cur_free(Drw *drw, Cur *cursor)
 {

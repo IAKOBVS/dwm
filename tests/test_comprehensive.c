@@ -50,6 +50,46 @@ restore_selmon(void)
 	mons = saved_selmon;
 }
 
+/* Unmanage every client on the primary monitor, releasing clients that
+ * were created inside dwm (manage/maprequest/scan) rather than by the
+ * test fixture. */
+static void
+drain_clients(void)
+{
+	while (mons && mons->clients)
+		unmanage(mons->clients, 1);
+}
+
+/* Release all globals a prior setup() overwrote: monitors, fonts,
+ * scheme colors, cursors, drawing context. */
+static void
+free_global_state(void)
+{
+	Monitor *m, *mnext;
+	Fnt *f, *fnext;
+	size_t i;
+
+	m = mons;
+	while (m) { mnext = m->next; free(m); m = mnext; }
+	mons = selmon = NULL;
+	if (drw) {
+		f = drw->fonts;
+		while (f) { fnext = f->next; free(f); f = fnext; }
+		free(drw);
+		drw = NULL;
+	}
+	if (scheme) {
+		for (i = 0; i < LENGTH(colors); i++)
+			free(scheme[i]);
+		free(scheme);
+		scheme = NULL;
+	}
+	for (i = 0; i < CurLast; i++) {
+		free(cursor[i]);
+		cursor[i] = NULL;
+	}
+}
+
 static Monitor *
 make_monitor(int num)
 {
@@ -112,6 +152,7 @@ make_client(Window win, Monitor *mon)
 	c->inch = 0;
 	c->mina = 0.0f;
 	c->maxa = 0.0f;
+	winclient_put(c); /* keep wintoclient's window index consistent */
 	return c;
 }
 
@@ -121,6 +162,8 @@ make_client(Window win, Monitor *mon)
 static void
 test_applyrules_matches_class(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
 	c->name[0] = '\0';
@@ -128,12 +171,15 @@ test_applyrules_matches_class(void)
 	applyrules(c);
 	ASSERT(c->tags != 0, "applyrules: client gets default tag");
 	ASSERT(c->mon == m, "applyrules: client stays on same monitor");
+	winclient_remove(c);
 	free(c); free(m);
 }
 
 static void
 test_applyrules_matches_rule(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	mock_x11_reset();
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
@@ -146,6 +192,7 @@ test_applyrules_matches_rule(void)
 	ASSERT(c->isfloating == 0, "applyrules: st-256color rule does not set floating");
 	ASSERT(c->noswallow == 0, "applyrules: st-256color rule noswallow=0");
 	ASSERT_EQ(c->tags, 1, "applyrules: tags default to 1 when rule tags=0");
+	winclient_remove(c);
 	free(c); free(m);
 	mock_x11_reset();
 }
@@ -153,6 +200,8 @@ test_applyrules_matches_rule(void)
 static void
 test_applyrules_instance_matching(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	mock_x11_reset();
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
@@ -162,6 +211,7 @@ test_applyrules_instance_matching(void)
 	applyrules(c);
 	/* TestClass+TestInstance rule sets tags=1<<2 */
 	ASSERT(c->tags & (1 << 2), "applyrules: instance match sets tag 2");
+	winclient_remove(c);
 	free(c); free(m);
 	mock_x11_reset();
 }
@@ -170,6 +220,8 @@ test_applyrules_instance_matching(void)
 static void
 test_applysizehints_min_size(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m = { .mx=0, .my=0, .mw=1920, .mh=1080, .wx=0, .wy=0, .ww=1920, .wh=1080,
 		.lt = {&layouts[0], &layouts[0]} };
 	Client c = { .win=1, .mon=&m, .bw=0, .x=0, .y=0, .w=10, .h=10,
@@ -186,6 +238,8 @@ test_applysizehints_min_size(void)
 static void
 test_applysizehints_max_size(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m = { .mx=0, .my=0, .mw=1920, .mh=1080, .wx=0, .wy=0, .ww=1920, .wh=1080,
 		.lt = {&layouts[0], &layouts[0]} };
 	Client c = { .win=1, .mon=&m, .bw=0, .x=0, .y=0, .w=3000, .h=3000,
@@ -202,6 +256,8 @@ test_applysizehints_max_size(void)
 static void
 test_applysizehints_resizehints_flag(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m = { .mx=0, .my=0, .mw=1920, .mh=1080, .wx=0, .wy=0, .ww=1920, .wh=1080,
 		.lt = {&layouts[0], &layouts[0]} };
 	Client c = { .win=1, .mon=&m, .bw=0, .x=0, .y=0, .w=100, .h=100,
@@ -217,6 +273,8 @@ test_applysizehints_resizehints_flag(void)
 static void
 test_swallow_basic(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *term = make_client(10, m);
 	term->isterminal = 1;
@@ -232,12 +290,17 @@ test_swallow_basic(void)
 	/* windows swapped */
 	ASSERT(term->win == 11, "swallow: term win takes client win");
 	ASSERT(c->win == 10, "swallow: client win takes term win");
+	winclient_remove(c);
+	winclient_remove(term);
+	winclient_remove(c);
 	free(c); free(term); free(m);
 }
 
 static void
 test_swallow_noswallow_returns_early(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *term = make_client(10, m);
 	Client *c = make_client(11, m);
@@ -245,12 +308,17 @@ test_swallow_noswallow_returns_early(void)
 	swallow(term, c);
 	/* When mock X11 returns, the check for c->noswallow is at line 228 */
 	ASSERT(term->swallowing == NULL, "swallow: noswallow prevents swallow");
+	winclient_remove(c);
+	winclient_remove(term);
+	winclient_remove(c);
 	free(c); free(term); free(m);
 }
 
 static void
 test_swallow_noswallow_floating(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *term = make_client(10, m);
 	term->isterminal = 1;
@@ -265,12 +333,17 @@ test_swallow_noswallow_floating(void)
 	ASSERT(term->swallowing == NULL, "swallow: noswallow floating prevents swallow");
 	ASSERT(term->win == 10, "swallow: term win unchanged");
 	ASSERT(c->win == 11, "swallow: client win unchanged");
+	winclient_remove(c);
+	winclient_remove(term);
+	winclient_remove(c);
 	free(c); free(term); free(m);
 }
 
 static void
 test_swallow_floating_rejected_when_not_allowed(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *term = make_client(10, m);
 	term->isterminal = 1;
@@ -292,12 +365,17 @@ test_swallow_floating_rejected_when_not_allowed(void)
 	ASSERT(term->swallowing == NULL, "swallow: swallowfloating=0 prevents floating swallow");
 	ASSERT(term->win == 10, "swallow: term win unchanged");
 	ASSERT(c->win == 11, "swallow: client win unchanged");
+	winclient_remove(c);
+	winclient_remove(term);
+	winclient_remove(c);
 	free(c); free(term); free(m);
 }
 
 static void
 test_unswallow_basic(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *term = make_client(10, m);
 	Client *c = make_client(11, m);
@@ -316,12 +394,16 @@ test_unswallow_basic(void)
 	ASSERT(term->win == 10, "unswallow: term restores original win");
 
 	restore_selmon();
+	free(m); /* fixture leaked (ASan-reported) */
+	free(term); /* fixture leaked (ASan-reported) */
 }
 
 /* --- buttonpress --- */
 static void
 test_buttonpress_focus_client(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(100, m);
 	m->clients = c;
@@ -341,12 +423,15 @@ test_buttonpress_focus_client(void)
 	ASSERT(1, "buttonpress: focus client does not crash");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
 static void
 test_buttonpress_barwin(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->barwin = 999;
 	m->sel = NULL;
@@ -374,6 +459,8 @@ test_buttonpress_barwin(void)
 static void
 test_buttonpress_unmapped_button(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(100, m);
 	m->clients = c;
@@ -392,6 +479,7 @@ test_buttonpress_unmapped_button(void)
 	ASSERT(1, "buttonpress: unmapped button focuses client");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -399,6 +487,8 @@ test_buttonpress_unmapped_button(void)
 static void
 test_checkotherwm(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	checkotherwm();
 	ASSERT(1, "checkotherwm: does not crash (calls XSetErrorHandler)");
 }
@@ -407,6 +497,8 @@ test_checkotherwm(void)
 static void
 test_cleanupmon(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m1 = make_monitor(0);
 	Monitor *m2 = make_monitor(1);
 	m1->next = m2;
@@ -428,6 +520,8 @@ test_cleanupmon(void)
 static void
 test_clientmessage_noop_on_unknown(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	selmon = make_monitor(0);
 	mons = selmon;
@@ -450,6 +544,8 @@ test_clientmessage_noop_on_unknown(void)
 static void
 test_configurenotify_root(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	selmon = make_monitor(0);
 	mons = selmon;
@@ -464,13 +560,19 @@ test_configurenotify_root(void)
 	configurenotify(&ev);
 	ASSERT(1, "configurenotify: root event does not crash");
 
-	restore_selmon();
+{
+		Monitor *tmpm = selmon; /* free the fixture, then restore globals */
+		restore_selmon();
+		free(tmpm);
+	}
 }
 
 /* --- configurerequest --- */
 static void
 test_configurerequest_nonclient(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	XEvent ev;
 	memset(&ev, 0, sizeof ev);
 	ev.xconfigurerequest.window = 99999;
@@ -483,6 +585,8 @@ test_configurerequest_nonclient(void)
 static void
 test_createmon_defaults(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = createmon();
 	ASSERT(m != NULL, "createmon: returns non-NULL");
 	ASSERT(m->tagset[0] == 1, "createmon: tagset[0]=1");
@@ -496,6 +600,8 @@ test_createmon_defaults(void)
 static void
 test_focusmon_noop_single_monitor(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	selmon = make_monitor(0);
 	mons = selmon;
@@ -504,12 +610,18 @@ test_focusmon_noop_single_monitor(void)
 	focusmon(&arg);
 	ASSERT(1, "focusmon: single monitor no crash");
 
-	restore_selmon();
+{
+		Monitor *tmpm = selmon; /* free the fixture, then restore globals */
+		restore_selmon();
+		free(tmpm);
+	}
 }
 
 static void
 test_focusmon_switches_monitor(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m1 = make_monitor(0);
 	Monitor *m2 = make_monitor(1);
 	m1->stack = NULL;
@@ -524,11 +636,15 @@ test_focusmon_switches_monitor(void)
 	ASSERT(selmon == m2, "focusmon: switches to next monitor");
 
 	restore_selmon();
+	free(m1); /* fixture leaked (ASan-reported) */
+	free(m2); /* fixture leaked (ASan-reported) */
 }
 
 static void
 test_focusmon_switches_focus(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m1 = make_monitor(0);
 	Monitor *m2 = make_monitor(1);
 	Client *c = make_client(100, m2);
@@ -552,6 +668,7 @@ test_focusmon_switches_focus(void)
 	ASSERT(selmon == m2, "focusmon: buttonpress switches to owning monitor");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m1); free(m2);
 }
 
@@ -559,6 +676,8 @@ test_focusmon_switches_focus(void)
 static void
 test_getatomprop(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c = { .win = 1 };
 	Atom a = getatomprop(&c, 0);
 	ASSERT_EQ(a, (Atom)0, "getatomprop: returns None/0 for mock");
@@ -568,6 +687,8 @@ test_getatomprop(void)
 static void
 test_getstate_returns_minus_one(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	long s = getstate(99999);
 	ASSERT_EQ(s, -1L, "getstate: returns -1 for unknown window");
 }
@@ -576,6 +697,8 @@ test_getstate_returns_minus_one(void)
 static void
 test_gettextprop_returns_zero(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	char buf[256] = {0};
 	int r = gettextprop(99999, XA_WM_NAME, buf, sizeof buf);
 	/* XGetTextProperty mock returns 0, so function returns 0 */
@@ -586,6 +709,8 @@ test_gettextprop_returns_zero(void)
 static void
 test_grabbuttons(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c = { .win = 1 };
 	grabbuttons(&c, 0);
 	ASSERT(1, "grabbuttons: does not crash");
@@ -595,6 +720,8 @@ test_grabbuttons(void)
 static void
 test_grabkeys(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	grabkeys();
 	ASSERT(1, "grabkeys: does not crash");
 }
@@ -603,6 +730,8 @@ test_grabkeys(void)
 static void
 test_killclient_noop_no_sel(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	selmon = make_monitor(0);
 	mons = selmon;
@@ -612,12 +741,18 @@ test_killclient_noop_no_sel(void)
 	killclient(&arg);
 	ASSERT(1, "killclient: noop when no sel");
 
-	restore_selmon();
+{
+		Monitor *tmpm = selmon; /* free the fixture, then restore globals */
+		restore_selmon();
+		free(tmpm);
+	}
 }
 
 static void
 test_killclient_calls_sendevent(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(42, m);
 	m->sel = c;
@@ -630,6 +765,7 @@ test_killclient_calls_sendevent(void)
 	ASSERT(1, "killclient: with sel does not crash");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -637,6 +773,8 @@ test_killclient_calls_sendevent(void)
 static void
 test_manage_new_window(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	Monitor *m = make_monitor(0);
 	selmon = m;
@@ -657,13 +795,17 @@ test_manage_new_window(void)
 	manage(99, &wa);
 	ASSERT(m->clients != NULL, "manage: client added to list");
 
+	drain_clients(); /* release dwm-created clients while list is live */
 	restore_selmon();
+	free(m); /* fixture leaked (ASan-reported) */
 }
 
 /* --- mappingnotify --- */
 static void
 test_mappingnotify(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	XEvent ev;
 	memset(&ev, 0, sizeof ev);
 	ev.xmapping.request = MappingKeyboard;
@@ -676,6 +818,8 @@ test_mappingnotify(void)
 static void
 test_maprequest(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	Monitor *m = make_monitor(0);
 	selmon = m;
@@ -688,13 +832,17 @@ test_maprequest(void)
 	maprequest(&ev);
 	ASSERT(1, "maprequest: new window does not crash");
 
+	drain_clients(); /* release dwm-created clients while list is live */
 	restore_selmon();
+	free(m); /* fixture leaked (ASan-reported) */
 }
 
 /* --- motionnotify --- */
 static void
 test_motionnotify_no_crash(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	Monitor *m = make_monitor(0);
 	selmon = m;
@@ -711,12 +859,15 @@ test_motionnotify_no_crash(void)
 	ASSERT(1, "motionnotify: does not crash");
 
 	restore_selmon();
+	free(m); /* fixture leaked (ASan-reported) */
 }
 
 /* --- pop --- */
 static void
 test_pop_basic(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c1 = make_client(1, m);
 	Client *c2 = make_client(2, m);
@@ -732,6 +883,9 @@ test_pop_basic(void)
 	ASSERT(1, "pop: does not crash");
 
 	restore_selmon();
+	winclient_remove(c1);
+	winclient_remove(c2);
+	winclient_remove(c1);
 	free(c1); free(c2); free(m);
 }
 
@@ -739,6 +893,8 @@ test_pop_basic(void)
 static void
 test_propertynotify_root_wmname(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	selmon = make_monitor(0);
 	mons = selmon;
@@ -752,12 +908,18 @@ test_propertynotify_root_wmname(void)
 	propertynotify(&ev);
 	ASSERT(1, "propertynotify: root WM_NAME does not crash");
 
-	restore_selmon();
+{
+		Monitor *tmpm = selmon; /* free the fixture, then restore globals */
+		restore_selmon();
+		free(tmpm);
+	}
 }
 
 static void
 test_propertynotify_propertydelete_ignored(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	selmon = make_monitor(0);
 	mons = selmon;
@@ -771,13 +933,19 @@ test_propertynotify_propertydelete_ignored(void)
 	propertynotify(&ev);
 	ASSERT(1, "propertynotify: PropertyDelete no crash");
 
-	restore_selmon();
+{
+		Monitor *tmpm = selmon; /* free the fixture, then restore globals */
+		restore_selmon();
+		free(tmpm);
+	}
 }
 
 /* --- resize --- */
 static void
 test_resize_basic(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m = { .mx=0, .my=0, .mw=1920, .mh=1080, .wx=0, .wy=0, .ww=1920, .wh=1080,
 		.lt = {&layouts[0], &layouts[0]} };
 	Client c = { .win=1, .mon=&m, .x=0, .y=0, .w=100, .h=100, .bw=0,
@@ -793,6 +961,8 @@ test_resize_basic(void)
 static void
 test_resizemouse_noop_no_sel(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	selmon = make_monitor(0);
 	mons = selmon;
@@ -802,13 +972,19 @@ test_resizemouse_noop_no_sel(void)
 	resizemouse(&arg);
 	ASSERT(1, "resizemouse: noop when no sel");
 
-	restore_selmon();
+{
+		Monitor *tmpm = selmon; /* free the fixture, then restore globals */
+		restore_selmon();
+		free(tmpm);
+	}
 }
 
 /* --- restack --- */
 static void
 test_restack_noop_no_sel(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	Monitor *m = make_monitor(0);
 	m->sel = NULL;
@@ -819,12 +995,15 @@ test_restack_noop_no_sel(void)
 	ASSERT(1, "restack: no sel no crash");
 
 	restore_selmon();
+	free(m); /* fixture leaked (ASan-reported) */
 }
 
 /* --- scan --- */
 static void
 test_scan_no_windows(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	selmon = make_monitor(0);
 	mons = selmon;
@@ -832,13 +1011,19 @@ test_scan_no_windows(void)
 	scan();
 	ASSERT(1, "scan: no windows does not crash (XQueryTree returns 0)");
 
-	restore_selmon();
+{
+		Monitor *tmpm = selmon; /* free the fixture, then restore globals */
+		restore_selmon();
+		free(tmpm);
+	}
 }
 
 /* --- sendevent --- */
 static void
 test_sendevent(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c = { .win = 1 };
 	int r = sendevent(&c, 0);
 	ASSERT_EQ(r, 0, "sendevent: returns 0 (mock XSendEvent returns 0)");
@@ -848,6 +1033,8 @@ test_sendevent(void)
 static void
 test_setgaps_default(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->gap.isgap = 1;
 	m->gap.realgap = 17;
@@ -861,12 +1048,15 @@ test_setgaps_default(void)
 	ASSERT_EQ(selmon->gap.gappx, 0, "setgaps: toggle gap off");
 
 	restore_selmon();
+	free(m); /* fixture leaked (ASan-reported) */
 }
 
 /* --- setlayout --- */
 static void
 test_setlayout_zero(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->lt[0] = &layouts[0];
 	m->lt[1] = &layouts[0];
@@ -879,12 +1069,15 @@ test_setlayout_zero(void)
 	ASSERT(1, "setlayout: does not crash");
 
 	restore_selmon();
+	free(m); /* fixture leaked (ASan-reported) */
 }
 
 /* --- setmfact --- */
 static void
 test_setmfact_default(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->mfact = 0.55f;
 	save_selmon();
@@ -896,12 +1089,15 @@ test_setmfact_default(void)
 	ASSERT_EQ((int)(selmon->mfact * 100 + 0.5f), 60, "setmfact: updates mfact");
 
 	restore_selmon();
+	free(m); /* fixture leaked (ASan-reported) */
 }
 
 /* --- sighup / sigterm --- */
 static void
 test_sighup(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	sighup(0);
 	ASSERT(running == 0, "sighup: sets running to 0");
 }
@@ -909,6 +1105,8 @@ test_sighup(void)
 static void
 test_sigterm(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	running = 1;
 	sigterm(0);
 	ASSERT(running == 0, "sigterm: sets running to 0");
@@ -918,6 +1116,8 @@ test_sigterm(void)
 static void
 test_spawn(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	/* We can't easily test execvp, but we can verify it doesn't crash
 	 * in the parent process. The mock X11 doesn't have a real display,
 	 * so fork will still work. */
@@ -931,6 +1131,8 @@ test_spawn(void)
 static void
 test_tagmon_noop_no_sel(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	selmon = make_monitor(0);
 	mons = selmon;
@@ -940,13 +1142,19 @@ test_tagmon_noop_no_sel(void)
 	tagmon(&arg);
 	ASSERT(1, "tagmon: noop when no sel");
 
-	restore_selmon();
+{
+		Monitor *tmpm = selmon; /* free the fixture, then restore globals */
+		restore_selmon();
+		free(tmpm);
+	}
 }
 
 /* --- updatebars --- */
 static void
 test_updatebars(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	Monitor *m = make_monitor(0);
 	m->barwin = 0;
@@ -957,12 +1165,15 @@ test_updatebars(void)
 	ASSERT(m->barwin != 0, "updatebars: creates barwin");
 
 	restore_selmon();
+	free(m); /* fixture leaked (ASan-reported) */
 }
 
 /* --- updateclientlist --- */
 static void
 test_updateclientlist(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
@@ -975,6 +1186,7 @@ test_updateclientlist(void)
 	ASSERT(1, "updateclientlist: does not crash");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -982,6 +1194,8 @@ test_updateclientlist(void)
 static void
 test_updategeom_single_monitor(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	mons = NULL;
 	selmon = NULL;
@@ -990,13 +1204,19 @@ test_updategeom_single_monitor(void)
 	ASSERT(mons != NULL, "updategeom: creates monitor");
 	ASSERT(dirty != 0, "updategeom: returns dirty");
 
-	restore_selmon();
+	{
+		Monitor *tmpm = mons; /* monitors replaced by updategeom */
+		restore_selmon();
+		while (tmpm) { Monitor *n = tmpm->next; free(tmpm); tmpm = n; }
+	}
 }
 
 /* --- updatenumlockmask --- */
 static void
 test_updatenumlockmask(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	updatenumlockmask();
 	ASSERT(1, "updatenumlockmask: does not crash");
 }
@@ -1005,6 +1225,8 @@ test_updatenumlockmask(void)
 static void
 test_updatesizehints(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client c = { .win = 1, .mon = m };
 	memset(&c, 0, sizeof(c));
@@ -1022,6 +1244,8 @@ test_updatesizehints(void)
 static void
 test_updatestatus(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	selmon = make_monitor(0);
 	mons = selmon;
@@ -1029,13 +1253,19 @@ test_updatestatus(void)
 	updatestatus();
 	ASSERT(1, "updatestatus: does not crash");
 
-	restore_selmon();
+{
+		Monitor *tmpm = selmon; /* free the fixture, then restore globals */
+		restore_selmon();
+		free(tmpm);
+	}
 }
 
 /* --- updatetitle --- */
 static void
 test_updatetitle(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c = { .win = 1 };
 	updatetitle(&c);
 	ASSERT(1, "updatetitle: does not crash");
@@ -1045,6 +1275,8 @@ test_updatetitle(void)
 static void
 test_updatewmhints(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c = { .win = 1 };
 	updatewmhints(&c);
 	ASSERT(1, "updatewmhints: does not crash");
@@ -1054,6 +1286,8 @@ test_updatewmhints(void)
 static void
 test_winpid(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	pid_t pid = winpid(999);
 	ASSERT_EQ(pid, (pid_t)0, "winpid: returns 0 for non-existent window");
 }
@@ -1062,6 +1296,8 @@ test_winpid(void)
 static void
 test_getparentprocess(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	(void)getparentprocess(1);
 	ASSERT(1, "getparentprocess: does not crash");
 }
@@ -1070,6 +1306,8 @@ test_getparentprocess(void)
 static void
 test_isdescprocess_same(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	int r = isdescprocess(100, 100);
 	ASSERT(r, "isdescprocess: same pid returns true");
 }
@@ -1077,6 +1315,8 @@ test_isdescprocess_same(void)
 static void
 test_isdescprocess_different(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	int r = isdescprocess(1, 99999);
 	/* Loop exits when c becomes 0 (getparentprocess fails) */
 	ASSERT_EQ(r, 0, "isdescprocess: different pid chain returns 0");
@@ -1086,6 +1326,8 @@ test_isdescprocess_different(void)
 static void
 test_termforwin_no_pid(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client w = { .win = 1, .mon = m, .pid = 0 };
 	Client *term = termforwin(&w);
@@ -1096,6 +1338,8 @@ test_termforwin_no_pid(void)
 static void
 test_termforwin_not_terminal(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client w = { .win = 1, .mon = m, .pid = 100, .isterminal = 1 };
 	Client *term = termforwin(&w);
@@ -1107,6 +1351,8 @@ test_termforwin_not_terminal(void)
 static void
 test_wintomon_no_mons(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	mons = NULL;
 	Monitor *m = wintomon(1);
@@ -1118,6 +1364,8 @@ test_wintomon_no_mons(void)
 static void
 test_xerror_swallows_badwindow(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	XErrorEvent ee;
 	memset(&ee, 0, sizeof ee);
 	ee.error_code = BadWindow;
@@ -1128,6 +1376,8 @@ test_xerror_swallows_badwindow(void)
 static void
 test_xerror_swallows_badmatch(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	XErrorEvent ee;
 	memset(&ee, 0, sizeof ee);
 	ee.request_code = X_SetInputFocus;
@@ -1139,6 +1389,8 @@ test_xerror_swallows_badmatch(void)
 static void
 test_xerrordummy(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	int r = xerrordummy(NULL, NULL);
 	ASSERT_EQ(r, 0, "xerrordummy: returns 0");
 }
@@ -1150,6 +1402,8 @@ test_xerrordummy(void)
 static void
 test_zoom_noop_no_sel(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	Monitor *m = make_monitor(0);
 	m->sel = NULL;
@@ -1161,11 +1415,14 @@ test_zoom_noop_no_sel(void)
 	ASSERT(1, "zoom: noop when no sel");
 
 	restore_selmon();
+	free(m); /* fixture leaked (ASan-reported) */
 }
 
 static void
 test_zoom_noop_floating(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
 	c->isfloating = 1;
@@ -1180,6 +1437,7 @@ test_zoom_noop_floating(void)
 	ASSERT(1, "zoom: noop on floating client");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -1187,6 +1445,8 @@ test_zoom_noop_floating(void)
 static void
 test_drawbars(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	Monitor *m = make_monitor(0);
 	m->barwin = 888;
@@ -1199,12 +1459,15 @@ test_drawbars(void)
 	ASSERT(1, "drawbars: does not crash");
 
 	restore_selmon();
+	free(m); /* fixture leaked (ASan-reported) */
 }
 
 /* --- togglebar --- */
 static void
 test_togglebar_toggles(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	Monitor *m = make_monitor(0);
 	m->showbar = 1;
@@ -1216,12 +1479,15 @@ test_togglebar_toggles(void)
 	ASSERT_EQ(selmon->showbar, 0, "togglebar: toggles showbar off");
 
 	restore_selmon();
+	free(m); /* fixture leaked (ASan-reported) */
 }
 
 /* --- tag --- */
 static void
 test_tag_basic(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
 	c->tags = 1;
@@ -1235,6 +1501,7 @@ test_tag_basic(void)
 	ASSERT_EQ(c->tags, (unsigned)2, "tag: sets client tag");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -1242,6 +1509,8 @@ test_tag_basic(void)
 static void
 test_view_basic(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	Monitor *m = make_monitor(0);
 	m->tagset[0] = 1;
@@ -1254,12 +1523,15 @@ test_view_basic(void)
 	ASSERT_EQ(selmon->tagset[selmon->seltags], (unsigned)2, "view: updates tagset");
 
 	restore_selmon();
+	free(m); /* fixture leaked (ASan-reported) */
 }
 
 /* --- toggleview --- */
 static void
 test_toggleview_basic(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	Monitor *m = make_monitor(0);
 	m->tagset[0] = 1;
@@ -1272,12 +1544,15 @@ test_toggleview_basic(void)
 	ASSERT_EQ(selmon->tagset[selmon->seltags], (unsigned)3, "toggleview: adds tag to view");
 
 	restore_selmon();
+	free(m); /* fixture leaked (ASan-reported) */
 }
 
 /* --- toggletag --- */
 static void
 test_toggletag_basic(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
 	c->tags = 1;
@@ -1292,6 +1567,7 @@ test_toggletag_basic(void)
 	ASSERT(1, "toggletag: no crash");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -1299,6 +1575,8 @@ test_toggletag_basic(void)
 static void
 test_seturgent_sets_flag(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = ecalloc(1, sizeof(Client));
 	c->win = 1; c->mon = m; c->tags = 1;
@@ -1308,14 +1586,18 @@ test_seturgent_sets_flag(void)
 	mons = m;
 	seturgent(c, 1);
 	ASSERT(c->isurgent, "seturgent: sets isurgent flag");
+	winclient_remove(c);
 	free(c);
 	restore_selmon();
+	free(m); /* fixture leaked (ASan-reported) */
 }
 
 /* --- incnmaster --- */
 static void
 test_incnmaster_increases(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->nmaster = 1;
 	save_selmon();
@@ -1327,12 +1609,15 @@ test_incnmaster_increases(void)
 	ASSERT_EQ(selmon->nmaster, 2, "incnmaster: increases nmaster");
 
 	restore_selmon();
+	free(m); /* fixture leaked (ASan-reported) */
 }
 
 /* --- focusstack --- */
 static void
 test_focusstack_forward(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c1 = make_client(1, m);
 	Client *c2 = make_client(2, m);
@@ -1349,12 +1634,17 @@ test_focusstack_forward(void)
 	ASSERT(selmon->sel == c2, "focusstack: forward to c2");
 
 	restore_selmon();
+	free(c1); /* fixture leaked (ASan-reported) */
+	free(c2); /* fixture leaked (ASan-reported) */
+	free(m); /* fixture leaked (ASan-reported) */
 }
 
 /* --- wintoclient --- */
 static void
 test_wintoclient_finds(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(42, m);
 	m->clients = c;
@@ -1363,12 +1653,15 @@ test_wintoclient_finds(void)
 	Client *found = wintoclient(42);
 	ASSERT(found == c, "wintoclient: finds client by window");
 
+	winclient_remove(c);
 	free(c); free(m);
 }
 
 static void
 test_wintoclient_notfound(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
 	m->clients = c;
@@ -1377,6 +1670,7 @@ test_wintoclient_notfound(void)
 	Client *found = wintoclient(99);
 	ASSERT(found == NULL, "wintoclient: returns NULL for unknown window");
 
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -1384,6 +1678,8 @@ test_wintoclient_notfound(void)
 static void
 test_recttomon_returns_selmon(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	selmon = make_monitor(0);
 	mons = selmon;
@@ -1391,13 +1687,19 @@ test_recttomon_returns_selmon(void)
 	Monitor *r = recttomon(0, 0, 1, 1);
 	ASSERT(r == selmon, "recttomon: returns selmon");
 
-	restore_selmon();
+{
+		Monitor *tmpm = selmon; /* free the fixture, then restore globals */
+		restore_selmon();
+		free(tmpm);
+	}
 }
 
 /* --- dirtomon --- */
 static void
 test_dirtomon_positive(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m1 = make_monitor(0);
 	Monitor *m2 = make_monitor(1);
 	m1->next = m2;
@@ -1409,12 +1711,16 @@ test_dirtomon_positive(void)
 	ASSERT(r == m2, "dirtomon: +1 returns next monitor");
 
 	restore_selmon();
+	free(m1); /* fixture leaked (ASan-reported) */
+	free(m2); /* fixture leaked (ASan-reported) */
 }
 
 /* --- gap_copy / setgaps edge cases --- */
 static void
 test_gap_copy(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Gap src = { .isgap = 1, .realgap = 10, .gappx = 10 };
 	Gap dst;
 	memset(&dst, 0, sizeof dst);
@@ -1428,6 +1734,8 @@ test_gap_copy(void)
 static void
 test_updatebarpos_top(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m = { .wx=0, .wy=0, .ww=1920, .wh=1080, .topbar=1, .showbar=1 };
 	updatebarpos(&m);
 	ASSERT_EQ(m.by, 0, "updatebarpos: top bar at y=0");
@@ -1438,6 +1746,8 @@ test_updatebarpos_top(void)
 static void
 test_setclientstate_normal(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c = { .win = 1 };
 	setclientstate(&c, NormalState);
 	ASSERT(1, "setclientstate(NormalState): no crash");
@@ -1446,6 +1756,8 @@ test_setclientstate_normal(void)
 static void
 test_setclientstate_withdrawn(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c = { .win = 1 };
 	setclientstate(&c, WithdrawnState);
 	ASSERT(1, "setclientstate(WithdrawnState): no crash");
@@ -1455,24 +1767,30 @@ test_setclientstate_withdrawn(void)
 static void
 test_isvisible_tag_match(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m = { .tagset = {1, 1} };
 	Client *c = ecalloc(1, sizeof(Client));
 	c->tags = 1;
 	c->mon = &m;
 	int r = ISVISIBLE(c);
 	ASSERT(r, "ISVISIBLE: tag match returns true");
+	winclient_remove(c);
 	free(c);
 }
 
 static void
 test_isvisible_tag_nomatch(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m = { .tagset = {1, 1} };
 	Client *c = ecalloc(1, sizeof(Client));
 	c->tags = 2;
 	c->mon = &m;
 	int r = ISVISIBLE(c);
 	ASSERT(!r, "ISVISIBLE: tag mismatch returns false");
+	winclient_remove(c);
 	free(c);
 }
 
@@ -1480,6 +1798,8 @@ test_isvisible_tag_nomatch(void)
 static void
 test_resizeclient_stores_values(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m = { .mx=100, .my=50, .mw=1800, .mh=1000, .wx=100, .wy=80, .ww=1800, .wh=1000,
 		.lt = {&layouts[0], &layouts[0]} };
 	Client c = { .win=1, .mon=&m, .bw=0, .x=100, .y=100, .w=200, .h=200,
@@ -1495,19 +1815,27 @@ test_resizeclient_stores_values(void)
 static void
 test_arrange_nulls_calls_showhide(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	selmon = make_monitor(0);
 	mons = selmon;
 	selmon->sel = NULL;
 	arrange(NULL);
 	ASSERT(1, "arrange(NULL): no-mons shows clients");
-	restore_selmon();
+{
+		Monitor *tmpm = selmon; /* free the fixture, then restore globals */
+		restore_selmon();
+		free(tmpm);
+	}
 }
 
 /* --- unmanage loop from cleanup --- */
 static void
 test_cleanup_unmanages(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c1 = make_client(1, m);
 	c1->next = NULL;
@@ -1527,6 +1855,8 @@ test_cleanup_unmanages(void)
 static void
 test_cleanup_empties_mons(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	Monitor *m = make_monitor(0);
 	m->sel = NULL;
@@ -1545,6 +1875,8 @@ test_cleanup_empties_mons(void)
 static void
 test_buttonpress_click_layoutsymbol(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->sel = NULL;
 	m->barwin = 999;
@@ -1570,6 +1902,8 @@ test_buttonpress_click_layoutsymbol(void)
 static void
 test_buttonpress_click_statustext(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->sel = NULL;
 	m->barwin = 999;
@@ -1597,6 +1931,8 @@ test_buttonpress_click_statustext(void)
 static void
 test_buttonpress_click_wintitle(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->sel = NULL;
 	m->barwin = 999;
@@ -1624,6 +1960,8 @@ test_buttonpress_click_wintitle(void)
 static void
 test_buttonpress_tag_iteration(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->barwin = 999;
 	m->sel = NULL;
@@ -1651,6 +1989,8 @@ test_buttonpress_tag_iteration(void)
 static void
 test_clientmessage_fullscreen_add(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
 	m->clients = c;
@@ -1671,12 +2011,15 @@ test_clientmessage_fullscreen_add(void)
 	ASSERT(c->isfullscreen, "clientmessage: fullscreen add sets isfullscreen");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
 static void
 test_clientmessage_fullscreen_remove(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
 	c->isfullscreen = 1;
@@ -1698,12 +2041,15 @@ test_clientmessage_fullscreen_remove(void)
 	ASSERT(!c->isfullscreen, "clientmessage: fullscreen remove clears isfullscreen");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
 static void
 test_clientmessage_netactivewindow_urgent(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
 	c->isurgent = 0;
@@ -1723,6 +2069,7 @@ test_clientmessage_netactivewindow_urgent(void)
 	ASSERT(c->isurgent, "clientmessage: NetActiveWindow sets urgent");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -1730,6 +2077,8 @@ test_clientmessage_netactivewindow_urgent(void)
 static void
 test_configurerequest_floating_fullmask(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->sel = NULL;
 	m->clients = NULL;
@@ -1751,6 +2100,8 @@ test_configurerequest_floating_fullmask(void)
 static void
 test_configurerequest_client_borderwidth(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
 	c->bw = 0;
@@ -1771,12 +2122,15 @@ test_configurerequest_client_borderwidth(void)
 	ASSERT_EQ(c->bw, 5, "configurerequest: border width updated");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
 static void
 test_configurerequest_floating_geometry_partial(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
 	c->isfloating = 1;
@@ -1802,6 +2156,7 @@ test_configurerequest_floating_geometry_partial(void)
 	ASSERT_EQ(c->h, 400, "configurerequest: height updated");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -1809,6 +2164,8 @@ test_configurerequest_floating_geometry_partial(void)
 static void
 test_destroynotify_client(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
 	m->clients = c;
@@ -1833,6 +2190,8 @@ test_destroynotify_client(void)
 static void
 test_dirtomon_negative_wraps_to_last(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m1 = make_monitor(0);
 	Monitor *m2 = make_monitor(1);
 	m1->next = m2;
@@ -1844,12 +2203,16 @@ test_dirtomon_negative_wraps_to_last(void)
 	ASSERT(r == m2, "dirtomon: -1 when selmon==head returns last monitor");
 
 	restore_selmon();
+	free(m1); /* fixture leaked (ASan-reported) */
+	free(m2); /* fixture leaked (ASan-reported) */
 }
 
 /* --- drawbar segments --- */
 static void
 test_drawbar_fullscreen_freeze(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->showbar = 1;
 	m->barwin = 888;
@@ -1864,11 +2227,14 @@ test_drawbar_fullscreen_freeze(void)
 	ASSERT(1, "drawbar: full draw (no fullscreen) does not crash");
 
 	restore_selmon();
+	free(m); /* fixture leaked (ASan-reported) */
 }
 
 static void
 test_drawbar_clean_bar(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->showbar = 1;
 	m->barwin = 888;
@@ -1883,11 +2249,14 @@ test_drawbar_clean_bar(void)
 	ASSERT(1, "drawbar: clean bar with expose does not crash");
 
 	restore_selmon();
+	free(m); /* fixture leaked (ASan-reported) */
 }
 
 static void
 test_drawbar_segments_status_only(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->showbar = 1;
 	m->barwin = 888;
@@ -1903,11 +2272,14 @@ test_drawbar_segments_status_only(void)
 	ASSERT(1, "drawbar: status only no crash");
 
 	restore_selmon();
+	free(m); /* fixture leaked (ASan-reported) */
 }
 
 static void
 test_drawbar_segments_tags_only(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->showbar = 1;
 	m->barwin = 888;
@@ -1922,11 +2294,14 @@ test_drawbar_segments_tags_only(void)
 	ASSERT(1, "drawbar: tags only no crash");
 
 	restore_selmon();
+	free(m); /* fixture leaked (ASan-reported) */
 }
 
 static void
 test_drawbar_segments_title_with_sel(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->showbar = 1;
 	m->barwin = 888;
@@ -1945,12 +2320,16 @@ test_drawbar_segments_title_with_sel(void)
 	ASSERT(1, "drawbar: title with sel no crash");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c);
+	free(m); /* fixture leaked (ASan-reported) */
 }
 
 static void
 test_drawbar_segments_title_no_sel(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->showbar = 1;
 	m->barwin = 888;
@@ -1965,12 +2344,15 @@ test_drawbar_segments_title_no_sel(void)
 	ASSERT(1, "drawbar: title no sel no crash");
 
 	restore_selmon();
+	free(m); /* fixture leaked (ASan-reported) */
 }
 
 /* --- enternotify --- */
 static void
 test_enternotify_normal_same_sel(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->sel = NULL;
 	save_selmon();
@@ -1993,6 +2375,8 @@ test_enternotify_normal_same_sel(void)
 static void
 test_enternotify_inferior_returns_early(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	selmon = make_monitor(0);
 	mons = selmon;
@@ -2006,13 +2390,19 @@ test_enternotify_inferior_returns_early(void)
 	enternotify(&ev);
 	ASSERT(1, "enternotify: NotifyInferior on root returns early");
 
-	restore_selmon();
+{
+		Monitor *tmpm = selmon; /* free the fixture, then restore globals */
+		restore_selmon();
+		free(tmpm);
+	}
 }
 
 /* --- expose --- */
 static void
 test_expose_barwin(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->barwin = 888;
 	m->showbar = 1;
@@ -2038,6 +2428,8 @@ test_expose_barwin(void)
 static void
 test_focusin_different_window(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
 	c->neverfocus = 0;
@@ -2054,6 +2446,7 @@ test_focusin_different_window(void)
 	ASSERT(1, "focusin: different window does not crash");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -2061,6 +2454,8 @@ test_focusin_different_window(void)
 static void
 test_focusstack_reverse(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c1 = make_client(1, m);
 	Client *c2 = make_client(2, m);
@@ -2077,11 +2472,16 @@ test_focusstack_reverse(void)
 	ASSERT(selmon->sel == c1, "focusstack: reverse to c1");
 
 	restore_selmon();
+	free(c1); /* fixture leaked (ASan-reported) */
+	free(c2); /* fixture leaked (ASan-reported) */
+	free(m); /* fixture leaked (ASan-reported) */
 }
 
 static void
 test_focusstack_single_client(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
 	c->tags = 1;
@@ -2097,11 +2497,15 @@ test_focusstack_single_client(void)
 	ASSERT(selmon->sel == c, "focusstack: single client stays focused");
 
 	restore_selmon();
+	free(c); /* fixture leaked (ASan-reported) */
+	free(m); /* fixture leaked (ASan-reported) */
 }
 
 static void
 test_focusstack_fullscreen_locked(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
 	c->isfullscreen = 1;
@@ -2115,6 +2519,7 @@ test_focusstack_fullscreen_locked(void)
 	ASSERT(selmon->sel == c, "focusstack: fullscreen locked, sel unchanged");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -2122,6 +2527,8 @@ test_focusstack_fullscreen_locked(void)
 static void
 test_focusmon_switches(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m1 = make_monitor(0);
 	Monitor *m2 = make_monitor(1);
 	m1->sel = NULL;
@@ -2141,6 +2548,8 @@ test_focusmon_switches(void)
 	ASSERT(selmon == m1, "focusmon: wraps around to first monitor");
 
 	restore_selmon();
+	free(m1); /* fixture leaked (ASan-reported) */
+	free(m2); /* fixture leaked (ASan-reported) */
 }
 
 
@@ -2149,6 +2558,8 @@ test_focusmon_switches(void)
 static void
 test_setgaps_reset(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->gap.isgap = 1;
 	m->gap.realgap = 10;
@@ -2163,11 +2574,14 @@ test_setgaps_reset(void)
 	ASSERT(1, "setgaps: reset does not crash");
 
 	restore_selmon();
+	free(m); /* fixture leaked (ASan-reported) */
 }
 
 static void
 test_setgaps_adjust(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->gap.isgap = 1;
 	m->gap.realgap = 10;
@@ -2182,12 +2596,15 @@ test_setgaps_adjust(void)
 	ASSERT_EQ(selmon->gap.gappx, 15, "setgaps: adjust adds to gappx");
 
 	restore_selmon();
+	free(m); /* fixture leaked (ASan-reported) */
 }
 
 /* --- setlayout with non-zero arg --- */
 static void
 test_setlayout_with_arg(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->lt[0] = &layouts[0];
 	m->lt[1] = &layouts[0];
@@ -2201,12 +2618,15 @@ test_setlayout_with_arg(void)
 	ASSERT(selmon->lt[selmon->sellt] == &layouts[1], "setlayout: layout set by arg");
 
 	restore_selmon();
+	free(m); /* fixture leaked (ASan-reported) */
 }
 
 /* --- setmfact edge cases --- */
 static void
 test_setmfact_no_layout_arrange(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Layout noarr = { "", NULL }; /* NULL arrange function */
 	Monitor *m = make_monitor(0);
 	m->lt[0] = &noarr;
@@ -2221,11 +2641,14 @@ test_setmfact_no_layout_arrange(void)
 	ASSERT_EQ(selmon->mfact, old, "setmfact: unchanged when no arrange function");
 
 	restore_selmon();
+	free(m); /* fixture leaked (ASan-reported) */
 }
 
 static void
 test_setmfact_out_of_range_high(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->mfact = 0.55f;
 	m->lt[0] = &layouts[0];
@@ -2239,12 +2662,15 @@ test_setmfact_out_of_range_high(void)
 	ASSERT_EQ(selmon->mfact, old, "setmfact: f=0.99 -> relative -> 1.54 > 0.95, unchanged");
 
 	restore_selmon();
+	free(m); /* fixture leaked (ASan-reported) */
 }
 
 /* --- togglefullscr --- */
 static void
 test_togglefullscr_basic(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
 	c->isfullscreen = 0;
@@ -2258,6 +2684,7 @@ test_togglefullscr_basic(void)
 	ASSERT(c->isfullscreen, "togglefullscr: sets fullscreen");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -2265,6 +2692,8 @@ test_togglefullscr_basic(void)
 static void
 test_togglefloating_basic(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
 	c->isfloating = 0;
@@ -2279,12 +2708,15 @@ test_togglefloating_basic(void)
 	ASSERT(c->isfloating, "togglefloating: toggles floating on");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
 static void
 test_togglefloating_isfixed(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
 	c->isfloating = 0;
@@ -2301,6 +2733,7 @@ test_togglefloating_isfixed(void)
 	ASSERT(c->isfloating, "togglefloating: isfixed keeps floating on");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -2308,6 +2741,8 @@ test_togglefloating_isfixed(void)
 static void
 test_movemouse_noop_no_sel(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	selmon = make_monitor(0);
 	mons = selmon;
@@ -2317,13 +2752,19 @@ test_movemouse_noop_no_sel(void)
 	movemouse(&arg);
 	ASSERT(1, "movemouse: noop when no sel");
 
-	restore_selmon();
+{
+		Monitor *tmpm = selmon; /* free the fixture, then restore globals */
+		restore_selmon();
+		free(tmpm);
+	}
 }
 
 /* --- showhide --- */
 static void
 test_showhide_not_visible(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
 	c->tags = 2; /* not visible on tag 1 */
@@ -2337,12 +2778,15 @@ test_showhide_not_visible(void)
 	ASSERT(1, "showhide: non-visible client no crash");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
 static void
 test_showhide_visible(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
 	c->tags = 1;
@@ -2356,6 +2800,7 @@ test_showhide_visible(void)
 	ASSERT(1, "showhide: visible client no crash");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -2363,6 +2808,8 @@ test_showhide_visible(void)
 static void
 test_setfocus_basic(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
 	c->neverfocus = 0;
@@ -2374,12 +2821,15 @@ test_setfocus_basic(void)
 	ASSERT(1, "setfocus: basic no crash");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
 static void
 test_setfocus_neverfocus(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
 	c->neverfocus = 1;
@@ -2391,6 +2841,7 @@ test_setfocus_neverfocus(void)
 	ASSERT(1, "setfocus: neverfocus client no crash");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -2398,6 +2849,8 @@ test_setfocus_neverfocus(void)
 static void
 test_xerror_baddrawable(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	XErrorEvent ee;
 	memset(&ee, 0, sizeof ee);
 	ee.request_code = X_PolyText8;
@@ -2409,6 +2862,8 @@ test_xerror_baddrawable(void)
 static void
 test_xerror_badmatch_configure(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	XErrorEvent ee;
 	memset(&ee, 0, sizeof ee);
 	ee.request_code = X_ConfigureWindow;
@@ -2421,6 +2876,8 @@ test_xerror_badmatch_configure(void)
 static void
 test_unmanage_swallowing_client(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *term = make_client(10, m);
 	Client *sub = make_client(11, m);
@@ -2436,12 +2893,16 @@ test_unmanage_swallowing_client(void)
 	ASSERT(1, "unmanage: swallowing client does not crash");
 
 	restore_selmon();
+	free(m); /* fixture leaked (ASan-reported) */
+	free(term); /* fixture leaked (ASan-reported) */
 }
 
 /* --- focus focusing urgent client on different monitor --- */
 static void
 test_focus_urgent_client(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m1 = make_monitor(0);
 	Monitor *m2 = make_monitor(1);
 	Client *c = make_client(1, m2);
@@ -2463,12 +2924,17 @@ test_focus_urgent_client(void)
 	ASSERT(selmon == m2, "focus: switched to urgent client's monitor");
 
 	restore_selmon();
+	free(c); /* fixture leaked (ASan-reported) */
+	free(m1); /* fixture leaked (ASan-reported) */
+	free(m2); /* fixture leaked (ASan-reported) */
 }
 
 /* --- arrange with multiple monitors --- */
 static void
 test_arrange_all_monitors(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m1 = make_monitor(0);
 	Monitor *m2 = make_monitor(1);
 	m1->next = m2;
@@ -2482,12 +2948,16 @@ test_arrange_all_monitors(void)
 	ASSERT(1, "arrange(NULL): all monitors arranged no crash");
 
 	restore_selmon();
+	free(m1); /* fixture leaked (ASan-reported) */
+	free(m2); /* fixture leaked (ASan-reported) */
 }
 
 /* --- resizeclient with hintsvalid --- */
 static void
 test_resizeclient_bw_stored(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m = { .mx=0, .my=0, .mw=1920, .mh=1080, .wx=0, .wy=0, .ww=1920, .wh=1080,
 		.lt = {&layouts[0], &layouts[0]} };
 	Client c = { .win=1, .mon=&m, .bw=2, .x=10, .y=10, .w=100, .h=100,
@@ -2504,6 +2974,8 @@ test_resizeclient_bw_stored(void)
 static void
 test_monocle_no_clients(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m = { .mx=0, .my=0, .mw=1920, .mh=1080, .wx=0, .wy=0, .ww=1920, .wh=1080,
 		.topbar=1, .showbar=0, .lt = {&layouts[0], &layouts[0]} };
 	m.clients = NULL;
@@ -2514,6 +2986,8 @@ test_monocle_no_clients(void)
 static void
 test_monocle_one_client(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m = { .mx=0, .my=0, .mw=1920, .mh=1080, .wx=0, .wy=0, .ww=1920, .wh=1080,
 		.topbar=1, .showbar=0, .lt = {&layouts[0], &layouts[0]} };
 	Client c = { .win=1, .mon=&m, .x=0, .y=0, .w=100, .h=100, .tags=1, .bw=0, .next=NULL };
@@ -2527,6 +3001,8 @@ test_monocle_one_client(void)
 static void
 test_textnw_basic(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	int w = TEXTW("test");
 	ASSERT(w > 0, "textnw: positive width for 'test'");
@@ -2537,6 +3013,8 @@ test_textnw_basic(void)
 static void
 test_setfullscreen_on_off(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
 	c->isfullscreen = 0;
@@ -2551,6 +3029,7 @@ test_setfullscreen_on_off(void)
 	ASSERT(1, "setfullscreen: on triggers arrange + restack");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -2558,6 +3037,8 @@ test_setfullscreen_on_off(void)
 static void
 test_configure_basic(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
 	c->x = 100; c->y = 100; c->w = 200; c->h = 200;
@@ -2569,6 +3050,7 @@ test_configure_basic(void)
 	ASSERT(1, "configure: basic no crash");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -2576,6 +3058,8 @@ test_configure_basic(void)
 static void
 test_sendmon_same_monitor(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
 	m->sel = c;
@@ -2589,12 +3073,15 @@ test_sendmon_same_monitor(void)
 	ASSERT(c->mon == m, "sendmon: same monitor no change");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
 static void
 test_sendmon_different_monitor(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m1 = make_monitor(0);
 	Monitor *m2 = make_monitor(1);
 	m1->next = m2;
@@ -2611,6 +3098,7 @@ test_sendmon_different_monitor(void)
 	ASSERT(c->mon == m2, "sendmon: moved to new monitor");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m1); free(m2);
 }
 
@@ -2620,6 +3108,8 @@ test_sendmon_different_monitor(void)
 static void
 test_tile_multiple_masters_gap(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->nmaster = 2;
 	m->ww = 1920; m->wh = 1080;
@@ -2642,6 +3132,11 @@ test_tile_multiple_masters_gap(void)
 	ASSERT(c3->x > c2->x, "tile: stack client right of master");
 
 	restore_selmon();
+	winclient_remove(c1);
+	winclient_remove(c2);
+	winclient_remove(c3);
+	winclient_remove(c1);
+	winclient_remove(c2);
 	free(c1); free(c2); free(c3); free(m);
 }
 
@@ -2649,6 +3144,8 @@ test_tile_multiple_masters_gap(void)
 static void
 test_tile_stack_gap(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->nmaster = 1;
 	m->ww = 1920; m->wh = 1080;
@@ -2670,6 +3167,11 @@ test_tile_stack_gap(void)
 	ASSERT(c2->y > 0, "tile: first stack client y > 0 with gap");
 
 	restore_selmon();
+	winclient_remove(c1);
+	winclient_remove(c2);
+	winclient_remove(c3);
+	winclient_remove(c1);
+	winclient_remove(c2);
 	free(c1); free(c2); free(c3); free(m);
 }
 
@@ -2677,6 +3179,8 @@ test_tile_stack_gap(void)
 static void
 test_zoom_second_tiled(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c1 = make_client(1, m);
 	Client *c2 = make_client(2, m);
@@ -2694,6 +3198,9 @@ test_zoom_second_tiled(void)
 	ASSERT(selmon->sel == c2, "zoom: switches to second client when first is master");
 
 	restore_selmon();
+	winclient_remove(c1);
+	winclient_remove(c2);
+	winclient_remove(c1);
 	free(c1); free(c2); free(m);
 }
 
@@ -2701,6 +3208,8 @@ test_zoom_second_tiled(void)
 static void
 test_buttonpress_click_layoutsymbol_only(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->barwin = 999;
 	m->sel = NULL;
@@ -2729,6 +3238,8 @@ test_buttonpress_click_layoutsymbol_only(void)
 static void
 test_drawbar_fullscreen_client(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->showbar = 1;
 	m->barwin = 888;
@@ -2744,6 +3255,7 @@ test_drawbar_fullscreen_client(void)
 	ASSERT(1, "drawbar: fullscreen client freeze does not crash");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -2751,6 +3263,8 @@ test_drawbar_fullscreen_client(void)
 static void
 test_drawbar_urgent_client(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->showbar = 1;
 	m->barwin = 888;
@@ -2768,6 +3282,7 @@ test_drawbar_urgent_client(void)
 	ASSERT(1, "drawbar: urgent client in occ loop no crash");
 
 	restore_selmon();
+	winclient_remove(c1);
 	free(c1); free(m);
 }
 
@@ -2775,6 +3290,8 @@ test_drawbar_urgent_client(void)
 static void
 test_focusstack_reverse_wrap(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c1 = make_client(1, m);
 	Client *c2 = make_client(2, m);
@@ -2791,12 +3308,17 @@ test_focusstack_reverse_wrap(void)
 	ASSERT(selmon->sel == c2, "focusstack: reverse wrap finds last visible");
 
 	restore_selmon();
+	free(c1); /* fixture leaked (ASan-reported) */
+	free(c2); /* fixture leaked (ASan-reported) */
+	free(m); /* fixture leaked (ASan-reported) */
 }
 
 /* --- togglefloating no sel --- */
 static void
 test_togglefloating_no_sel(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	selmon = make_monitor(0);
 	mons = selmon;
@@ -2806,13 +3328,19 @@ test_togglefloating_no_sel(void)
 	togglefloating(&arg);
 	ASSERT(1, "togglefloating: noop when no sel");
 
-	restore_selmon();
+{
+		Monitor *tmpm = selmon; /* free the fixture, then restore globals */
+		restore_selmon();
+		free(tmpm);
+	}
 }
 
 /* --- togglefloating fullscreen --- */
 static void
 test_togglefloating_fullscreen(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
 	c->isfullscreen = 1;
@@ -2826,6 +3354,7 @@ test_togglefloating_fullscreen(void)
 	ASSERT(c->isfullscreen, "togglefloating: noop on fullscreen client");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -2833,6 +3362,8 @@ test_togglefloating_fullscreen(void)
 static void
 test_motionnotify_multi_monitor(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m1 = make_monitor(0);
 	Monitor *m2 = make_monitor(1);
 	m1->next = m2;
@@ -2861,6 +3392,8 @@ test_motionnotify_multi_monitor(void)
 static void
 test_unmanage_not_destroyed(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
 	m->clients = c;
@@ -2881,6 +3414,8 @@ test_unmanage_not_destroyed(void)
 static void
 test_updatesizehints_full(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client c = { .win = 1, .mon = m };
 
@@ -2895,6 +3430,8 @@ test_updatesizehints_full(void)
 static void
 test_resize_large_dim(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m = { .mx=0, .my=0, .mw=1920, .mh=1080, .wx=0, .wy=0, .ww=1920, .wh=1080,
 		.lt = {&layouts[0], &layouts[0]} };
 	Client c = { .win=1, .mon=&m, .bw=0, .x=0, .y=0, .w=100, .h=100,
@@ -2910,6 +3447,8 @@ test_resize_large_dim(void)
 static void
 test_keypress_unmapped(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	XEvent ev;
 	memset(&ev, 0, sizeof ev);
 	ev.xkey.keycode = 0;
@@ -2923,6 +3462,8 @@ test_keypress_unmapped(void)
 static void
 test_setfullscreen_toggle(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
 	c->isfullscreen = 0;
@@ -2938,6 +3479,7 @@ test_setfullscreen_toggle(void)
 	ASSERT_EQ(c->bw, 0, "setfullscreen: border removed");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -2945,6 +3487,8 @@ test_setfullscreen_toggle(void)
 static void
 test_setfullscreen_exit(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
 	c->isfullscreen = 1;
@@ -2962,6 +3506,7 @@ test_setfullscreen_exit(void)
 	ASSERT_EQ(c->bw, 2, "setfullscreen: border restored");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -2969,6 +3514,8 @@ test_setfullscreen_exit(void)
 static void
 test_applyrules_with_class(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
 	c->name[0] = '\0';
@@ -2978,6 +3525,7 @@ test_applyrules_with_class(void)
 	ASSERT(c->tags != 0, "applyrules with class: gets default tag");
 	ASSERT(c->mon == m, "applyrules with class: stays on same monitor");
 	/* XFree called on class/name strings inside applyrules */
+	winclient_remove(c);
 	free(c); free(m);
 	mock_x11_reset();
 }
@@ -2986,6 +3534,8 @@ test_applyrules_with_class(void)
 static void
 test_applysizehints_updatesizehints(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m = { .mx=0, .my=0, .mw=1920, .mh=1080, .wx=0, .wy=0, .ww=1920, .wh=1080,
 		.lt = {&layouts[0], &layouts[0]} };
 	Client c = { .win=1, .mon=&m, .bw=0, .x=0, .y=0, .w=200, .h=200,
@@ -3007,6 +3557,8 @@ test_applysizehints_updatesizehints(void)
 static void
 test_updatesizehints_base(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c = { .win = 1, .hintsvalid = 0 };
 	mock_x11_reset();
 	mock_normal_hints_flags = PSize | PBaseSize;
@@ -3022,6 +3574,8 @@ test_updatesizehints_base(void)
 static void
 test_updatesizehints_minsize_as_base(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c = { .win = 1, .hintsvalid = 0 };
 	mock_x11_reset();
 	mock_normal_hints_flags = PSize | PMinSize;
@@ -3040,6 +3594,8 @@ test_updatesizehints_minsize_as_base(void)
 static void
 test_updatesizehints_increment(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c = { .win = 1, .hintsvalid = 0 };
 	mock_x11_reset();
 	mock_normal_hints_flags = PSize | PResizeInc;
@@ -3055,6 +3611,8 @@ test_updatesizehints_increment(void)
 static void
 test_updatesizehints_maxsize(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c = { .win = 1, .hintsvalid = 0 };
 	mock_x11_reset();
 	mock_normal_hints_flags = PSize | PMaxSize;
@@ -3070,6 +3628,8 @@ test_updatesizehints_maxsize(void)
 static void
 test_updatesizehints_aspect(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c = { .win = 1, .hintsvalid = 0 };
 	mock_x11_reset();
 	mock_normal_hints_flags = PSize | PAspect;
@@ -3087,6 +3647,8 @@ test_updatesizehints_aspect(void)
 static void
 test_updatesizehints_fixed(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c = { .win = 1, .hintsvalid = 0 };
 	mock_x11_reset();
 	mock_normal_hints_flags = PSize | PMinSize | PMaxSize;
@@ -3103,6 +3665,8 @@ test_updatesizehints_fixed(void)
 static void
 test_updatesizehints_none(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c = { .win = 1, .hintsvalid = 0 };
 	mock_x11_reset();
 	/* Only PSize, no other flags */
@@ -3124,6 +3688,8 @@ test_updatesizehints_none(void)
 static void
 test_applysizehints_aspect(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m = { .mx=0, .my=0, .mw=1920, .mh=1080, .wx=0, .wy=0, .ww=1920, .wh=1080,
 		.lt = {&layouts[0], &layouts[0]} };
 	Client c = { .win=1, .mon=&m, .bw=0, .x=0, .y=0, .w=400, .h=100,
@@ -3140,6 +3706,8 @@ test_applysizehints_aspect(void)
 static void
 test_applysizehints_increment(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m = { .mx=0, .my=0, .mw=1920, .mh=1080, .wx=0, .wy=0, .ww=1920, .wh=1080,
 		.lt = {&layouts[0], &layouts[0]} };
 	Client c = { .win=1, .mon=&m, .bw=0, .x=0, .y=0, .w=203, .h=105,
@@ -3160,6 +3728,8 @@ test_applysizehints_increment(void)
 static void
 test_applysizehints_nochange_interact(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m = { .mx=0, .my=0, .mw=1920, .mh=1080, .wx=0, .wy=0, .ww=1920, .wh=1080,
 		.lt = {&layouts[0], &layouts[0]} };
 	Client c = { .win=1, .mon=&m, .bw=0, .x=100, .y=100, .w=200, .h=200,
@@ -3175,6 +3745,8 @@ test_applysizehints_nochange_interact(void)
 static void
 test_gettextprop_xastring(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	char buf[256] = {0};
 	mock_x11_reset();
 	mock_gettextprop_return = 1;
@@ -3190,6 +3762,8 @@ test_gettextprop_xastring(void)
 static void
 test_gettextprop_empty(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	char buf[256] = {0};
 	mock_x11_reset();
 	mock_gettextprop_return = 1;
@@ -3204,6 +3778,8 @@ test_gettextprop_empty(void)
 static void
 test_getatomprop_found(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c = { .win = 1 };
 	mock_x11_reset();
 	mock_getwindowproperty_return = 1;
@@ -3218,6 +3794,8 @@ test_getatomprop_found(void)
 static void
 test_updatesizehints_xgetwmnormalhints_fails(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c = { .win = 1, .hintsvalid = 0 };
 	mock_x11_reset();
 	mock_normal_hints_return = 0;  /* XGetWMNormalHints returns 0 */
@@ -3239,6 +3817,8 @@ test_updatesizehints_xgetwmnormalhints_fails(void)
 static void
 test_gettextprop_null_text(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	int r = gettextprop(42, XA_WM_NAME, NULL, 256);
 	ASSERT_EQ(r, 0, "gettextprop null text: returns 0");
 }
@@ -3246,6 +3826,8 @@ test_gettextprop_null_text(void)
 static void
 test_gettextprop_zero_size(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	char buf[256] = {0};
 	int r = gettextprop(42, XA_WM_NAME, buf, 0);
 	ASSERT_EQ(r, 0, "gettextprop zero size: returns 0");
@@ -3255,6 +3837,8 @@ test_gettextprop_zero_size(void)
 static void
 test_getstate_nonzero(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	mock_x11_reset();
 	mock_getwindowproperty_return = 1;
 	mock_getwindowproperty_atom = 42;
@@ -3271,6 +3855,8 @@ test_getstate_nonzero(void)
 static void
 test_applysizehints_interact_clamp(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m = { .mx=0, .my=0, .mw=1920, .mh=1080, .wx=0, .wy=0, .ww=1920, .wh=1080,
 		.lt = {&layouts[0], &layouts[0]} };
 	Client c = { .win=1, .mon=&m, .bw=0, .x=3000, .y=2000, .w=200, .h=200,
@@ -3289,6 +3875,8 @@ test_applysizehints_interact_clamp(void)
 static void
 test_applysizehints_interact_negative(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m = { .mx=0, .my=0, .mw=1920, .mh=1080, .wx=0, .wy=0, .ww=1920, .wh=1080,
 		.lt = {&layouts[0], &layouts[0]} };
 	Client c = { .win=1, .mon=&m, .bw=0, .x=-100, .y=-100, .w=200, .h=200,
@@ -3309,6 +3897,8 @@ test_applysizehints_interact_negative(void)
 static void
 test_drawbar_tags_loop(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->showbar = 1;
 	m->barwin = 888;
@@ -3355,6 +3945,11 @@ test_drawbar_tags_loop(void)
 	ASSERT(1, "drawbar: tags loop with occ/urg/selected no crash");
 
 	restore_selmon();
+	winclient_remove(c1);
+	winclient_remove(c2);
+	winclient_remove(c3);
+	winclient_remove(c1);
+	winclient_remove(c2);
 	free(c1); free(c2); free(c3); free(m);
 }
 
@@ -3362,6 +3957,8 @@ test_drawbar_tags_loop(void)
 static void
 test_manage_centers_floating(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	Monitor *m = make_monitor(0);
 	m->showbar = 0;
@@ -3407,6 +4004,7 @@ test_manage_centers_floating(void)
 	ASSERT(c->y == -60, "configurerequest: floating oversized y centered");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -3414,6 +4012,8 @@ test_manage_centers_floating(void)
 static void
 test_manage_transient(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	mock_x11_reset();
 	save_selmon();
 	Monitor *m = make_monitor(0);
@@ -3459,15 +4059,18 @@ test_manage_transient(void)
 		ASSERT(c->isfloating, "manage transient: isfloating set from trans");
 	}
 
+	drain_clients(); /* release dwm-created clients while list is live */
 	restore_selmon();
 	mock_x11_reset();
-	free(parent); free(m);
+	free(m);
 }
 
 /* --- manage swallow path (line 1063) --- */
 static void
 test_manage_swallows(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	mock_x11_reset();
 	save_selmon();
 	Monitor *m = make_monitor(0);
@@ -3509,15 +4112,18 @@ test_manage_swallows(void)
 	ASSERT(c != NULL, "manage swallow: new client created alongside terminal");
 	ASSERT(c != term, "manage swallow: new client is not the terminal");
 
+	drain_clients(); /* release dwm-created clients while list is live */
 	restore_selmon();
 	mock_x11_reset();
-	free(term); free(m);
+	free(m);
 }
 
 /* --- spawn with NULL arg (lines 1720-1727) --- */
 static void
 test_spawn_null_arg(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	selmon->num = 0;
 
@@ -3536,6 +4142,8 @@ test_spawn_null_arg(void)
 static void
 test_focusstack_forward_wrap(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c1 = make_client(1, m);
 	Client *c2 = make_client(2, m);
@@ -3552,6 +4160,9 @@ test_focusstack_forward_wrap(void)
 	ASSERT(selmon->sel == c1, "focusstack: forward wrap to first client");
 
 	restore_selmon();
+	winclient_remove(c1);
+	winclient_remove(c2);
+	winclient_remove(c1);
 	free(c1); free(c2); free(m);
 }
 
@@ -3559,6 +4170,8 @@ test_focusstack_forward_wrap(void)
 static void
 test_destroynotify_swallowing(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *term = make_client(10, m);
 	Client *child = make_client(11, m);
@@ -3582,6 +4195,7 @@ test_destroynotify_swallowing(void)
 
 	/* child was freed by unmanage; only free term */
 	restore_selmon();
+	winclient_remove(term);
 	free(term); free(m);
 }
 
@@ -3589,6 +4203,8 @@ test_destroynotify_swallowing(void)
 static void
 test_cleanupmon_traverse(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m1 = make_monitor(0);
 	Monitor *m2 = make_monitor(1);
 	Monitor *m3 = make_monitor(2);
@@ -3613,6 +4229,8 @@ test_cleanupmon_traverse(void)
 static void
 test_configurenotify_resize(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->barwin = 100;
 	mons = m;
@@ -3644,6 +4262,8 @@ test_configurenotify_resize(void)
 static void
 test_mappingnotify_not_keyboard(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	XEvent ev;
 	memset(&ev, 0, sizeof ev);
 	ev.xmapping.request = 2; /* MappingPointer — not MappingKeyboard */
@@ -3656,6 +4276,8 @@ test_mappingnotify_not_keyboard(void)
 static void
 test_maprequest_already_managed(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(42, m);
 	m->clients = c;
@@ -3671,6 +4293,7 @@ test_maprequest_already_managed(void)
 	ASSERT(1, "maprequest: already-managed window no crash");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -3678,6 +4301,8 @@ test_maprequest_already_managed(void)
 static void
 test_motionnotify_cross_monitor(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m1 = make_monitor(0);
 	Monitor *m2 = make_monitor(1);
 	m1->sel = NULL;
@@ -3710,12 +4335,16 @@ test_motionnotify_cross_monitor(void)
 	ASSERT(selmon == m2, "motionnotify: cross-monitor switches focus to m2");
 
 	restore_selmon();
+	free(m1); /* fixture leaked (ASan-reported) */
+	free(m2); /* fixture leaked (ASan-reported) */
 }
 
 /* --- focusmon prev (line 601) --- */
 static void
 test_focusmon_prev(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m1 = make_monitor(0);
 	Monitor *m2 = make_monitor(1);
 	m1->sel = NULL;
@@ -3732,12 +4361,16 @@ test_focusmon_prev(void)
 	ASSERT(selmon == m1, "focusmon prev: switches to previous monitor");
 
 	restore_selmon();
+	free(m1); /* fixture leaked (ASan-reported) */
+	free(m2); /* fixture leaked (ASan-reported) */
 }
 
 /* --- cachebuttons loop (lines 338-343) --- */
 static void
 test_cachebuttons(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	button_button_used = 0;
 	button_mask_used = 0;
 	cachebuttons();
@@ -3749,6 +4382,8 @@ test_cachebuttons(void)
 static void
 test_cachekeys(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	key_keysym_used = 0;
 	key_mod_used = 0;
 	cachekeys();
@@ -3760,6 +4395,8 @@ test_cachekeys(void)
 static void
 test_grabbuttons_modifiers(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c = { .win = 1 };
 	grabbuttons(&c, 1);
 	ASSERT(1, "grabbuttons: modifier loop with focused=1 does not crash");
@@ -3769,6 +4406,8 @@ test_grabbuttons_modifiers(void)
 static void
 test_grabkeys_modifiers(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	grabkeys();
 	ASSERT(1, "grabkeys: modifier loop does not crash");
 }
@@ -3777,6 +4416,8 @@ test_grabkeys_modifiers(void)
 static void
 test_keypress_matched(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	XEvent ev;
 	memset(&ev, 0, sizeof ev);
 	/* XK_b = 0x0062 = 98; mock XKeycodeToKeysym returns keycode as keysym */
@@ -3792,6 +4433,8 @@ test_keypress_matched(void)
 static void
 test_buttonpress_clicks_ltsymbol(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->sel = NULL;
 	m->barwin = 999;
@@ -3820,6 +4463,8 @@ test_buttonpress_clicks_ltsymbol(void)
 static void
 test_buttonpress_dispatch(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->sel = NULL;
 	m->barwin = 999;
@@ -3847,6 +4492,8 @@ test_buttonpress_dispatch(void)
 static void
 test_gettextprop_compound_text(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	char buf[256] = {0};
 	mock_x11_reset();
 	mock_gettextprop_return = 1;
@@ -3866,6 +4513,8 @@ test_gettextprop_compound_text(void)
 static void
 test_propertynotify_transient_for(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	selmon = make_monitor(0);
 	mons = selmon;
@@ -3877,6 +4526,8 @@ test_propertynotify_transient_for(void)
 	selmon->stack = &c;
 	c.snext = &target;
 	target.snext = NULL;
+	winclient_put(&c);
+	winclient_put(&target);
 
 	mock_x11_reset();
 	mock_gettransient_return = 1;
@@ -3890,13 +4541,19 @@ test_propertynotify_transient_for(void)
 	propertynotify(&ev);
 	ASSERT(c.isfloating, "propertynotify transient: client set floating");
 	mock_x11_reset();
-	restore_selmon();
+{
+		Monitor *tmpm = selmon; /* free the fixture, then restore globals */
+		restore_selmon();
+		free(tmpm);
+	}
 }
 
 /* --- propertynotify netatom[NetWMWindowType] --- */
 static void
 test_propertynotify_windowtype(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	selmon = make_monitor(0);
 	mons = selmon;
@@ -3911,13 +4568,19 @@ test_propertynotify_windowtype(void)
 
 	propertynotify(&ev);
 	ASSERT(1, "propertynotify windowtype: does not crash");
-	restore_selmon();
+{
+		Monitor *tmpm = selmon; /* free the fixture, then restore globals */
+		restore_selmon();
+		free(tmpm);
+	}
 }
 
 /* --- updatestatus fullscreen freeze --- */
 static void
 test_updatestatus_fullscreen_freeze(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	char saved[sizeof stext] = "dwm-6.4";
 	save_selmon();
 	selmon = make_monitor(0);
@@ -3930,13 +4593,19 @@ test_updatestatus_fullscreen_freeze(void)
 	updatestatus();
 	ASSERT_EQ(strcmp(stext, saved), 0,
 		"updatestatus: fullscreen freeze prevents stext modification");
-	restore_selmon();
+{
+		Monitor *tmpm = selmon; /* free the fixture, then restore globals */
+		restore_selmon();
+		free(tmpm);
+	}
 }
 
 /* --- propertynotify root WM_NAME fullscreen skip --- */
 static void
 test_propertynotify_root_wmname_fullscreen_skip(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	selmon = make_monitor(0);
 	mons = selmon;
@@ -3964,6 +4633,8 @@ test_propertynotify_root_wmname_fullscreen_skip(void)
 static void
 test_updatewmhints_urgency_sel(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	selmon = make_monitor(0);
 	mons = selmon;
@@ -3979,13 +4650,19 @@ test_updatewmhints_urgency_sel(void)
 	ASSERT_EQ(c.isurgent, 0,
 		"updatewmhints urgency sel: isurgent unchanged (urgency cleared for sel)");
 	mock_x11_reset();
-	restore_selmon();
+{
+		Monitor *tmpm = selmon; /* free the fixture, then restore globals */
+		restore_selmon();
+		free(tmpm);
+	}
 }
 
 /* --- updatewmhints neverfocus = 0 (else branch, no InputHint) --- */
 static void
 test_updatewmhints_neverfocus_else(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c = { .win = 1, .neverfocus = 1 };
 
 	mock_x11_reset();
@@ -4001,6 +4678,8 @@ test_updatewmhints_neverfocus_else(void)
 static void
 test_applyrules_monitor_branch(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	mock_x11_reset();
 	Monitor *m0 = make_monitor(0);
 	Monitor *m1 = make_monitor(1);
@@ -4018,6 +4697,7 @@ test_applyrules_monitor_branch(void)
 	/* st-256color rule has monitor=1, so c->mon should be m1 */
 	ASSERT(c->mon == m1, "applyrules monitor: c->mon set to matching monitor");
 
+	winclient_remove(c);
 	free(c);
 	free(m0);
 	free(m1);
@@ -4029,6 +4709,8 @@ test_applyrules_monitor_branch(void)
 static void
 test_applysizehints_interact_negative_far(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m = { .mx=0, .my=0, .mw=1920, .mh=1080, .wx=0, .wy=0, .ww=1920, .wh=1080,
 		.lt = {&layouts[0], &layouts[0]} };
 	/* x=-500, w=100, bw=0 → x+w+2*bw = -400 < 0 → *x = 0 */
@@ -4046,6 +4728,8 @@ test_applysizehints_interact_negative_far(void)
 static void
 test_applysizehints_noninteract_clamp(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m = { .mx=0, .my=0, .mw=1920, .mh=1080, .wx=0, .wy=0, .ww=1920, .wh=1080,
 		.lt = {&layouts[0], &layouts[0]} };
 	/* Test right/bottom overflow: x=2000 >= wx+ww=1920 → x = 1920 - WIDTH(c) */
@@ -4074,6 +4758,8 @@ test_applysizehints_noninteract_clamp(void)
 static void
 test_applysizehints_aspect_mina(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m = { .mx=0, .my=0, .mw=1920, .mh=1080, .wx=0, .wy=0, .ww=1920, .wh=1080,
 		.lt = {&layouts[0], &layouts[0]} };
 	/* mina=0.5, maxa=2.0, w=100, h=300
@@ -4093,6 +4779,8 @@ test_applysizehints_aspect_mina(void)
 static void
 test_manage_swallow_line1063(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	mock_x11_reset();
 	save_selmon();
 	Monitor *m = make_monitor(0);
@@ -4135,8 +4823,9 @@ test_manage_swallow_line1063(void)
 	ASSERT(term->swallowing->win == 40, "manage swallow: swallowed client has terminal's old win");
 
 	mock_x11_reset();
+	drain_clients(); /* consumes term via unmanage(swallow path) + frees it */
 	restore_selmon();
-	free(term); free(m);
+	free(m);
 }
 
 /* --- manage geometry clamping (lines 1031, 1033) --- */
@@ -4174,14 +4863,18 @@ static void
 	ASSERT(c->x >= 0 && c->x <= m->wx + m->ww, "manage geom clamp: x within monitor bounds");
 	ASSERT(c->y >= 0 && c->y <= m->wy + m->wh, "manage geom clamp: y within monitor bounds");
 
+	drain_clients(); /* release client 501 created inside manage() */
 	restore_selmon();
 	mock_x11_reset();
+	free(m);
 }
 
 /* --- maprequest override_redirect early return (line 1089) --- */
 static void
 test_maprequest_override_redirect(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	mock_x11_reset();
 	save_selmon();
 	Monitor *m = make_monitor(0);
@@ -4202,12 +4895,15 @@ test_maprequest_override_redirect(void)
 
 	mock_x11_reset();
 	restore_selmon();
+	free(m); /* fixture leaked (ASan-reported) */
 }
 
 /* --- propertynotify XA_WM_NORMAL_HINTS (lines 1240-1242) --- */
 static void
 test_propertynotify_normal_hints(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	selmon = make_monitor(0);
 	mons = selmon;
@@ -4229,6 +4925,7 @@ test_propertynotify_normal_hints(void)
 
 	Monitor *local_mon = selmon;
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(local_mon);
 }
 
@@ -4236,6 +4933,8 @@ test_propertynotify_normal_hints(void)
 static void
 test_propertynotify_wm_hints(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	selmon = make_monitor(0);
 	mons = selmon;
@@ -4268,6 +4967,7 @@ test_propertynotify_wm_hints(void)
 	mock_x11_reset();
 	Monitor *local_mon = selmon;
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(local_mon);
 }
 
@@ -4275,6 +4975,8 @@ test_propertynotify_wm_hints(void)
 static void
 test_propertynotify_wm_name(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	selmon = make_monitor(0);
 	mons = selmon;
@@ -4303,6 +5005,7 @@ test_propertynotify_wm_name(void)
 	mock_x11_reset();
 	Monitor *local_mon = selmon;
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(local_mon);
 }
 
@@ -4310,6 +5013,8 @@ test_propertynotify_wm_name(void)
 static void
 test_propertynotify_net_wm_name(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	selmon = make_monitor(0);
 	mons = selmon;
@@ -4338,6 +5043,7 @@ test_propertynotify_net_wm_name(void)
 	mock_x11_reset();
 	Monitor *local_mon = selmon;
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(local_mon);
 }
 
@@ -4345,6 +5051,8 @@ test_propertynotify_net_wm_name(void)
 static void
 test_propertynotify_wm_name_non_sel(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	selmon = make_monitor(0);
 	mons = selmon;
@@ -4375,6 +5083,7 @@ test_propertynotify_wm_name_non_sel(void)
 	mock_x11_reset();
 	Monitor *local_mon = selmon;
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(local_mon);
 }
 
@@ -4382,6 +5091,8 @@ test_propertynotify_wm_name_non_sel(void)
 static void
 test_focus_change_client(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	Monitor *m = make_monitor(0);
 	selmon = m;
@@ -4399,6 +5110,9 @@ test_focus_change_client(void)
 	ASSERT(selmon->sel == c2, "focus change client: sel changed to c2");
 
 	restore_selmon();
+	winclient_remove(c1);
+	winclient_remove(c2);
+	winclient_remove(c1);
 	free(c1); free(c2); free(m);
 }
 
@@ -4406,6 +5120,8 @@ test_focus_change_client(void)
 static void
 test_focusstack_no_sel(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	Monitor *m = make_monitor(0);
 	selmon = m;
@@ -4425,6 +5141,8 @@ test_focusstack_no_sel(void)
 static void
 test_tile_early_return(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->clients = NULL;
 	tile(m);
@@ -4437,6 +5155,8 @@ test_tile_early_return(void)
 static void
 test_dirtomon_single_monitor(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	Monitor *m = make_monitor(0);
 	selmon = m;
@@ -4457,6 +5177,8 @@ test_dirtomon_single_monitor(void)
 static void
 test_motionnotify_non_root(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	mock_x11_reset();
 	save_selmon();
 	Monitor *m1 = make_monitor(0);
@@ -4488,6 +5210,8 @@ test_motionnotify_non_root(void)
 static void
 test_configurenotify_resize_with_fullscreen(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->barwin = 100;
 	Client *c = make_client(1, m);
@@ -4513,6 +5237,7 @@ test_configurenotify_resize_with_fullscreen(void)
 	ASSERT(c->isfullscreen, "configurenotify resize fullscreen: client still fullscreen");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -4520,6 +5245,8 @@ test_configurenotify_resize_with_fullscreen(void)
 static void
 test_configurerequest_floating_pos_only(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
 	c->isfloating = 1;
@@ -4542,6 +5269,7 @@ test_configurerequest_floating_pos_only(void)
 	ASSERT_EQ(c->y, 60, "configurerequest floating pos-only: y updated");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -4549,6 +5277,8 @@ test_configurerequest_floating_pos_only(void)
 static void
 test_configurerequest_nonfloating_arrange(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
 	c->isfloating = 0;
@@ -4569,6 +5299,7 @@ test_configurerequest_nonfloating_arrange(void)
 	ASSERT(1, "configurerequest non-floating arrange: no crash (configure called)");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -4576,6 +5307,8 @@ test_configurerequest_nonfloating_arrange(void)
 static void
 test_clientmessage_fullscreen_toggle_l2(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
 	c->isfullscreen = 0;
@@ -4598,6 +5331,7 @@ test_clientmessage_fullscreen_toggle_l2(void)
 	ASSERT(c->isfullscreen, "clientmessage: fullscreen toggle via l[2] sets isfullscreen");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -4605,6 +5339,8 @@ test_clientmessage_fullscreen_toggle_l2(void)
 static void
 test_propertynotify_net_wm_window_type(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	selmon = make_monitor(0);
 	mons = selmon;
@@ -4619,13 +5355,19 @@ test_propertynotify_net_wm_window_type(void)
 
 	propertynotify(&ev);
 	ASSERT(1, "propertynotify NetWMWindowType: reaches updatewindowtype");
-	restore_selmon();
+{
+		Monitor *tmpm = selmon; /* free the fixture, then restore globals */
+		restore_selmon();
+		free(tmpm);
+	}
 }
 
 /* --- setclientstate (line 1569 comment: arrange is in setlayout) --- */
 static void
 test_setclientstate_arrange(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
 	m->sel = c;
@@ -4641,6 +5383,7 @@ test_setclientstate_arrange(void)
 	ASSERT(1, "setclientstate arrange: WithdrawnState no crash");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -4648,6 +5391,8 @@ test_setclientstate_arrange(void)
 static void
 test_updatewindowtype_sets_fullscreen(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	mock_x11_reset();
 	mock_getwindowproperty_return = 1;
 	mock_getwindowproperty_atom = netatom[NetWMFullscreen];
@@ -4664,13 +5409,19 @@ test_updatewindowtype_sets_fullscreen(void)
 	ASSERT(c.isfullscreen, "updatewindowtype: NetWMState fullscreen sets isfullscreen");
 
 	mock_x11_reset();
-	restore_selmon();
+{
+		Monitor *tmpm = selmon; /* free the fixture, then restore globals */
+		restore_selmon();
+		free(tmpm);
+	}
 }
 
 /* --- updatewindowtype sets floating for dialog (line 2124) --- */
 static void
 test_updatewindowtype_sets_floating_dialog(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	mock_x11_reset();
 	mock_getwindowproperty_return = 1;
 	mock_getwindowproperty_atom = netatom[NetWMWindowTypeDialog];
@@ -4687,13 +5438,19 @@ test_updatewindowtype_sets_floating_dialog(void)
 	ASSERT(c.isfloating, "updatewindowtype: WMWindowTypeDialog sets isfloating");
 
 	mock_x11_reset();
-	restore_selmon();
+{
+		Monitor *tmpm = selmon; /* free the fixture, then restore globals */
+		restore_selmon();
+		free(tmpm);
+	}
 }
 
 /* --- enternotify cross-monitor (lines 701, 705-706, 709) --- */
 static void
 test_enternotify_different_monitor(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m1 = make_monitor(0);
 	Monitor *m2 = make_monitor(1);
 	m2->wx = 1920;
@@ -4721,6 +5478,7 @@ test_enternotify_different_monitor(void)
 	ASSERT(selmon == m2, "enternotify different monitor: selmon changed to m2");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m2); free(m1);
 }
 
@@ -4728,6 +5486,8 @@ test_enternotify_different_monitor(void)
 static void
 test_enternotify_guard_notifyinferior(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	Monitor *m = make_monitor(0);
 	mons = m;
@@ -4750,6 +5510,7 @@ test_enternotify_guard_notifyinferior(void)
 	/* Line 701: early return because detail == NotifyInferior and window != root */
 	ASSERT(m->sel == c, "enternotify guard: NotifyInferior returns early, sel unchanged");
 
+	winclient_remove(c);
 	free(c); free(m);
 	restore_selmon();
 }
@@ -4758,6 +5519,8 @@ test_enternotify_guard_notifyinferior(void)
 static void
 test_cleanup_manages_stack(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	Monitor *m = make_monitor(0);
 	mons = m;
@@ -4774,12 +5537,15 @@ test_cleanup_manages_stack(void)
 	ASSERT(mons == NULL, "cleanupmon with client: mons is NULL after cleanupmon");
 
 	restore_selmon();
+	free(c); /* fixture leaked (ASan-reported) */
 }
 
 /* --- grabkeys early return when syms == NULL (line 919) --- */
 static void
 test_grabkeys_early_return(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	int saved = mock_keyboardmapping_return_null;
 	mock_keyboardmapping_return_null = 1;
 
@@ -4795,6 +5561,8 @@ test_grabkeys_early_return(void)
 static void
 test_grabkeys_modifier_loop(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	/* XK_p = 0x70 matches keys[0].keysym in config.def.h */
 	KeySym saved_first = mock_keyboardmapping_first_keysym;
 	mock_keyboardmapping_first_keysym = XK_p;
@@ -4812,6 +5580,8 @@ test_grabkeys_modifier_loop(void)
 static void
 test_xerror_grabbutton_badaccess(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	XErrorEvent ee;
 	memset(&ee, 0, sizeof ee);
 	ee.request_code = X_GrabButton;
@@ -4823,6 +5593,8 @@ test_xerror_grabbutton_badaccess(void)
 static void
 test_xerror_grabkey_badaccess(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	XErrorEvent ee;
 	memset(&ee, 0, sizeof ee);
 	ee.request_code = X_GrabKey;
@@ -4834,6 +5606,8 @@ test_xerror_grabkey_badaccess(void)
 static void
 test_xerror_copyarea_baddrawable(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	XErrorEvent ee;
 	memset(&ee, 0, sizeof ee);
 	ee.request_code = X_CopyArea;
@@ -4845,6 +5619,8 @@ test_xerror_copyarea_baddrawable(void)
 static void
 test_xerror_polyfill_baddrawable(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	XErrorEvent ee;
 	memset(&ee, 0, sizeof ee);
 	ee.request_code = X_PolyFillRectangle;
@@ -4856,6 +5632,8 @@ test_xerror_polyfill_baddrawable(void)
 static void
 test_xerror_polysegment_baddrawable(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	XErrorEvent ee;
 	memset(&ee, 0, sizeof ee);
 	ee.request_code = X_PolySegment;
@@ -4878,6 +5656,8 @@ mock_xerrorxlib_handler(Display *dpy, XErrorEvent *ee)
 static void
 test_xerror_fatal_fallthrough(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	mock_xerrorxlib_called = 0;
 	xerrorxlib = mock_xerrorxlib_handler;
 	XErrorEvent ee;
@@ -4894,6 +5674,8 @@ test_xerror_fatal_fallthrough(void)
 static void
 test_xerrorstart_calls_die(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	mock_x11_reset();
 	mock_die_abort = 1;
 	xerrorstart(NULL, NULL);
@@ -4906,6 +5688,8 @@ test_xerrorstart_calls_die(void)
 static void
 test_tagmon_sends_client(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m1 = make_monitor(0);
 	Monitor *m2 = make_monitor(1);
 	m1->next = m2;
@@ -4926,6 +5710,7 @@ test_tagmon_sends_client(void)
 	ASSERT(m1->clients == NULL, "tagmon: client removed from m1");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m1); free(m2);
 }
 
@@ -4933,6 +5718,8 @@ test_tagmon_sends_client(void)
 static void
 test_winpid_minus_one_returns_zero(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	mock_x11_reset();
 	mock_winpid_set = 1;
 	mock_winpid_value = (uint32_t)-1;
@@ -4945,6 +5732,8 @@ test_winpid_minus_one_returns_zero(void)
 static void
 test_winpid_returns_valid_pid(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	mock_x11_reset();
 	mock_winpid_set = 1;
 	mock_winpid_value = 12345;
@@ -4957,6 +5746,8 @@ test_winpid_returns_valid_pid(void)
 static void
 test_termforwin_no_matching_terminal(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->clients = NULL;
 	mons = m;
@@ -4972,6 +5763,8 @@ test_termforwin_no_matching_terminal(void)
 static void
 test_termforwin_pid_mismatch(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client terminal = { .win = 10, .mon = m, .pid = 999, .isterminal = 1,
 		.swallowing = NULL, .next = NULL };
@@ -4984,12 +5777,15 @@ test_termforwin_pid_mismatch(void)
 
 	Client *term = termforwin(&w);
 	ASSERT(term == NULL, "termforwin: pid mismatch returns NULL (line 2269)");
+	free(m); /* fixture leaked (ASan-reported) */
 }
 
 /* --- cleanup with client present (lines 384-385) --- */
 static void
 test_cleanup_with_client(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	/* Reinitialize minimal globals so cleanup has something to work with */
 	selmon = calloc(1, sizeof(Monitor));
 	mons = selmon;
@@ -5043,6 +5839,8 @@ test_cleanup_with_client(void)
 static void
 test_focusmon_noop_same_dirtomon(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	/* Create a circular self-loop so mons->next != NULL but dirtomon(1) == selmon */
 	m->next = m;
@@ -5069,6 +5867,8 @@ test_focusmon_noop_same_dirtomon(void)
 static void
 test_updatenumlockmask_numlock_found(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	mock_x11_reset();
 	mock_modmap_has_numlock = 1;
 
@@ -5091,6 +5891,8 @@ test_updatenumlockmask_numlock_found(void)
 static void
 test_xerrorstart_mock(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	mock_x11_reset();
 	mock_die_abort = 1;
 
@@ -5104,6 +5906,8 @@ test_xerrorstart_mock(void)
 static void
 test_zoom_single_client_returns(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
 	c->tags = 1;
@@ -5122,6 +5926,7 @@ test_zoom_single_client_returns(void)
 	ASSERT(selmon->sel == c, "zoom single client: returns early, sel unchanged");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -5129,6 +5934,8 @@ test_zoom_single_client_returns(void)
 static void
 test_setlayout_with_sel(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
 	c->tags = 1;
@@ -5147,6 +5954,7 @@ test_setlayout_with_sel(void)
 	ASSERT(selmon->lt[selmon->sellt] == &layouts[1], "setlayout with sel: layout set");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -5154,6 +5962,8 @@ test_setlayout_with_sel(void)
 static void
 test_toggletag_no_sel(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	Monitor *m = make_monitor(0);
 	m->sel = NULL;
@@ -5173,6 +5983,8 @@ test_toggletag_no_sel(void)
 static void
 test_seturgent_null_wmhints(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(50, m);
 	m->clients = c;
@@ -5189,6 +6001,7 @@ test_seturgent_null_wmhints(void)
 	mock_wmhints_return_null = 0;
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -5196,6 +6009,8 @@ test_seturgent_null_wmhints(void)
 static void
 test_unmapnotify_send_event(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(42, m);
 	c->oldbw = 2;
@@ -5217,6 +6032,7 @@ test_unmapnotify_send_event(void)
 		"unmapnotify send_event: does not crash");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -5224,6 +6040,8 @@ test_unmapnotify_send_event(void)
 static void
 test_unmapnotify_unmanage(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(43, m);
 	c->oldbw = 2;
@@ -5254,6 +6072,8 @@ test_unmapnotify_unmanage(void)
 static void
 test_sendevent_protocol_found(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c = { .win = 1 };
 	Atom proto = 42;
 	Atom protocols[] = { 42, 99 };
@@ -5271,6 +6091,8 @@ test_sendevent_protocol_found(void)
 static void
 test_sendevent_protocol_not_found(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c = { .win = 2 };
 	Atom proto = 42;
 	Atom protocols[] = { 99, 100 };
@@ -5287,6 +6109,8 @@ test_sendevent_protocol_not_found(void)
 static void
 test_sendevent_no_protocols(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c = { .win = 3 };
 	Atom proto = 42;
 	mock_wmprotocols_return = 0;
@@ -5300,6 +6124,8 @@ test_sendevent_no_protocols(void)
 static void
 test_movemouse_basic(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->wx = 0; m->wy = 0; m->ww = 1920; m->wh = 1080;
 	m->showbar = 0;
@@ -5332,6 +6158,7 @@ test_movemouse_basic(void)
 	mock_event_queue_count = 0;
 	mock_querypointer_return = 1;
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -5339,6 +6166,8 @@ test_movemouse_basic(void)
 static void
 test_movemouse_fullscreen_early_return(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
 	c->isfullscreen = 1;
@@ -5351,6 +6180,7 @@ test_movemouse_fullscreen_early_return(void)
 	ASSERT(c->isfullscreen, "movemouse: fullscreen returns early, client unchanged");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -5358,6 +6188,8 @@ test_movemouse_fullscreen_early_return(void)
 static void
 test_resizemouse_basic(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->wx = 0; m->wy = 0; m->ww = 1920; m->wh = 1080;
 	m->showbar = 0;
@@ -5384,6 +6216,7 @@ test_resizemouse_basic(void)
 
 	mock_event_queue_count = 0;
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -5391,6 +6224,8 @@ test_resizemouse_basic(void)
 static void
 test_resizemouse_fullscreen_early_return(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
 	c->isfullscreen = 1;
@@ -5403,6 +6238,7 @@ test_resizemouse_fullscreen_early_return(void)
 	ASSERT(c->isfullscreen, "resizemouse: fullscreen returns early, client unchanged");
 
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -5410,6 +6246,8 @@ test_resizemouse_fullscreen_early_return(void)
 static void
 test_resizemouse_motion(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->wx = 0; m->wy = 0; m->ww = 1920; m->wh = 1080;
 	m->showbar = 0;
@@ -5442,6 +6280,7 @@ test_resizemouse_motion(void)
 
 	mock_event_queue_count = 0;
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -5449,6 +6288,8 @@ test_resizemouse_motion(void)
 static void
 test_run_no_events(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	/* Set running=0 so the while loop body is never entered */
 	running = 0;
 	mock_event_queue_count = 0;
@@ -5460,6 +6301,8 @@ test_run_no_events(void)
 static void
 test_run_one_event(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	/* Inject a ConfigureNotify event for root (no-op handler) */
 	mock_event_queue_count = 1;
 	memset(&mock_event_queue[0], 0, sizeof(XEvent));
@@ -5478,6 +6321,8 @@ test_run_one_event(void)
 static void
 test_scan_with_windows(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	Monitor *m = make_monitor(0);
 	selmon = m;
@@ -5503,13 +6348,17 @@ test_scan_with_windows(void)
 	mock_querytree_children = NULL;
 	mock_querytree_nchildren = 0;
 	mock_x11_reset();
+	drain_clients(); /* release dwm-created clients while list is live */
 	restore_selmon();
+	free(m); /* fixture leaked (ASan-reported) */
 }
 
 /* --- scan with override_redirect window (line 1419) --- */
 static void
 test_scan_override_redirect(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	Monitor *m = make_monitor(0);
 	selmon = m;
@@ -5535,12 +6384,15 @@ test_scan_override_redirect(void)
 	mock_querytree_nchildren = 0;
 	mock_x11_reset();
 	restore_selmon();
+	free(m); /* fixture leaked (ASan-reported) */
 }
 
 /* --- spawn with mock_fork child path (lines 1722-1728) --- */
 static void
 test_spawn_mock_fork_child(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	mock_x11_reset();
 	mock_fork_return = 0;  /* child process */
 	mock_die_abort = 1;    /* prevent DIE from calling exit */
@@ -5567,6 +6419,8 @@ test_spawn_mock_fork_child(void)
 static void
 test_spawn_mock_fork_parent(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	mock_x11_reset();
 	mock_fork_return = 1234;  /* pretend parent; fork returns child PID */
 	/* In parent: fork() returns 1234 != 0, so child block is skipped */
@@ -5588,6 +6442,8 @@ test_spawn_mock_fork_parent(void)
 static void
 test_scan_transient_window(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	Monitor *m = make_monitor(0);
 	selmon = m;
@@ -5635,12 +6491,16 @@ test_scan_transient_window(void)
 	mock_querytree_children = NULL;
 	mock_querytree_nchildren = 0;
 	mock_x11_reset();
+	drain_clients(); /* release dwm-created clients while list is live */
 	restore_selmon();
+	free(m); /* fixture leaked (ASan-reported) */
 }
 
 static void
 test_scan_iconicstate(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	Monitor *m = make_monitor(0);
 	selmon = m;
@@ -5672,13 +6532,17 @@ test_scan_iconicstate(void)
 	mock_querytree_children = NULL;
 	mock_querytree_nchildren = 0;
 	mock_x11_reset();
+	drain_clients(); /* release dwm-created clients while list is live */
 	restore_selmon();
+	free(m); /* fixture leaked (ASan-reported) */
 }
 
 /* --- movemouse with MotionNotify then snap (lines 1166-1186) --- */
 static void
 test_movemouse_motion_snap(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->wx = 0; m->wy = 0; m->ww = 1920; m->wh = 1080;
 	m->showbar = 0;
@@ -5716,6 +6580,7 @@ test_movemouse_motion_snap(void)
 	mock_event_queue_count = 0;
 	mock_querypointer_return = 1;
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -5723,6 +6588,8 @@ test_movemouse_motion_snap(void)
 static void
 test_resizemouse_motion_togglefloat(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->wx = 0; m->wy = 0; m->ww = 1920; m->wh = 1080;
 	m->showbar = 0;
@@ -5756,6 +6623,7 @@ test_resizemouse_motion_togglefloat(void)
 
 	mock_event_queue_count = 0;
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -5763,6 +6631,8 @@ test_resizemouse_motion_togglefloat(void)
 static void
 test_run_expose_event(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	Monitor *m = make_monitor(0);
 	m->barwin = 888;
@@ -5793,6 +6663,8 @@ test_run_expose_event(void)
 static void
 test_movemouse_grabpointer_fail(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->wx = 0; m->wy = 0; m->ww = 1920; m->wh = 1080;
 	Client *c = make_client(1, m);
@@ -5814,6 +6686,7 @@ test_movemouse_grabpointer_fail(void)
 	mock_grabpointer_return = 0;
 	mock_x11_reset();
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -5821,6 +6694,8 @@ test_movemouse_grabpointer_fail(void)
 static void
 test_movemouse_getrootptr_fail(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->wx = 0; m->wy = 0; m->ww = 1920; m->wh = 1080;
 	Client *c = make_client(1, m);
@@ -5842,6 +6717,7 @@ test_movemouse_getrootptr_fail(void)
 	mock_querypointer_return = 1;
 	mock_x11_reset();
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -5849,6 +6725,8 @@ test_movemouse_getrootptr_fail(void)
 static void
 test_movemouse_snap_left(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->wx = 0; m->wy = 0; m->ww = 1920; m->wh = 1080;
 	m->showbar = 0;
@@ -5885,6 +6763,7 @@ test_movemouse_snap_left(void)
 	mock_event_queue_count = 0;
 	mock_querypointer_return = 1;
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -5892,6 +6771,8 @@ test_movemouse_snap_left(void)
 static void
 test_movemouse_snap_right(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->wx = 0; m->wy = 0; m->ww = 1920; m->wh = 1080;
 	m->showbar = 0;
@@ -5928,6 +6809,7 @@ test_movemouse_snap_right(void)
 	mock_event_queue_count = 0;
 	mock_querypointer_return = 1;
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -5935,6 +6817,8 @@ test_movemouse_snap_right(void)
 static void
 test_movemouse_snap_top(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->wx = 0; m->wy = 0; m->ww = 1920; m->wh = 1080;
 	m->showbar = 0;
@@ -5971,6 +6855,7 @@ test_movemouse_snap_top(void)
 	mock_event_queue_count = 0;
 	mock_querypointer_return = 1;
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -5978,6 +6863,8 @@ test_movemouse_snap_top(void)
 static void
 test_movemouse_snap_bottom(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->wx = 0; m->wy = 0; m->ww = 1920; m->wh = 1080;
 	m->showbar = 0;
@@ -6014,6 +6901,7 @@ test_movemouse_snap_bottom(void)
 	mock_event_queue_count = 0;
 	mock_querypointer_return = 1;
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -6021,6 +6909,8 @@ test_movemouse_snap_bottom(void)
 static void
 test_movemouse_togglefloating(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->wx = 0; m->wy = 0; m->ww = 1920; m->wh = 1080;
 	m->showbar = 0;
@@ -6058,6 +6948,7 @@ test_movemouse_togglefloating(void)
 	mock_event_queue_count = 0;
 	mock_querypointer_return = 1;
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -6065,6 +6956,8 @@ test_movemouse_togglefloating(void)
 static void
 test_movemouse_cross_monitor(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m1 = make_monitor(0);
 	m1->wx = 0; m1->wy = 0; m1->ww = 960; m1->wh = 1080;
 	m1->showbar = 0;
@@ -6110,6 +7003,7 @@ test_movemouse_cross_monitor(void)
 	mock_querypointer_return = 1;
 	m1->next = NULL;
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m1); free(m2);
 }
 
@@ -6117,6 +7011,8 @@ test_movemouse_cross_monitor(void)
 static void
 test_movemouse_configurerequest(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->wx = 0; m->wy = 0; m->ww = 1920; m->wh = 1080;
 	m->showbar = 0;
@@ -6154,6 +7050,7 @@ test_movemouse_configurerequest(void)
 	mock_event_queue_count = 0;
 	mock_querypointer_return = 1;
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -6161,6 +7058,8 @@ test_movemouse_configurerequest(void)
 static void
 test_movemouse_throttle(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->wx = 0; m->wy = 0; m->ww = 1920; m->wh = 1080;
 	m->showbar = 0;
@@ -6203,6 +7102,7 @@ test_movemouse_throttle(void)
 	mock_event_queue_count = 0;
 	mock_querypointer_return = 1;
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -6210,6 +7110,8 @@ test_movemouse_throttle(void)
 static void
 test_resizemouse_grabpointer_fail(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->wx = 0; m->wy = 0; m->ww = 1920; m->wh = 1080;
 	Client *c = make_client(1, m);
@@ -6231,6 +7133,7 @@ test_resizemouse_grabpointer_fail(void)
 	mock_grabpointer_return = 0;
 	mock_x11_reset();
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -6238,6 +7141,8 @@ test_resizemouse_grabpointer_fail(void)
 static void
 test_resizemouse_cross_monitor(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m1 = make_monitor(0);
 	m1->wx = 0; m1->wy = 0; m1->ww = 960; m1->wh = 1080;
 	m1->showbar = 0;
@@ -6278,6 +7183,7 @@ test_resizemouse_cross_monitor(void)
 	mock_event_queue_count = 0;
 	m1->next = NULL;
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m1); free(m2);
 }
 
@@ -6285,6 +7191,8 @@ test_resizemouse_cross_monitor(void)
 static void
 test_resizemouse_configurerequest(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->wx = 0; m->wy = 0; m->ww = 1920; m->wh = 1080;
 	m->showbar = 0;
@@ -6317,6 +7225,7 @@ test_resizemouse_configurerequest(void)
 
 	mock_event_queue_count = 0;
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -6324,6 +7233,8 @@ test_resizemouse_configurerequest(void)
 static void
 test_resizemouse_throttle(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->wx = 0; m->wy = 0; m->ww = 1920; m->wh = 1080;
 	m->showbar = 0;
@@ -6360,6 +7271,7 @@ test_resizemouse_throttle(void)
 
 	mock_event_queue_count = 0;
 	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
@@ -6367,6 +7279,8 @@ test_resizemouse_throttle(void)
 static void
 test_spawn_dmenucmd(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	Monitor *m = make_monitor(0);
 	selmon = m;
@@ -6390,6 +7304,8 @@ test_spawn_dmenucmd(void)
 static void
 test_scan_xgetwindowattr_fail(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	Monitor *m = make_monitor(0);
 	selmon = m;
@@ -6420,13 +7336,17 @@ test_scan_xgetwindowattr_fail(void)
 	mock_getwindowattr_fail_at = 0;
 	mock_getwindowattr_call_count = 0;
 	mock_x11_reset();
+	drain_clients(); /* release dwm-created clients while list is live */
 	restore_selmon();
+	free(m); /* fixture leaked (ASan-reported) */
 }
 
 /* --- edge case tests --- */
 static void
 test_applysizehints_incw_zero(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m = { .mx=0, .my=0, .mw=1920, .mh=1080, .wx=0, .wy=0, .ww=1920, .wh=1080,
 		.lt = {&layouts[0], &layouts[0]} };
 	/* incw=0, inch=0 → inc adjustment skipped; mina=maxa=0 → aspect skipped */
@@ -6444,6 +7364,8 @@ test_applysizehints_incw_zero(void)
 static void
 test_applysizehints_baseismin_false(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m = { .mx=0, .my=0, .mw=1920, .mh=1080, .wx=0, .wy=0, .ww=1920, .wh=1080,
 		.lt = {&layouts[0], &layouts[0]} };
 	/* basew=30 != minw=50 → baseismin=false → subtract base, then restore */
@@ -6463,6 +7385,8 @@ test_applysizehints_baseismin_false(void)
 static void
 test_buttonpress_past_last_tag(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->barwin = 999;
 	selmon = m;
@@ -6480,12 +7404,16 @@ test_buttonpress_past_last_tag(void)
 	buttonpress(&ev);
 	ASSERT(1, "buttonpress: click past last tag no crash");
 
+	/* restore globals BEFORE freeing m */
+	restore_selmon();
 	free(m);
 }
 
 static void
 test_buttonpress_clkmastertag(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->barwin = 999;
 	m->sel = NULL;
@@ -6505,12 +7433,16 @@ test_buttonpress_clkmastertag(void)
 	buttonpress(&ev);
 	ASSERT(1, "buttonpress: ClkTagBar with arg.i==0 no crash");
 
+	/* restore globals BEFORE freeing m */
+	restore_selmon();
 	free(m);
 }
 
 static void
 test_buttonpress_clkrootwin(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->sel = NULL;
 	selmon = m;
@@ -6526,12 +7458,16 @@ test_buttonpress_clkrootwin(void)
 	buttonpress(&ev);
 	ASSERT(1, "buttonpress: ClkRootWin no crash");
 
+	/* restore globals BEFORE freeing m */
+	restore_selmon();
 	free(m);
 }
 
 static void
 test_enternotify_grab_mode(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	selmon = m;
 	mons = m;
@@ -6545,12 +7481,16 @@ test_enternotify_grab_mode(void)
 	enternotify(&ev);
 	ASSERT(1, "enternotify: NotifyGrab returns early no crash");
 
+	/* restore globals BEFORE freeing m */
+	restore_selmon();
 	free(m);
 }
 
 static void
 test_enternotify_own_window(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
 	m->sel = c;
@@ -6567,12 +7507,17 @@ test_enternotify_own_window(void)
 	enternotify(&ev);
 	ASSERT(1, "enternotify: entering own sel window returns early");
 
+	/* restore globals BEFORE freeing m */
+	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
 static void
 test_enternotify_ungrab_mode(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	selmon = m;
 	mons = m;
@@ -6586,12 +7531,16 @@ test_enternotify_ungrab_mode(void)
 	enternotify(&ev);
 	ASSERT(1, "enternotify: NotifyUngrab returns early no crash");
 
+	/* restore globals BEFORE freeing m */
+	restore_selmon();
 	free(m);
 }
 
 static void
 test_focus_null_selmon_ok(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->stack = NULL;
 	m->sel = NULL;
@@ -6602,12 +7551,16 @@ test_focus_null_selmon_ok(void)
 	ASSERT(selmon->sel == NULL, "focus(NULL): sel stays NULL");
 	ASSERT(!(selmon->bar_dirty_segments & DIRTY_TITLE), "focus(NULL) when already NULL: no dirty (idempotent)");
 
+	/* restore globals BEFORE freeing m */
+	restore_selmon();
 	free(m);
 }
 
 static void
 test_focus_idempotent(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
 	c->tags = 1;
@@ -6625,12 +7578,17 @@ test_focus_idempotent(void)
 	/* focus() always dirties even when same client (line 747) */
 	/* This is correct behavior — dwm always dirties on focus() */
 
+	/* restore globals BEFORE freeing m */
+	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
 static void
 test_propertynotify_unsupported_atom(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->clients = NULL;
 	selmon = m;
@@ -6645,12 +7603,16 @@ test_propertynotify_unsupported_atom(void)
 	propertynotify(&ev);
 	ASSERT(1, "propertynotify: unsupported atom no crash");
 
+	/* restore globals BEFORE freeing m */
+	restore_selmon();
 	free(m);
 }
 
 static void
 test_propertynotify_transient_non_sel(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
 	c->tags = 1;
@@ -6668,12 +7630,17 @@ test_propertynotify_transient_non_sel(void)
 	propertynotify(&ev);
 	ASSERT(1, "propertynotify: WM_TRANSIENT_FOR on non-sel no crash");
 
+	/* restore globals BEFORE freeing m */
+	restore_selmon();
+	winclient_remove(c);
 	free(c); free(m);
 }
 
 static void
 test_updatesizehints_min_from_base(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	mock_normal_hints_flags = PBaseSize | PMinSize;
 	mock_normal_hints_base_width = 30;
@@ -6702,6 +7669,8 @@ test_updatesizehints_min_from_base(void)
 static void
 test_updatesizehints_only_psize(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	mock_normal_hints_flags = 0; /* XGetWMNormalHints returns 0, size.flags becomes PSize per line 2057 */
 
@@ -6726,6 +7695,8 @@ test_updatesizehints_only_psize(void)
 static void
 test_configurenotify_non_root(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	selmon = make_monitor(0);
 	mons = selmon;
@@ -6739,12 +7710,18 @@ test_configurenotify_non_root(void)
 	configurenotify(&ev);
 	ASSERT(1, "configurenotify: non-root window returns early no crash");
 
-	restore_selmon();
+{
+		Monitor *tmpm = selmon; /* free the fixture, then restore globals */
+		restore_selmon();
+		free(tmpm);
+	}
 }
 
 static void
 test_configurenotify_fullscreen_resize(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	Monitor *m = make_monitor(0);
 	m->barwin = 0;
@@ -6767,13 +7744,17 @@ test_configurenotify_fullscreen_resize(void)
 	ASSERT(c->isfullscreen, "configurenotify: fullscreen client still fullscreen");
 	ASSERT(c->w > 100, "configurenotify: fullscreen client resized to monitor");
 
+	winclient_remove(c);
 	free(c);
 	restore_selmon();
+	free(m); /* fixture leaked (ASan-reported) */
 }
 
 static void
 test_focusstack_all_invisible(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	Client *c1 = make_client(1, m);
 	Client *c2 = make_client(2, m);
@@ -6792,12 +7773,19 @@ test_focusstack_all_invisible(void)
 	focusstack(&arg);
 	ASSERT(selmon->sel == c1, "focusstack: all invisible, sel unchanged");
 
+	/* restore globals BEFORE freeing m */
+	restore_selmon();
+	winclient_remove(c1);
+	winclient_remove(c2);
+	winclient_remove(c1);
 	free(c1); free(c2); free(m);
 }
 
 static void
 test_monocle_multiple_clients(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->mfact = 0.5f;
 	m->nmaster = 1;
@@ -6815,12 +7803,17 @@ test_monocle_multiple_clients(void)
 	ASSERT(c2->w == m->ww - 2*c2->bw, "monocle: c2 fills width");
 	ASSERT(c2->h == m->wh - 2*c2->bw, "monocle: c2 fills height");
 
+	winclient_remove(c1);
+	winclient_remove(c2);
+	winclient_remove(c1);
 	free(c1); free(c2); free(m);
 }
 
 static void
 test_resize_floating(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m = { .mx=0, .my=0, .mw=1920, .mh=1080, .wx=0, .wy=0, .ww=1920, .wh=1080,
 		.lt = {&layouts[0], &layouts[0]} };
 	Client c = { .win=1, .mon=&m, .x=0, .y=0, .w=100, .h=100, .bw=0,
@@ -6838,6 +7831,8 @@ test_resize_floating(void)
 static void
 test_tile_nmaster_gt_n(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m = { .mx=0, .my=0, .mw=1920, .mh=1080, .wx=0, .wy=0, .ww=1920, .wh=1080,
 		.nmaster=3, .mfact=0.5f, .lt = {&layouts[0], &layouts[0]} };
 	m.gap.isgap = 1;
@@ -6857,6 +7852,8 @@ test_tile_nmaster_gt_n(void)
 static void
 test_unmapnotify_non_client(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->clients = NULL;
 	selmon = m;
@@ -6871,12 +7868,17 @@ test_unmapnotify_non_client(void)
 	ASSERT(1, "unmapnotify: non-client window returns early");
 	ASSERT(m->clients == NULL, "unmapnotify: non-client did not remove from list");
 
+	/* restore globals BEFORE freeing m — later tests (setup/updategeom)
+	 * must not read through the dangling pointer */
+	restore_selmon();
 	free(m);
 }
 
 static void
 test_setlayout_arrange_monitor_null_gap(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor *m = make_monitor(0);
 	m->lt[0] = &layouts[0];
 	m->lt[1] = &layouts[0];
@@ -6889,6 +7891,9 @@ test_setlayout_arrange_monitor_null_gap(void)
 	ASSERT(selmon->lt[selmon->sellt] == &layouts[1], "setlayout: switches to monocle");
 	ASSERT(selmon->bar_dirty_segments & DIRTY_TAGS, "setlayout: dirties tags");
 
+	/* restore globals BEFORE freeing m — later tests (setup/updategeom)
+	 * must not read through the dangling pointer */
+	restore_selmon();
 	free(m);
 }
 
@@ -6896,12 +7901,15 @@ test_setlayout_arrange_monitor_null_gap(void)
 static void
 test_setup_die_on_font_fail(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	/* Force drw_fontset_create to fail, verify DIE path is taken.
 	 * mock_die_abort makes die() set flag=2 and return instead of abort,
 	 * and the mock provides a safe drw->fonts fallback so setup()
 	 * completes without crashing after the DIE returns. */
 	mock_die_abort = 1;
 	mock_fontset_fail = 1;
+	free_global_state(); /* release state from any prior setup() */
 	setup();
 	ASSERT(mock_die_abort == 2, "setup: DIE called on font fail");
 	mock_die_abort = 0;
@@ -6911,7 +7919,10 @@ test_setup_die_on_font_fail(void)
 static void
 test_setup_function(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	/* setup() overwrites all globals, so call it and verify */
+	free_global_state(); /* release state from any prior setup() */
 	setup();
 
 	ASSERT(dpy != NULL, "setup: dpy initialized");

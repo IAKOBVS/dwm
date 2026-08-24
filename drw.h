@@ -21,15 +21,15 @@
 #include <X11/Xft/Xft.h>
 
 typedef struct {
-	Cursor cursor;
+	Cursor cursor; /* X resource ID of the created cursor */
 } Cur;
 
 typedef struct Fnt {
-	Display *dpy;
-	unsigned int h;
-	XftFont *xfont;
-	FcPattern *pattern;
-	struct Fnt *next;
+	Display *dpy;       /* display the XftFont was opened on (needed to close it) */
+	unsigned int h;     /* font line height (ascent + descent) */
+	XftFont *xfont;     /* loaded Xft font */
+	FcPattern *pattern; /* parsed name pattern; base for fallback matches */
+	struct Fnt *next;   /* next font tried when a glyph is missing here */
 } Fnt;
 
 enum { ColFg, ColBg, ColBorder }; /* Clr scheme index */
@@ -44,19 +44,21 @@ typedef struct {
 	long codepoint;     /* -1 = empty */
 	Pixmap pixmap;      /* cached rendered emoji pixmap (same depth as screen) */
 	int w;              /* glyph width in pixels */
+	unsigned long fg;   /* foreground pixel the pixmap was rendered with */
+	unsigned long bg;   /* background pixel baked into the cached pixmap  */
 } EmojiCacheSlot;
 
 typedef struct {
-	unsigned int w, h;
-	Display *dpy;
-	int screen;
-	Window root;
-	Drawable drawable;
+	unsigned int w, h;           /* drawable dimensions in pixels */
+	Display *dpy;                /* X display */
+	int screen;                  /* X screen number */
+	Window root;                 /* root window (parent for pixmap/GC creation) */
+	Drawable drawable;           /* off-screen pixmap drawn into, then copied to the bar */
 	XftDraw *xftd;               /* persistent XftDraw — keeps Xft's internal glyph cache alive */
-	GC gc;
-	Clr *scheme;
-	Fnt *fonts;
-	EmojiCacheSlot emoji_cache[EMOJI_CACHE_SIZE];
+	GC gc;                       /* graphics context for rect fills / XCopyArea */
+	Clr *scheme;                 /* active color scheme (array indexed by Col*) */
+	Fnt *fonts;                  /* active font chain (first match wins) */
+	EmojiCacheSlot emoji_cache[EMOJI_CACHE_SIZE]; /* rendered-emoji pixmap cache */
 } Drw;
 
 /* Drawable abstraction */

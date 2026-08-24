@@ -78,6 +78,8 @@ cleanup_monitor(Monitor *m)
 static void
 test_arrange_null(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	Monitor *m1 = make_monitor(0);
 	Monitor *m2 = make_monitor(1);
@@ -94,6 +96,8 @@ test_arrange_null(void)
 static void
 test_arrange_tile_no_clients(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	Monitor *m = make_monitor(0);
 	mons = selmon = m;
@@ -107,6 +111,8 @@ test_arrange_tile_no_clients(void)
 static void
 test_arrange_monocle_no_clients(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	Monitor *m = make_monitor(0);
 	m->lt[0] = m->lt[1] = &layouts[1];
@@ -124,6 +130,8 @@ test_arrange_monocle_no_clients(void)
 static void
 test_arrangemon_tile(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m;
 	memset(&m, 0, sizeof m);
 	m.tagset[0] = 1; m.seltags = 0;
@@ -140,6 +148,8 @@ test_arrangemon_tile(void)
 static void
 test_arrangemon_floating(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m;
 	memset(&m, 0, sizeof m);
 	m.tagset[0] = 1; m.seltags = 0;
@@ -158,6 +168,8 @@ test_arrangemon_floating(void)
 static void
 test_tile_one_client(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m;
 	memset(&m, 0, sizeof m);
 	m.tagset[0] = 1; m.seltags = 0;
@@ -181,6 +193,8 @@ test_tile_one_client(void)
 static void
 test_tile_two_clients_master_stack(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m;
 	memset(&m, 0, sizeof m);
 	m.tagset[0] = 1; m.seltags = 0;
@@ -211,6 +225,8 @@ test_tile_two_clients_master_stack(void)
 static void
 test_tile_nmaster_zero(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m;
 	memset(&m, 0, sizeof m);
 	m.tagset[0] = 1; m.seltags = 0;
@@ -232,6 +248,8 @@ test_tile_nmaster_zero(void)
 static void
 test_tile_nmaster_exceeds_n(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m;
 	memset(&m, 0, sizeof m);
 	m.tagset[0] = 1; m.seltags = 0;
@@ -257,6 +275,8 @@ test_tile_nmaster_exceeds_n(void)
 static void
 test_monocle_one_client(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m;
 	memset(&m, 0, sizeof m);
 	m.tagset[0] = 1; m.seltags = 0;
@@ -280,6 +300,8 @@ test_monocle_one_client(void)
 static void
 test_monocle_two_clients_count(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m;
 	memset(&m, 0, sizeof m);
 	m.tagset[0] = 1; m.seltags = 0;
@@ -302,6 +324,8 @@ test_monocle_two_clients_count(void)
 static void
 test_resize_updates_geometry(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c;
 	memset(&c, 0, sizeof c);
 	c.x = 10; c.y = 20; c.w = 100; c.h = 200;
@@ -324,6 +348,8 @@ test_resize_updates_geometry(void)
 static void
 test_resize_clamps_h_to_bh(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c;
 	memset(&c, 0, sizeof c);
 	c.x = 0; c.y = 0; c.w = 0; c.h = 0;
@@ -342,6 +368,8 @@ test_resize_clamps_h_to_bh(void)
 static void
 test_setfocus_normal(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c;
 	memset(&c, 0, sizeof c);
 	c.win = 1;
@@ -354,6 +382,8 @@ test_setfocus_normal(void)
 static void
 test_setfocus_neverfocus(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c;
 	memset(&c, 0, sizeof c);
 	c.win = 1;
@@ -368,6 +398,8 @@ test_setfocus_neverfocus(void)
 static void
 test_showhide_null(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	showhide(NULL);
 	ASSERT(1, "showhide(NULL) does not crash");
 }
@@ -375,6 +407,8 @@ test_showhide_null(void)
 static void
 test_showhide_visible(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m;
 	memset(&m, 0, sizeof m);
 	m.tagset[0] = 1; m.seltags = 0;
@@ -390,6 +424,8 @@ test_showhide_visible(void)
 static void
 test_showhide_invisible(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Monitor m;
 	memset(&m, 0, sizeof m);
 	m.tagset[0] = 1; m.seltags = 0;
@@ -408,6 +444,8 @@ test_showhide_invisible(void)
 static void
 test_focus_sel_changes(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client *old_sel = selmon->sel;
 	Client c = { .win = 2, .mon = selmon, .tags = 1 };
 	c.snext = NULL;
@@ -422,6 +460,8 @@ test_focus_sel_changes(void)
 static void
 test_focus_null_finds_next_visible(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c = { .win = 2, .mon = selmon, .tags = 1 };
 	c.snext = NULL;
 	selmon->stack = &c;
@@ -437,6 +477,8 @@ test_focus_null_finds_next_visible(void)
 static void
 test_unfocus_normal(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c;
 	memset(&c, 0, sizeof c);
 	c.win = 1;
@@ -449,6 +491,8 @@ test_unfocus_normal(void)
 static void
 test_unfocus_nosetfocus(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c;
 	memset(&c, 0, sizeof c);
 	c.win = 1;

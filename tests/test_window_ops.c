@@ -85,6 +85,8 @@ cleanup_mon(Monitor *m)
 static void
 test_togglebar_toggles_showbar(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	selmon->showbar = 1;
 	togglebar(NULL);
 	ASSERT_EQ(selmon->showbar, 0, "togglebar sets showbar from 1 to 0");
@@ -96,6 +98,8 @@ test_togglebar_toggles_showbar(void)
 static void
 test_togglebar_sets_dirty_segments(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	selmon->bar_dirty_segments = 0;
 	selmon->showbar = 1;
 
@@ -110,6 +114,8 @@ test_togglebar_sets_dirty_segments(void)
 static void
 test_togglefloating_toggles_sel(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c = { .win = 1, .mon = selmon, .tags = 1 };
 	c.isfloating = 0;
 	selmon->sel = &c;
@@ -124,6 +130,8 @@ test_togglefloating_toggles_sel(void)
 static void
 test_togglefloating_noop_on_fullscreen(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c = { .win = 1, .mon = selmon, .tags = 1 };
 	c.isfloating = 0;
 	c.isfullscreen = 1;
@@ -136,6 +144,8 @@ test_togglefloating_noop_on_fullscreen(void)
 static void
 test_togglefloating_noop_on_nosel(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	selmon->sel = NULL;
 	togglefloating(NULL);
 	ASSERT(1, "togglefloating with no selection does not crash");
@@ -146,6 +156,8 @@ test_togglefloating_noop_on_nosel(void)
 static void
 test_seturgent_sets_flag(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c;
 	memset(&c, 0, sizeof c);
 	c.isurgent = 0;
@@ -162,6 +174,8 @@ test_seturgent_sets_flag(void)
 static void
 test_sendmon_changes_monitor(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	Monitor *m1 = make_monitor(0);
 	Monitor *m2 = make_monitor(1);
@@ -191,6 +205,8 @@ test_sendmon_changes_monitor(void)
 static void
 test_sendmon_noop_same_monitor(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c = { .win = 1, .mon = selmon, .tags = 1 };
 	selmon->clients = &c;
 	selmon->stack = &c;
@@ -205,6 +221,8 @@ test_sendmon_noop_same_monitor(void)
 static void
 test_unmanage_detaches_client(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	Monitor *m = make_monitor(0);
 	/* unmanage uses c->mon, and focus(NULL) -> walks mon->stack */
@@ -235,6 +253,8 @@ test_unmanage_detaches_client(void)
 static void
 test_unmanage_destroyed_keeps(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	Monitor *m = make_monitor(0);
 	Client *cp = ecalloc(1, sizeof(Client));
@@ -259,6 +279,8 @@ test_unmanage_destroyed_keeps(void)
 static void
 test_manage_clamps_geometry(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	save_selmon();
 	Monitor *m = make_monitor(0);
 	mons = selmon = m;
@@ -296,6 +318,8 @@ test_manage_clamps_geometry(void)
 static void
 test_setclientstate_normal(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c = { .win = 1 };
 	setclientstate(&c, NormalState);
 	ASSERT(1, "setclientstate(NormalState) does not crash");
@@ -304,6 +328,8 @@ test_setclientstate_normal(void)
 static void
 test_setclientstate_withdrawn(void)
 {
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
 	Client c = { .win = 1 };
 	setclientstate(&c, WithdrawnState);
 	ASSERT(1, "setclientstate(WithdrawnState) does not crash");

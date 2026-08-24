@@ -67,20 +67,22 @@ X server needed). Every test `.c` file follows this pattern:
    calls test functions
 4. `ASSERT()` / `ASSERT_EQ()` macros for pass/fail
 
-### Current Test Files (878 tests total, 9 binaries)
+### Current Test Files (≈4,900 assertions across 13 binaries)
 
-- **test_pure_logic.c** (~1100 lines, 101 tests) — core dwm logic: linked-list
+- **test_pure_logic.c** (~1200 lines, 122 assertions) — core dwm logic: linked-list
   ops (attach, detach, attachstack, detachstack), nexttiled, dirtomon,
   recttomon, wintoclient, gap_copy, setgaps (toggle/adjust/clamp/reset),
   tag/toggletag/toggleview/view, setmfact, incnmaster, zoom/togglefloating,
   setlayout, tile/monocle, updatebarpos, focusstack, swallowingclient,
   cachebuttons/cachekeys, ISVISIBLE/INTERSECT macros, applysizehints,
-  createmon defaults, mousebuttonmatch fast-path, keypress mapped/unmapped
+  createmon defaults, mousebuttonmatch fast-path, keypress mapped/unmapped,
+  strcpy_len/stpcpy_len/stpncpy_len truncation edge cases
 
-- **test_segments.c** (~230 lines, 17 tests) — bar_dirty_segments tracking:
+- **test_segments.c** (~500 lines, 39 tests) — bar_dirty_segments tracking:
   initial state, drawbar reset, drawbar early return, focus sets segments,
-  updatestatus sets segments, setlayout sets segments, togglebar sets segments,
-  setfullscreen(0) sets segments
+  updatestatus sets segments AND identical-text skip / different-text dirty
+  guards, swallow sets DIRTY_TITLE, setlayout sets segments, togglebar sets
+  segments, setfullscreen(0) sets segments
 
 - **test_arrange.c** (~420 lines, 42 tests) — arrange/arrangemon with tile
   and floating layouts (null, no clients, multi-monitor), tile geometry
@@ -104,7 +106,7 @@ X server needed). Every test `.c` file follows this pattern:
   colliding slots, utf8decodebyte valid/continuation, utf8validate rejects
   surrogates/out-of-range, utf8decode zero-length input
 
-- **test_events.c** (~560 lines, 62 tests) — focusin (different window, own window,
+- **test_events.c** (~560 lines, 64 tests) — focusin (different window, own window,
   no selection), clientmessage fullscreen (add, remove, toggle, unknown window,
   NetActiveWindow urgent), unmapnotify (send_event withdraw, non-send_event
   unmanage), destroynotify unmanage, configurerequest floating geometry
@@ -142,11 +144,34 @@ X server needed). Every test `.c` file follows this pattern:
   area), drw_text (NULL/zero/empty), drw_fontset_getwidth (NULL/zero/
   clamp), drw_setfontset (NULL), drw_setscheme (NULL), drw_free (NULL)
 
-- **test_emoji_render_cache.c** (~200 lines, 87 tests) — emoji render cache
-  (Phase 5): cache miss fills entry, subsequent hits reuse cached XImage,
+- **test_emoji_render_cache.c** (~330 lines, 100 tests) — emoji render cache
+  (Phase 5): cache miss fills entry, subsequent hits reuse cached pixmap,
   hash collision probes linearly, codepoint 0 does not cache,
-  drw_emojicache_get returns NULL for cacheable but uncached emoji,
+  scheme-change (fg/bg) lookups miss and re-render overwrites the entry,
+  inverted colors form a distinct key,
   per-dpy cache isolation, drw_free frees all cache entries
+
+- **test_coverage_gaps.c** (48 assertions) — targets regions the other suites
+  miss: applyrules rule-loop (class/terminal/no-match fallback), applysizehints
+  aspect/inc/max/min clamps, buttonpress tag-index + dispatch loop,
+  keyset_put saturation & collisions, grabkeys numlock fan-out (mock
+  XGrabKey/XUngrabKey counters), manage transient monitor-pinning, scan
+  override_redirect skip, drawbars multi-monitor, updatesizehints isfixed,
+  updatewmhints urgency-on-sel, termforwin guards, movemouse/resizemouse
+  entry guards + cross-monitor sendmon + snap growth, xerror swallowed
+  classes, gettextprop conversion-failure XFree path
+
+- **test_stress_winhash.c** (~2.5k checks) — fixed-seed xorshift differential
+  stress for the window hash: insert/remove/rekey vs linear reference,
+  saturation regime (suppression guard accepts exactly one final slot;
+  full-table lookups use the list-walk fallback; ghost removals inert)
+
+- **test_process_control.c** (~300 lines, 25 tests) — killall indirection
+  seam defaults to real killall; killatfullscreen_stop sends -STOP to each
+  configured target; start body runs CONT then HUP in order;
+  setfullscreen enter calls stop / exit calls start / idempotent enter is
+  a no-op; sighup sets restart=1 while sigterm does not; getrootptr
+  True/False paths
 
 ### Mock Infrastructure
 
@@ -164,8 +189,10 @@ X server needed). Every test `.c` file follows this pattern:
   keeping `-I tests/include` ahead of system includes
 
 - **DWM_TEST define** — guards `main()` in `dwm.c` (`#ifndef DWM_TEST` …
-  `#endif`) and suppresses `bar_dirty_segments = 0` in `drawbar()` so tests
-  can verify segment bits after the function returns
+  `#endif`), suppresses `bar_dirty_segments = 0` in `drawbar()` so tests
+  can verify segment bits after the function returns, and makes
+  `killatfullscreen_start()` run its CONT/HUP body synchronously (no fork)
+  so invocations are observable
 
 - **test_drw_cache.c is self-contained** — it provides its own type stubs for
   `Display`, `XftFont`, `FcPattern` and does NOT include mock_x11.h, mock_drw.h,
@@ -204,13 +231,21 @@ X server needed). Every test `.c` file follows this pattern:
 1. Create `tests/test_<feature>.c` following the existing pattern
 2. The Makefile's `$(wildcard test_*.c)` picks it up automatically
 3. Run `make` to verify it compiles
-4. Add `cov_test_<feature>` to the `coverage` make target
+4. Coverage (`cov_test_<feature>`) and ASan (`asan_test_<feature>`) targets
+   are also derived from the wildcard — no manual list updates needed
 
 ### Benchmarking Optimizations
 
 Before implementing any performance optimization, **always create a benchmark
 first** and compare the measured baseline against the estimated impact. This
 prevents investing time in optimizations that don't move the needle.
+
+**Performance changes MUST be shipped with benchmarks.** After implementing an
+optimization, run the microbenchmark suite and verify the predicted improvement
+actually shows up in the measured ns/call numbers. If the microbenchmarks do
+not reflect the expected gain, reconcile the estimate with reality (see
+"Mock vs Real Cost Ratio") — and if no measurable win exists, revert the
+change. An optimization claimed from analysis alone does not count as done.
 
 #### Quick Start
 
@@ -464,16 +499,24 @@ at its pre-fullscreen state and resumes when the window exits fullscreen.
 
 ### Phase 5: Emoji Render Cache (`drw.c`)
 
-An `emoji_cache` in the `Drw` struct (`drw.h:39-42`, `drw.c:56-105`)
+An `emoji_cache` in the `Drw` struct (`drw.h:39-45`, `drw.c:56-105`)
 caches the rendered pixmap for each unique color emoji codepoint in a
 32-entry open-addressing hash table with linear probing. On first
-encounter in `drw_text()` (`drw.c:447-491`), the emoji is rendered
-normally through `XftDrawStringUtf8` (which triggers
-`XftFontLoadGlyphs` → `FT_Load_Glyph` → `png_read_*` → `inflate`)
-and the resulting pixels are captured to a per-entry `XImage` via
-`XGetImage`. On subsequent draws, `XPutImage` copies the cached
-pixmap directly, bypassing the entire font-loading and PNG decompress
-pipeline.
+encounter in `drw_text()`, the emoji is rendered normally through
+`XftDrawStringUtf8` (which triggers `XftFontLoadGlyphs` → `FT_Load_Glyph`
+→ `png_read_*` → `inflate`) and the resulting pixels are captured to a
+per-entry pixmap via `XCopyArea`. On subsequent draws, `XCopyArea`
+copies the cached pixmap back, bypassing the entire font-loading and
+PNG decompress pipeline.
+
+The cache key is `(codepoint, fg, bg)`: the captured pixmap has the
+scheme background baked in, so entries are only reused when the current
+draw uses the same foreground/background pixels. A scheme change (e.g.
+status drawn under `SchemeSel` after being cached under `SchemeNorm`,
+or an inverted draw) misses, re-renders, and overwrites the entry.
+Cached pixmaps are invalidated in `drw_resize()` because they were
+captured at the old bar height (blitting at a new height would read
+past the pixmap → BadMatch).
 
 This avoids repeated `XftFontLoadGlyphs` + `inflate` for emoji
 codepoints that appear in every drawbar redraw (status text). In
@@ -483,11 +526,12 @@ production with a 5-emoji status bar, perf shows:
 - `XftFontLoadGlyphs`: 0% (was 27.8%)
 - `inflate`: 0% (was 30.3%)
 
-Cache invalidation happens on font change (`drw_fontset_create`) and
-drw destruction (`drw_free`). `XImage` pixmaps are freed during
-invalidation. The cache uses `emojicachehash()` as a non-cryptographic
-hash of the codepoint; eviction replaces the first colliding entry in
-the probed slot.
+Cache invalidation happens on font change (`drw_fontset_create`),
+on `drw_resize` (pixmap height changed), and on drw destruction
+(`drw_free`). Cached pixmaps are freed during invalidation. The cache
+uses `emojicachehash()` as a non-cryptographic hash of the codepoint;
+eviction replaces the first colliding entry in the probed slot.
 
-Cache correctness is tested in `tests/test_drw_cache.c` alongside the
-Phase-1 glyph-width cache tests (same file, distinct test groups).
+Cache correctness is tested in `tests/test_emoji_render_cache.c`
+(100 tests, self-contained replica) covering miss/hit, eviction,
+scheme-change misses, inverted-color keys, and invalidation.

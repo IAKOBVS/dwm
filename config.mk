@@ -28,9 +28,13 @@ LIBS = -L${X11LIB} -lX11 ${XINERAMALIBS} ${FREETYPELIBS} -lX11-xcb -lxcb -lxcb-r
 
 # flags
 CPPFLAGS = -D_DEFAULT_SOURCE -D_BSD_SOURCE -D_XOPEN_SOURCE=700L -DVERSION=\"${VERSION}\" ${XINERAMAFLAGS}
+# -MMD -MP generates per-object header dependencies (.d files) so edits to
+# dwm.h / drw.h / config.h trigger recompilation instead of stale objects.
 #CFLAGS   = -g -std=c99 -pedantic -Wall -O0 ${INCS} ${CPPFLAGS}
-CFLAGS   = -g -std=c99 -pedantic -Wall -Wno-deprecated-declarations -fanalyzer -O2 -march=native -flto ${INCS} ${CPPFLAGS}
-LDFLAGS  = ${LIBS}
+CFLAGS   = -g -std=c99 -pedantic -Wall -Wno-deprecated-declarations -fanalyzer -O2 -march=native -flto -MMD -MP ${INCS} ${CPPFLAGS}
+# -flto must be present at link time too, otherwise cross-object
+# optimization is silently disabled and the compile-side flag is wasted.
+LDFLAGS  = ${LIBS} -flto -O2
 
 # Solaris
 #CFLAGS = -fast ${INCS} -DVERSION=\"${VERSION}\"

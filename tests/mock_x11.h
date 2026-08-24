@@ -453,6 +453,7 @@ typedef struct {
 
 #define X_ConfigureWindow    12
 #define X_SetInputFocus      42
+#define X_ChangeWindowAttributes  2
 #define X_PolyText8          44
 #define X_PolyFillRectangle  68
 #define X_PolySegment        70
@@ -650,6 +651,8 @@ extern int  mock_keyboardmapping_return_null; /* 1 = XGetKeyboardMapping returns
 extern KeySym mock_keyboardmapping_first_keysym; /* if non-zero, syms[0] = this value */
 
 extern int  mock_modmap_has_numlock; /* 1 = XGetModifierMapping puts Num_Lock keycode in modmap */
+extern int  mock_grabkey_calls;      /* counts XGrabKey invocations (grabkeys fan-out) */
+extern int  mock_ungrabkey_calls;    /* counts XUngrabKey invocations */
 extern int  mock_die_abort; /* 0=normal abort, 1=mock: set to 2 and return instead of aborting */
 
 extern int   mock_wmprotocols_return; /* 0=fail, 1=success */

@@ -65,6 +65,8 @@ int  mock_winpid_set =       0;
 int  mock_keyboardmapping_return_null = 0;
 KeySym mock_keyboardmapping_first_keysym = 0;
 int  mock_modmap_has_numlock = 0;
+int  mock_grabkey_calls = 0;
+int  mock_ungrabkey_calls = 0;
 int  mock_die_abort = 0;
 
 int   mock_wmprotocols_return = 0;
@@ -129,6 +131,8 @@ mock_x11_reset(void)
 	mock_keyboardmapping_return_null = 0;
 	mock_keyboardmapping_first_keysym = 0;
 	mock_modmap_has_numlock = 0;
+	mock_grabkey_calls = 0;
+	mock_ungrabkey_calls = 0;
 	mock_die_abort = 0;
 	mock_wmprotocols_return = 0;
 	mock_wmprotocols_list = NULL;
@@ -546,6 +550,8 @@ XQueryPointer(Display *dpy, Window w, Window *root_return,
 void
 XFree(void *data)
 {
+	/* Every pointer returned by these mocks is heap-allocated and dwm
+	 * releases it here per Xlib contract; nothing else is ever passed. */
 	free(data);
 }
 
@@ -619,12 +625,14 @@ XGrabKey(Display *dpy, int keycode, unsigned int modifiers, Window w,
 {
 	(void)dpy; (void)keycode; (void)modifiers; (void)w;
 	(void)owner_events; (void)pointer_mode; (void)keyboard_mode;
+	mock_grabkey_calls++;
 }
 
 void
 XUngrabKey(Display *dpy, int keycode, unsigned int modifiers, Window w)
 {
 	(void)dpy; (void)keycode; (void)modifiers; (void)w;
+	mock_ungrabkey_calls++;
 }
 
 int

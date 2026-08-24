@@ -234,3 +234,171 @@ estimates are adjusted:
 - **Mock:** mock_x11.h/c + mock_drw.h (no real X server)
 - **Iterations:** 50,000 per benchmark
 - **Timing:** `clock_gettime(CLOCK_MONOTONIC)` → nanoseconds
+
+---
+
+## 2026-08-23 Re-run After bench_optimize Repair
+
+`bench_optimize.c` had drifted from the current API (embedded `Gap` struct,
+per-monitor `bar_dirty_segments`) and did not compile; repaired and re-run.
+Numbers below are the fresh baselines. Note: benchmark [1] runs on an empty
+client list; [2] is the true 10-client arrange cost.
+
+| # | Benchmark | Expected (orig -> revised) | Measured delta | Measured % | Verdict |
+|---|---|---|---|---|---|
+| 1 | arrange() coalescing | 3-5% -> 3-5% | burst loops cannot show deferral in mock; unit cost = 483 ns/call @10c, 924 @20c | up to (N-1)x per-call cost saved per burst | OPEN - biggest absolute mock win |
+| 2 | updatestatus() compare | 2-3% -> 1-2% | identical 32 vs alternating 35 ns: guard ALREADY SHIPPED; residual delta 3 ns = 8.6% of fn | 3 ns abs (<5 ns Key Rule) | DONE - no headroom left |
+| 3 | focus() idempotent guard | 2-4% -> 0.5-1% | same-client 91 vs different 94 ns: guard ALREADY SHIPPED (commit 284d22a) | ~3% of fn, 3 ns abs | DONE |
+| 4 | wintoclient() hash | 0.5-1% -> <0.5% | miss-penalty over hit: +11 ns @10c (58%), +26 @20c (59%), +85 @50c (60%) | ~60% of lookup at scale, <=85 ns abs | OPEN - sub-0.5% real |
+| 5 | tile/monocle count cache | 1-2% -> 0.5-1% | walk not isolated by this suite; scaling linear: tile 389/765/1905 ns @10/20/50c confirms O(n) target | n/a | OPEN - needs dedicated count-walk microbench first |
+| 6 | propertynotify() filter | 1-2% -> <0.5% | uninteresting atom 13 vs root WM_NAME 35 ns | 22 ns = 63% of fn skipped | OPEN - real <0.5%, frequency-dependent |
+| 7 | setlayout() dirty guard | <0.5% -> <0.5% | same-layout 12 vs toggle 11 ns (noise-level): guard ALREADY SHIPPED | ~0% | DONE - confirmed nothing left |
+| 8 | enternotify() single-mon guard | 0.5-1% | single-monitor 10 vs dual-monitor 10 ns | 0% measurable | REJECTED - matches AGENTS.md gotcha (do not guard) |
+| 9 | gaming mode | 5-10% -> 1-2% | fullscreen-frozen paths already active: updatestatus 2 vs 32 ns (-94%), propertynotify 9 vs 13 (-31%), enternotify 10 vs 10 (0%) | most of estimate banked by Phase 4 freeze | MOSTLY DONE - residual <1-2% |
+
+### Reconciliation with documented mock baselines (AGENTS.md table)
+
+| Function | Documented ns/call | This run | Delta |
+|---|---|---|---|
+| arrange() 10c | 45 | 483 ([2]; [1] empty-list 22) | doc row appears to have measured empty-list or pre-segment-tracking code |
+| focus() | 90 | 91 | match |
+| wintoclient() 10c | 8-20 | 8 hit / 19 miss | match |
+| updatestatus() | 31 | 32-35 | match |
+| propertynotify() | 14 | 13-35 (atom-dependent) | match at low end |
+| setlayout() | 7 | 11-12 | +64%; doc row stale or machine variance |
+
+Machine/run variance is roughly +-2x on sub-100 ns measurements (compare
+arrange/setlayout rows), which reinforces the Key Rule: deltas under ~5 ns
+are not actionable.
+
+### Cumulative outlook
+
+Only #1 (arrange coalescing) retains meaningful mock-visible headroom
+(483+ ns per avoided call during bursts). Everything else measures at or
+below the revised estimates' floor, consistent with the cumulative
+projection of 5-10% (#1-#8) / 6-12% (#1-#9).
+
+---
+
+## 2026-08-23 (2): Post-Implementation Measurements
+
+Optimizations #1/#4/#5(pivoted)/#6 implemented; suite re-run on same machine.
+Correctness tests in `tests/test_optimize_layout.c` (41 assertions).
+
+| # | Optimization | Baseline ns/call | After | Delta |
+|---|---|---|---|---|
+| 4 | wintoclient hit @10c / @50c | 8 / 56 | 4 / 4 | -50% / -93% |
+| 4 | wintoclient miss @10c / @50c | 19 / 141 | 4 / 4 | -79% / -97% |
+| 6 | propertynotify uninteresting atom | 13 | 4 | -69% |
+| 1 | arrange burst, per request (3/event) | 1400 (3x466) | 475/3 = 158 | -66% per request |
+| 5 | tile() @20c / @50c (all tiled) | 765 / 1905 | 747 / 1828 | -2% / -4% |
+
+### Notes
+
+**#5 pivot**: roadmap proposed caching the visible-client count, but
+`tile()` counts *nexttiled* clients (excludes floating/invisible), so a
+visible-count cache has wrong semantics for it. The actual duplicated work
+was `nexttiled()` rescans restarting from the list head per placement step;
+replaced with one filtered snapshot pass (`Client *tiled[n]`). On all-tiled
+lists the rescan was already cheap (O(1) steps), hence only -2..-4%; the
+saving grows with the floating/invisible prefix length. Geometry verified
+byte-identical by existing tile tests + new ordering test.
+
+**#1 semantics**: `arrange()` now sets `arrange_pending` while
+`dispatching=1` inside run()'s handler call; `flusheventtail()` performs at
+most one full pass then coalesced bar draws (arrange first, bars after).
+Calls outside dispatch (movemouse/resizemouse grabs, setup(), scan()) stay
+immediate. Verified N->1 pass, geometry equivalence vs immediate path.
+
+**#4 safety**: hash entries re-keyed on swallow/unswallow window swaps;
+cluster-repair deletion keeps probe chains intact; when the table is full,
+insertion is suppressed and lookups fall back to the authoritative list
+walk. Test fixtures register via `winclient_put()`; every test clears the
+table at entry for isolation.
+
+### keypress(): sorting keys[] by sym/mod? Measured: no.
+
+New benchmarks [34]/[35]: mask-reject path 4 ns, matched full-scan+dispatch
+4 ns -- identical within noise. The ~80-entry linear scan costs nothing
+(branch-predicted, cache-resident), the existing key_mod_used /
+key_keysym_used fast-path already rejects unmatched events in 4 ns, and
+keypresses are human-rate (~10/s). A sorted layout + binary search would
+save single-digit nanoseconds on a path that fires ~10 times per second:
+unmeasurable. Sorting would also make hand-edited configs error-prone
+(order-dependent semantics). Recommendation: keep as is.
+
+### Cumulative status after implementation
+
+Roadmap items now DONE: #1 (coalescing), #2 (updatestatus guard),
+#3 (focus guard), #4 (hash), #6 (filter), #7 (setlayout guard),
+#9 mostly (Phase-4 freeze). #5 shipped as single-pass tile with honest
+smaller-than-estimated win (-2..-4% typical, more with floating clients).
+#8 enternotify guard rejected (0% measured + correctness gotcha).
+Remaining open: CI setup, comprehensive-suite leak cleanup (~23 KB test-side).
+
+---
+
+## 2026-08-23 (3): Exact keypress binding index
+
+Replaced the lossy `key_keysym_used` OR-mask with an exact open-addressed
+set of packed (keysym, CLEANMASK(mod)) pairs built by `cachekeys()`
+(rebuilt from grabkeys() so numlock changes stay in sync). The old guard
+could not reject chords merely sharing a mod bit (event MODKEY|Control vs
+binding MODKEY|Shift both pass `state & key_mod_used`), and passed almost
+any keysym once enough bindings were ORed together.
+
+| Path | ns/call | Note |
+|---|---|---|
+| unmatched mod (reject) | 6 | parity with old mask path |
+| wrong chord sharing mod bit | 6 | old code: full keys[] scan |
+| matched MODKEY+b (scan+dispatch) | 6 | unchanged semantics |
+
+Measured: parity on every path at the ~4-6 ns noise floor -- the scan was
+never the cost. The win is exactness and O(1) worst-case reject regardless
+of keys[] growth, plus correctness tests proving wrong-chord rejection
+while genuine bindings still fire-all. Per the Key Rule this is not a
+performance optimization; it ships because it removes a semantic wart
+(lossy filter) at zero measured cost. Tests:
+`test_keypress_exact_index_rejects_wrong_chord` in test_optimize_layout.c.
+Sorting keys[] remains unjustified: see 2026-08-23 (2).
+
+---
+
+## 2026-08-24: LeakSanitizer Exemption Removed
+
+The comprehensive-suite leak debt is closed; `make asan` runs every binary
+with leak detection on. Fixes: per-test fixture frees (guided by ASan
+allocation lines), drain of dwm-created clients, pre-setup global release,
+mock drw_free now releases the font chain like the real one, mock XFree
+releases mock heap buffers as Xlib's does, and a genuine dwm fix --
+gettextprop() leaked name.value on its nitems==0 return path.
+
+---
+
+## 2026-08-24 (2): Coverage-Driven Test Expansion
+
+Baseline `make coverage` measured dwm.c at a *misreported* 91.7% -- the
+merger's fixed-width gcov regex silently dropped counters wider than 8
+characters, so hot lines vanished from the tables. After fixing the parser
+(and generalizing it to report drw.c/util.c), true coverage was 98.4%.
+
+New suites:
+- `test_coverage_gaps.c` (48 assertions) -- applyrules class/terminal/fallback
+  rules, applysizehints aspect+inc+max/min clamps, buttonpress tag-index and
+  dispatch paths, keyset_put saturation/collisions, grabkeys numlock fan-out
+  (new XGrabKey/XUngrabKey mock counters), manage-transient monitor pinning,
+  scan override_redirect skipping, drawbars multi-monitor, updatesizehints
+  isfixed, updatewmhints urgency, termforwin guards, movemouse/resizemouse
+  entry guards + cross-monitor sendmon + snap-threshold growth, xerror
+  swallowed classes, gettextprop conversion-failure branch.
+- `test_stress_winhash.c` (~2.5k checks) -- fixed-seed xorshift differential
+  vs a linear reference model: 164k insert/remove/rekey ops across three
+  regimes plus a saturation regime proving the suppression guard accepts
+  exactly one final slot, churn keeps clusters consistent, ghost removals are
+  inert, and full-table lookups fall back to the list walk.
+
+Results: dwm.c 98.9% (17 lines uncovered: fork/exec child body, xcb pid
+iterator internals, defensive probe-exhaustion returns, two multi-monitor
+walk corners), util.c 100%, drw.c real-file coverage is out of scope for the
+mock harness (its logic is covered by the self-contained replica suites).
+Gates: 13/13 unit suites pass; ASan strict clean on all 13 binaries.
