@@ -63,6 +63,8 @@
 #define HEIGHT(X)               ((X)->h + 2 * (X)->bw)
 #define TAGMASK                 ((1 << LENGTH(tags)) - 1)
 #define TEXTW(X)                (drw_fontset_getwidth(drw, (X)) + lrpad)
+#define S_LEN(s)     (sizeof(s) - 1)
+#define S_LITERAL(s) (s), (sizeof(s) - 1)
 static const int lrpad_modifier = 1;
 static int bar_draw_pending = 0;     /* deferred drawbar requested; executed at run() loop tail */
 static int arrange_pending = 0;      /* deferred arrange requested; executed at run() loop tail */
@@ -1856,7 +1858,6 @@ setfullscreen(Client *c, int fullscreen)
 		c->h = c->oldh;
 		resizeclient(c, c->x, c->y, c->w, c->h);
 		/* refresh status text (was skipped during fullscreen) and force full redraw */
-		updatestatus();
 		selmon->bar_dirty_segments = DIRTY_STATUS | DIRTY_TAGS | DIRTY_TITLE;
 		arrange(c->mon);
 	}
@@ -2648,21 +2649,32 @@ getparentprocess(pid_t p)
 
 #ifdef __linux__
 	int fd;
-	char buf[4096];
+	char buf[4096 + 1];
 	ssize_t n;
-	snprintf(buf, sizeof(buf) - 1, "/proc/%u/stat", (unsigned)p);
-
+	char *path = buf;
+	/* snprintf(buf, sizeof(buf) - 1, "/proc/%u/stat", (unsigned)p); */
+	path = stpcpy_len(path, S_LITERAL("/proc/"));
+	path = numpcpy_unsafe(path, (unsigned)p);
+	path = stpcpy_len(path, S_LITERAL("/stat"));
 	if ((fd = open(buf, O_RDONLY)) < 0)
 		return 0;
-
-	if ((n = read(fd, buf, sizeof(buf) - 1)) > 0) {
+	n = read(fd, buf, sizeof(buf) - 1);
+	if (n > 0) {
 		buf[n] = '\0';
 		/* Process name in /proc/[pid]/stat is enclosed in parentheses '(...)'
 		 * and may contain spaces or parentheses. Find the last ')' to safely
 		 * parse state and ppid after it. */
-		char *s = strrchr(buf, ')');
-		if (s)
-			sscanf(s + 1, " %*c %u", &v);
+		/* 1. pid: %d */
+		/* 2. comm: (%s) */
+		char *s = strrchr_len(buf, ')', (size_t)n);
+		if (s) {
+			++s;
+			/* 3. state: %c */
+			++s;
+			++s;
+			/* 4. ppid %d */
+			v = (unsigned int)atoi(s);
+		}
 	}
 	close(fd);
 #endif /* __linux__*/
