@@ -500,6 +500,69 @@ test_keyindex_numlock_sync(void)
 }
 
 /* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+
+/* Creation/remap paths (manage/unmanage/swallow) must lay out
+ * synchronously even while dispatching, so per-window transitions keep
+ * their animation frames; ordinary handlers still coalesce. */
+static void
+test_creation_paths_arrange_immediately(void)
+{
+	long before;
+	XWindowAttributes wa;
+
+	saved_selmon = selmon;
+	selmon = make_monitor(0);
+	mons = selmon;
+
+	/* manage() inside dispatch: geometry applied inline, nothing pending */
+	memset(&wa, 0, sizeof wa);
+	wa.width = 300; wa.height = 200; wa.border_width = 1;
+	dispatching = 1;
+	arrange_calls = 0;
+	before = arrange_calls;
+	manage(701, &wa);
+	ASSERT(arrange_calls > before,
+		"manage() lays out synchronously during dispatch");
+	ASSERT_EQ(arrange_pending, 0,
+		"manage() leaves no deferred arrange behind");
+
+	Client *c = wintoclient(701);
+	ASSERT(c != NULL, "manage: client indexed after immediate arrange");
+
+	/* unmanage() inside dispatch: same synchrony guarantee */
+	before = arrange_calls;
+	unmanage(c, 1);
+	ASSERT(arrange_calls > before,
+		"unmanage() lays out synchronously during dispatch");
+	ASSERT_EQ(arrange_pending, 0,
+		"unmanage() leaves no deferred arrange behind");
+
+	/* ordinary handler still defers: tag() must not pass immediately */
+	Client *d = ecalloc(1, sizeof(Client));
+	d->win = 702; d->tags = 1; d->mon = selmon;
+	d->next = NULL; d->snext = NULL;
+	selmon->clients = d; selmon->stack = d; selmon->sel = d;
+	winclient_put(d);
+
+	arrange_calls = 0;
+	before = arrange_calls;
+	Arg a = { .ui = ~1 & TAGMASK };
+	tag(&a);
+	if (!arrange_pending)
+		ASSERT(!arrange_calls || arrange_calls == before,
+			"tag() during dispatch defers its arrange");
+	ASSERT_EQ(arrange_pending, 1, "tag() sets the coalesce flag");
+	dispatching = 0;
+	flusheventtail();
+
+	winclient_remove(d);
+	free(d);
+	free(selmon);
+	selmon = saved_selmon;
+	mons = saved_selmon;
+}
+
 int
 main(void)
 {
@@ -523,6 +586,7 @@ main(void)
 
 	test_coalesce_n_arranges_single_pass();
 	test_coalesce_geometry_matches_immediate();
+	test_creation_paths_arrange_immediately();
 	test_immediate_path_outside_dispatch();
 	test_hash_collision_chain_put_get_remove();
 	test_hash_overflow_suppress_and_fallback();

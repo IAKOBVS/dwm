@@ -789,6 +789,123 @@ bench_keypress(void)
 	report("keypress(MODKEY+b, full scan + dispatch) x N", t1 - t0, N);
 }
 
+/* BENCH 12: keyset vs pre-keyset OR-mask gate (A/B comparison).
+ * Mode A keeps the exact (keysym, CLEANMASK(mod)) set built by cachekeys().
+ * Mode B zeroes keyset_count so iskeybound() takes the lossy OR-mask branch,
+ * faithfully emulating the pre-keyset keypress gate. This isolates the cost
+ * of the exact-set reject versus the full keys[] scan it avoids for chords
+ * that merely share a modifier bit with a real binding. */
+static void
+bench_keypress_ab(void)
+{
+	int N = 50000;
+	int i;
+	long t0, t1;
+	long a_unmatched, a_chord, a_matched;
+	long b_unmatched, b_chord, b_matched;
+	XEvent ev;
+
+	fprintf(stderr, "\n=== 12. keypress: keyset vs no-keyset (A/B) ===\n");
+	fprintf(stderr, "  Mode A = exact (keysym,mod) set; Mode B = lossy OR-mask gate.\n\n");
+
+	cachekeys(); /* populate both the masks and the exact keyset */
+
+	/* --- Mode A: keyset enabled --- */
+
+	/* unmatched keysym (XK_a, no mod) — rejects in both modes */
+	memset(&ev, 0, sizeof ev);
+	ev.xkey.type = KeyPress;
+	ev.xkey.keycode = XK_a;
+	ev.xkey.state = 0;
+	t0 = nanos_mono();
+	for (i = 0; i < N; i++)
+		keypress(&ev);
+	t1 = nanos_mono();
+	a_unmatched = t1 - t0;
+	report("A: keypress(unmatched keysym, reject) x N", a_unmatched, N);
+
+	/* wrong chord: MODKEY|Control shares the MODKEY bit with real MODKEY+b */
+	selmon->showbar = 0;
+	memset(&ev, 0, sizeof ev);
+	ev.xkey.type = KeyPress;
+	ev.xkey.keycode = XK_b;
+	ev.xkey.state = MODKEY | ControlMask;
+	t0 = nanos_mono();
+	for (i = 0; i < N; i++)
+		keypress(&ev);
+	t1 = nanos_mono();
+	a_chord = t1 - t0;
+	report("A: keypress(wrong chord, exact-set reject) x N", a_chord, N);
+
+	/* matched binding MODKEY+b -> togglebar (full scan + dispatch) */
+	selmon->showbar = 0;
+	memset(&ev, 0, sizeof ev);
+	ev.xkey.type = KeyPress;
+	ev.xkey.keycode = XK_b;
+	ev.xkey.state = MODKEY;
+	t0 = nanos_mono();
+	for (i = 0; i < N; i++) {
+		keypress(&ev);
+		selmon->showbar = 0;             /* undo toggle */
+		selmon->bar_dirty_segments = 0;
+		bar_draw_pending = 0;
+	}
+	t1 = nanos_mono();
+	a_matched = t1 - t0;
+	report("A: keypress(MODKEY+b, scan+dispatch) x N", a_matched, N);
+
+	/* --- Mode B: keyset disabled (emulate pre-keyset lossy gate) --- */
+	keyset_count = 0;     /* force iskeybound() down the OR-mask branch */
+	keyset_saturated = 0;
+
+	memset(&ev, 0, sizeof ev);
+	ev.xkey.type = KeyPress;
+	ev.xkey.keycode = XK_a;
+	ev.xkey.state = 0;
+	t0 = nanos_mono();
+	for (i = 0; i < N; i++)
+		keypress(&ev);
+	t1 = nanos_mono();
+	b_unmatched = t1 - t0;
+	report("B: keypress(unmatched keysym, reject) x N", b_unmatched, N);
+
+	selmon->showbar = 0;
+	memset(&ev, 0, sizeof ev);
+	ev.xkey.type = KeyPress;
+	ev.xkey.keycode = XK_b;
+	ev.xkey.state = MODKEY | ControlMask;
+	t0 = nanos_mono();
+	for (i = 0; i < N; i++)
+		keypress(&ev);
+	t1 = nanos_mono();
+	b_chord = t1 - t0;
+	report("B: keypress(wrong chord, mask-pass -> full scan) x N", b_chord, N);
+
+	selmon->showbar = 0;
+	memset(&ev, 0, sizeof ev);
+	ev.xkey.type = KeyPress;
+	ev.xkey.keycode = XK_b;
+	ev.xkey.state = MODKEY;
+	t0 = nanos_mono();
+	for (i = 0; i < N; i++) {
+		keypress(&ev);
+		selmon->showbar = 0;
+		selmon->bar_dirty_segments = 0;
+		bar_draw_pending = 0;
+	}
+	t1 = nanos_mono();
+	b_matched = t1 - t0;
+	report("B: keypress(MODKEY+b, scan+dispatch) x N", b_matched, N);
+
+	fprintf(stderr, "\n  Per-call delta (B - A), ns/call:\n");
+	fprintf(stderr, "    unmatched : %+6ld\n", (b_unmatched - a_unmatched) / N);
+	fprintf(stderr, "    wrong chord: %+6ld  (the path the keyset removes a scan from)\n",
+	        (b_chord - a_chord) / N);
+	fprintf(stderr, "    matched   : %+6ld\n", (b_matched - a_matched) / N);
+
+	cachekeys(); /* restore the keyset for any later consumer */
+}
+
 int main(void)
 {
 	init_globals();
@@ -808,6 +925,7 @@ int main(void)
 	bench_gaming_mode();
 	bench_arrange_coalesce();
 	bench_keypress();
+	bench_keypress_ab();
 
 	fprintf(stderr, "\n=== Summary ===\n");
 	fprintf(stderr, "Total benchmarks: %d\n", bench_count);

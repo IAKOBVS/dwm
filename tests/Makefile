@@ -30,7 +30,12 @@ all: $(TEST_BIN) $(BENCH_BIN)
 $(MOCK_OBJ): $(MOCK_SRC) mock_x11.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-%: %.c $(MOCK_OBJ)
+# Suites #include ../dwm.c directly, so the embedded source (and the
+# headers it pulls in) must be prerequisites — otherwise editing dwm.c
+# leaves stale binaries that silently fail/pass against old code.
+DWM_DEPS = ../dwm.c ../dwm.h ../config.h mock_drw.h
+
+%: %.c $(MOCK_OBJ) $(DWM_DEPS)
 	$(CC) $(CFLAGS) -o $@ $< $(MOCK_OBJ) $(LDFLAGS)
 
 # Self-contained test — does NOT include mock_x11.h or dwm.c,
@@ -38,14 +43,14 @@ $(MOCK_OBJ): $(MOCK_SRC) mock_x11.h
 test_emoji_render_cache: test_emoji_render_cache.c
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
-cov_%: %.c $(MOCK_OBJ)
+cov_%: %.c $(MOCK_OBJ) $(DWM_DEPS)
 	$(CC) $(CFLAGS) $(COV_CFLAGS) -o $@ $< $(MOCK_OBJ) $(LDFLAGS) $(COV_LDFLAGS)
 
 # Self-contained coverage build
 cov_test_emoji_render_cache: test_emoji_render_cache.c
 	$(CC) $(CFLAGS) $(COV_CFLAGS) -o $@ $< $(LDFLAGS) $(COV_LDFLAGS)
 
-asan_%: %.c $(MOCK_OBJ)
+asan_%: %.c $(MOCK_OBJ) $(DWM_DEPS)
 	$(CC) $(CFLAGS) $(ASAN_CFLAGS) -o $@ $< $(MOCK_OBJ) $(LDFLAGS) $(ASAN_LDFLAGS)
 
 # Self-contained ASan build

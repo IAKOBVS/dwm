@@ -8,6 +8,41 @@ Mock-based (no real X server), 50,000 iterations each.
 
 ---
 
+## 2026-08-25: keyset vs no-keyset A/B benchmark
+
+Added BENCH 12 to `bench_optimize.c`, comparing Mode A (exact
+`(keysym, CLEANMASK(mod))` set via `cachekeys()`) against Mode B (the
+pre-keyset lossy OR-mask gate, emulated by zeroing `keyset_count`).
+50,000 iters, mock X11.
+
+| Path | A: keyset | B: no-keyset | Δ (B-A) |
+|---|---|---|---|
+| unmatched keysym (reject) | 10 ns | 6 ns | −4 ns (noise) |
+| wrong chord sharing mod bit | 13 ns | 152 ns | **+138 ns** |
+| matched MODKEY+b (scan+dispatch) | 190 ns | 181 ns | −8 ns (noise) |
+
+Finding: the keyset's measurable win is on the **wrong-chord reject** path
+— a key combo that shares a modifier bit with a real binding but is not
+itself bound. Without the keyset, `iskeybound()` returns true from the
+lossy OR-mask and `keypress()` pays a full `keys[]` scan (~152 ns) that
+finds no match. With the keyset, the exact set rejects in O(1) (~13 ns),
+~10× faster on that path (~138 ns saved/call). The matched path (actual
+bindings) and the unmatched-keysym path are parity — both already scan or
+already reject cheaply.
+
+Note: this corrects the earlier "Exact keypress binding index" entry
+(2026-08-23), which reported parity at the 4–6 ns noise floor. That
+entry's BENCH 11 never called `cachekeys()`, so the keyset was empty and
+both reported paths exercised the mask fallback — hiding the real
+difference.
+
+Real-world impact: keypresses are human-rate (~10/s) and wrong chords are
+rare, so the wall-clock saving is negligible; the keyset's primary value
+remains exactness/correctness and O(1) worst-case reject regardless of
+binding count, with this ~138 ns/call chord-reject speedup as a bonus.
+
+---
+
 ## Raw Results
 
 ```
@@ -402,3 +437,23 @@ iterator internals, defensive probe-exhaustion returns, two multi-monitor
 walk corners), util.c 100%, drw.c real-file coverage is out of scope for the
 mock harness (its logic is covered by the self-contained replica suites).
 Gates: 13/13 unit suites pass; ASan strict clean on all 13 binaries.
+
+---
+
+## 2026-08-24 (3): Creation-Path Layout Immediacy Restored
+
+User-visible regression report: window-creation transitions could look
+snappier/uglier because arrange-coalescing deferred the manage()/unmanage()/
+swallow() layout passes to the event-loop tail, collapsing the per-window
+map->tile transition into a single final XConfigureWindow.
+
+Fix: those three low-frequency paths now call arrangenow() directly, keeping
+every transition frame visible; high-frequency handlers (tag/view/setlayout/
+...) still coalesce. Correctness tests added to test_optimize_layout.c:
+manage/unmanage lay out synchronously during dispatch with no pending flag,
+while tag() still defers (54 assertions total).
+
+Also fixed a latent build-system hazard this exposed: suite binaries
+#include ../dwm.c but their Makefile rules did not depend on it -- editing
+dwm.c left stale test binaries. Suites now depend on ../dwm.c, ../dwm.h,
+../config.h and mock_drw.h.

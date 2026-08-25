@@ -212,9 +212,12 @@ static void arrangenow(Monitor *m);
 /* hide/show clients and apply current layout on monitor m (or all if NULL).
  * While run() dispatches an event handler, requests are coalesced into a
  * single full arrange at the event-loop tail (flusheventtail()) so event
- * bursts (window creation, tag switches) cost one layout pass instead of N.
- * Calls outside event dispatch — pointer grabs (movemouse/resizemouse),
- * setup(), scan() — stay immediate to preserve interactive feedback. */
+ * bursts (tag switches, multi-window property storms) cost one layout pass
+ * instead of N.  The low-frequency creation paths — manage(), unmanage(),
+ * swallow() — bypass the defer and call arrangenow() directly so the
+ * per-window map/unmap transitions stay frame-visible.  Calls outside
+ * event dispatch — pointer grabs (movemouse/resizemouse), setup(), scan()
+ * — are immediate because dispatching is unset there. */
 void
 arrange(Monitor *m)
 {
@@ -320,7 +323,7 @@ swallow(Client *p, Client *c)
 	/* parent adopted child's name; client list unchanged, tags untouched */
 	selmon->bar_dirty_segments |= DIRTY_TITLE;
 	XMoveResizeWindow(dpy, p->win, p->x, p->y, p->w, p->h);
-	arrange(p->mon);
+	arrangenow(p->mon); /* creation path: keep the swap transition visible */
 	configure(p);
 	updateclientlist();
 }
@@ -832,13 +835,12 @@ drawbar(Monitor *m)
 
 	/* draw status first so it can be overdrawn by tags later */
 	if (m == selmon) { /* status is only drawn on selected monitor */
-		if (m->bar_dirty_segments & DIRTY_STATUS) {
-			drw_setscheme(drw, scheme[SchemeNorm]);
-			tw = TEXTW(stext) - lrpad + 2; /* 2px right padding */
-			drw_text(drw, m->ww - tw, 0, tw, bh, 0, stext, 0);
-		}
 		if (m->bar_dirty_segments & (DIRTY_STATUS | DIRTY_TITLE))
 			tw = TEXTW(stext) - lrpad + 2; /* needed for title width calculation */
+		if (m->bar_dirty_segments & DIRTY_STATUS) {
+			drw_setscheme(drw, scheme[SchemeNorm]);
+			drw_text(drw, m->ww - tw, 0, tw, bh, 0, stext, 0);
+		}
 	}
 
 	for (c = m->clients; c; c = c->next) {
@@ -1288,7 +1290,9 @@ manage(Window w, XWindowAttributes *wa)
 	if (c->mon == selmon)
 		unfocus(selmon->sel, 0);
 	c->mon->sel = c;
-	arrange(c->mon);
+	/* creation path: lay out immediately (bypasses coalescing) so the
+	 * visible spawn->tile transition keeps its animation frames */
+	arrangenow(c->mon);
 	XMapWindow(dpy, c->win);
 	if (term)
 		swallow(term, c);
@@ -2253,7 +2257,7 @@ unmanage(Client *c, int destroyed)
 	if (s) {
 		free(s->swallowing);
 		s->swallowing = NULL;
-		arrange(m);
+		arrangenow(m); /* destruction path: immediate like manage() */
 		focus(NULL);
 		return;
 	}
@@ -2276,7 +2280,7 @@ unmanage(Client *c, int destroyed)
 	free(c);
 
 	if (!s) {
-		arrange(m);
+		arrangenow(m); /* destruction path: immediate like manage() */
 		focus(NULL);
 		updateclientlist();
 	}
@@ -2505,20 +2509,10 @@ updatesizehints(Client *c)
 void
 updatestatus(void)
 {
-	char newstext[sizeof(stext)];
-	size_t newlen;
 	/* skip when fullscreen - bar is frozen, status would never be drawn */
 	if (optimizefullscreen && selmon->sel && selmon->sel->isfullscreen)
 		return;
-	if (!(newlen = gettextprop(root, XA_WM_NAME, newstext, sizeof(newstext)))) {
-		stpcpy_len(newstext, "dwm-"VERSION, sizeof("dwm-"VERSION) - 1);
-		newlen = sizeof("dwm-"VERSION) - 1;
-	}
-	/* status unchanged — skip dirty + draw chain */
-	if (newlen == stext_len && memcmp(stext, newstext, newlen) == 0)
-		return;
-	stpcpy_len(stext, newstext, newlen);
-	stext_len = newlen;
+	stext_len = gettextprop(root, XA_WM_NAME, stext, sizeof(stext));
 	/* status changed; title boundary may shift if width differs */
 	selmon->bar_dirty_segments |= DIRTY_STATUS | DIRTY_TITLE;
 	bar_draw_pending = 1;            /* coalesce with other pending draws */

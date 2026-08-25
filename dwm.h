@@ -117,7 +117,7 @@ static unsigned int key_mod_used;
  * pairs rebuilt by cachekeys(); lets keypress() reject non-bindings in O(1)
  * instead of the lossy OR-masks above (which pass any keysym once enough
  * bindings are merged, and can't reject chords merely sharing a mod bit). */
-#define KEYSET_SIZE 256 /* power of two */
+#define KEYSET_SIZE 128 /* power of two */
 static unsigned long long keyset[KEYSET_SIZE];
 static unsigned int keyset_count;
 static unsigned char keyset_saturated; /* set full: masks remain the guard */
@@ -143,13 +143,13 @@ struct Monitor {
 	int by;               /* bar geometry */
 	int mx, my, mw, mh;   /* screen size */
 	int wx, wy, ww, wh;   /* window area  */
-	int bar_dirty_segments;
 	unsigned int seltags;
 	unsigned int sellt;
 	unsigned int tagset[2];
 	unsigned char showbar;
 	unsigned char topbar;
 	unsigned char bar_exposed;
+	unsigned char bar_dirty_segments;
 	Gap gap;
 	Client *clients;
 	Client *sel;
