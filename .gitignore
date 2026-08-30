@@ -1,6 +1,5 @@
 # User files
 dwm
-config.h
 *.gcov
 
 # Test suite build products (binaries share names with their .c sources)
