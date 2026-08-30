@@ -453,12 +453,15 @@ keypack(KeySym keysym, unsigned int mod)
 	return ((unsigned long long)keysym << 32) | (mod & 0xffffffffULL);
 }
 
-/* Hash home slot for a packed (keysym, mod) key in the exact-match keyset. */
+/* Hash home slot for a packed (keysym, mod) key in the exact-match keyset.
+ * The 64-bit Fibonacci hash output is folded down to the table size with
+ * (KEYSET_SIZE - 1) so the slot always lands in bounds; KEYSET_SIZE must
+ * stay a power of two for the mask to work. */
 static unsigned int
 keyset_home(unsigned long long k)
 {
 	/* Fibonacci hash: spreads structured KeySym|mod bit patterns evenly */
-	return (unsigned int)((k * 0x9E3779B97F4A7C15ULL) >> 56);
+	return (unsigned int)(((k * 0x9E3779B97F4A7C15ULL) >> 56) & (KEYSET_SIZE - 1));
 }
 
 /* Insert a packed key into the open-addressing exact-match keyset (linear
@@ -1789,6 +1792,19 @@ killall(const char *name, const char *signal)
  * can be asserted without fork/exec'ing the real binary */
 static void (*killall_impl)(const char *, const char *) = killall;
 
+/* True when any managed client is in fullscreen; used to pair the
+ * STOP on the first enter with the CONT+HUP on the last exit, so
+ * multiple fullscreen windows and abrupt destroys stay balanced. */
+static int
+isanyfullscreen(void)
+{
+	for (Monitor *m = mons; m; m = m->next)
+		for (Client *c = m->clients; c; c = c->next)
+			if (c->isfullscreen)
+				return 1;
+	return 0;
+}
+
 /* Suspend (SIGSTOP) every process named in killatfullscreen[] while a client
  * is fullscreen; undone by killatfullscreen_start() on exit. */
 void
@@ -1827,15 +1843,28 @@ killatfullscreen_start(void)
 #endif
 }
 
+/* Lightweight resume: only CONT, no HUP. Used to repair a stale STOP
+ * after a crash/restart when no fullscreen client remains (e.g. dwm
+ * died while dwmblocks-fast was stopped). CONT on a running process
+ * is a no-op. */
+void
+killatfullscreen_resume(void)
+{
+	for (unsigned int i = 0; i < LENGTH(killatfullscreen); i++)
+		killall_impl(killatfullscreen[i], "-CONT");
+}
+
 /* Enter/leave EWMH fullscreen on c: update _NET_WM_STATE, save or restore
  * geometry/border/floating state, size to the monitor area, suspend/resume
  * the killatfullscreen[] processes, and force a full bar redraw on exit
- * since the bar was frozen during fullscreen. */
+ * since the bar was frozen during fullscreen. STOP is paired with the
+ * first enter and START with the last exit so leaked STOPS (destroy
+ * while fullscreen, multiple fullscreen windows) stay balanced. */
 void
 setfullscreen(Client *c, int fullscreen)
 {
 	if (fullscreen && !c->isfullscreen) {
-		killatfullscreen_stop();
+		int was_any = isanyfullscreen();
 		XChangeProperty(dpy, c->win, netatom[NetWMState], XA_ATOM, 32,
 			PropModeReplace, (unsigned char*)&netatom[NetWMFullscreen], 1);
 		c->isfullscreen = 1;
@@ -1845,8 +1874,9 @@ setfullscreen(Client *c, int fullscreen)
 		c->isfloating = 1;
 		resizeclient(c, c->mon->mx, c->mon->my, c->mon->mw, c->mon->mh);
 		XRaiseWindow(dpy, c->win);
+		if (!was_any)
+			killatfullscreen_stop();
 	} else if (!fullscreen && c->isfullscreen){
-		killatfullscreen_start();
 		XChangeProperty(dpy, c->win, netatom[NetWMState], XA_ATOM, 32,
 			PropModeReplace, (unsigned char*)0, 0);
 		c->isfullscreen = 0;
@@ -1860,6 +1890,8 @@ setfullscreen(Client *c, int fullscreen)
 		/* refresh status text (was skipped during fullscreen) and force full redraw */
 		selmon->bar_dirty_segments = DIRTY_STATUS | DIRTY_TAGS | DIRTY_TITLE;
 		arrange(c->mon);
+		if (!isanyfullscreen())
+			killatfullscreen_start();
 	}
 }
 
@@ -2248,6 +2280,7 @@ unmanage(Client *c, int destroyed)
 {
 	Monitor *m = c->mon;
 	XWindowChanges wc;
+	int was_fullscreen = c->isfullscreen;
 
 	if (c->swallowing) {
 		unswallow(c);
@@ -2284,6 +2317,8 @@ unmanage(Client *c, int destroyed)
 		arrangenow(m); /* destruction path: immediate like manage() */
 		focus(NULL);
 		updateclientlist();
+		if (was_fullscreen && !isanyfullscreen())
+			killatfullscreen_start();
 	}
 }
 
@@ -2927,6 +2962,11 @@ main(int argc, char *argv[])
 		DIE("pledge():pledge:");
 #endif /* __OpenBSD__ */
 	scan();
+	/* Repair a stale STOP from a crash while fullscreen was active: if no
+	 * client is fullscreen now, a previous dwm left dwmblocks stopped. CONT
+	 * is a no-op when already running, so unconditional repair is safe. */
+	if (!isanyfullscreen())
+		killatfullscreen_resume();
 	run();
 	if(restart) execvp(argv[0], argv);
 	cleanup();

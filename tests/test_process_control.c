@@ -193,6 +193,179 @@ test_setfullscreen_enter_idempotent_no_extra_stop(void)
 	ASSERT_EQ(ncalls, 0, "already-fullscreen client triggers nothing");
 }
 
+/* Destroying a fullscreen client must resume when it was the last one */
+static void
+test_unmanage_fullscreen_last_resumes(void)
+{
+	memset(winhash, 0, sizeof winhash);
+	winhash_count = 0;
+
+	/* single fullscreen client on selmon */
+	Client *c = ecalloc(1, sizeof(Client));
+	c->win = 100;
+	c->mon = selmon;
+	c->isfullscreen = 1;
+	c->bw = 0;
+	c->oldbw = 2;
+	attach(c);
+	attachstack(c);
+	selmon->sel = c;
+	winclient_put(c);
+
+	/* another non-fullscreen client to keep monitor non-empty */
+	Client *other = ecalloc(1, sizeof(Client));
+	other->win = 101;
+	other->mon = selmon;
+	other->isfullscreen = 0;
+	attach(other);
+	attachstack(other);
+	winclient_put(other);
+
+	install_recorder();
+	unmanage(c, 1); /* destroyed while fullscreen */
+	restore_killall();
+
+	ASSERT_EQ(ncalls, 2, "destroy of last fullscreen triggers CONT+HUP");
+	ASSERT(strcmp(call_signal[0], "-CONT") == 0, "destroy resumes (-CONT)");
+	ASSERT(strcmp(call_signal[1], "-HUP") == 0, "destroy then HUP");
+	/* other remains, correctly not fullscreen */
+	ASSERT(!isanyfullscreen(), "no fullscreen remains after destroy");
+
+	/* cleanup */
+	unmanage(other, 1);
+}
+
+/* Destroying a non-fullscreen client must not resume when a fullscreen remains */
+static void
+test_unmanage_non_fullscreen_no_resume_when_fullscreen_remains(void)
+{
+	memset(winhash, 0, sizeof winhash);
+	winhash_count = 0;
+
+	Client *fs = ecalloc(1, sizeof(Client));
+	fs->win = 200;
+	fs->mon = selmon;
+	fs->isfullscreen = 1;
+	fs->bw = 0;
+	attach(fs);
+	attachstack(fs);
+	winclient_put(fs);
+
+	Client *victim = ecalloc(1, sizeof(Client));
+	victim->win = 201;
+	victim->mon = selmon;
+	victim->isfullscreen = 0;
+	attach(victim);
+	attachstack(victim);
+	winclient_put(victim);
+
+	install_recorder();
+	unmanage(victim, 1);
+	restore_killall();
+
+	ASSERT_EQ(ncalls, 0, "destroy of non-fullscreen with fullscreen present does not resume");
+	ASSERT(isanyfullscreen(), "fullscreen still present");
+
+	/* cleanup - destroy the fullscreen last, should resume */
+	install_recorder();
+	unmanage(fs, 1);
+	restore_killall();
+	ASSERT_EQ(ncalls, 2, "destroy of last fullscreen now resumes");
+}
+
+/* Multiple monitors: exiting one fullscreen while another remains stays stopped */
+static void
+test_multi_fullscreen_exit_one_stays_stopped(void)
+{
+	memset(winhash, 0, sizeof winhash);
+	winhash_count = 0;
+
+	Monitor *m2 = createmon();
+	m2->num = 1;
+	m2->mx = m2->wx = 1920;
+	m2->my = m2->wy = 0;
+	m2->mw = m2->ww = 1920;
+	m2->mh = m2->wh = 1080;
+	m2->next = NULL;
+	mons->next = m2;
+
+	Client *a = ecalloc(1, sizeof(Client));
+	a->win = 300;
+	a->mon = selmon;
+	a->isfullscreen = 0;
+	a->bw = 2;
+	attach(a);
+	attachstack(a);
+	winclient_put(a);
+
+	Client *b = ecalloc(1, sizeof(Client));
+	b->win = 301;
+	b->mon = m2;
+	b->isfullscreen = 0;
+	b->bw = 2;
+	attach(b);
+	attachstack(b);
+	winclient_put(b);
+
+	/* enter fullscreen on both */
+	install_recorder();
+	setfullscreen(a, 1);
+	restore_killall();
+	ASSERT_EQ(ncalls, 1, "first fullscreen enters -> STOP");
+
+	install_recorder();
+	setfullscreen(b, 1);
+	restore_killall();
+	ASSERT_EQ(ncalls, 0, "second fullscreen enter does not duplicate STOP");
+	ASSERT(isanyfullscreen(), "at least one fullscreen after both enters");
+
+	/* exit one - should NOT resume because the other remains */
+	install_recorder();
+	setfullscreen(a, 0);
+	restore_killall();
+	ASSERT_EQ(ncalls, 0, "exit of one of two fullscreen stays stopped");
+	ASSERT(isanyfullscreen(), "one fullscreen still remains");
+
+	/* exit the last - should resume */
+	install_recorder();
+	setfullscreen(b, 0);
+	restore_killall();
+	ASSERT_EQ(ncalls, 2, "exit of last fullscreen resumes");
+
+	/* cleanup monitors */
+	mons->next = NULL;
+	/* a and b already detached via setfullscreen exit? a was removed from fullscreen but still attached;
+	 * free manually for test isolation */
+	detach(a); detachstack(a); winclient_remove(a); free(a);
+	detach(b); detachstack(b); winclient_remove(b); free(b);
+	free(m2);
+}
+
+/* isanyfullscreen reflects global state */
+static void
+test_isanyfullscreen_global(void)
+{
+	memset(winhash, 0, sizeof winhash);
+	winhash_count = 0;
+
+	ASSERT(!isanyfullscreen(), "no fullscreen initially");
+
+	Client *c = ecalloc(1, sizeof(Client));
+	c->win = 400;
+	c->mon = selmon;
+	c->isfullscreen = 1;
+	attach(c);
+	attachstack(c);
+	winclient_put(c);
+
+	ASSERT(isanyfullscreen(), "one fullscreen -> true");
+
+	c->isfullscreen = 0;
+	ASSERT(!isanyfullscreen(), "cleared flag -> false again");
+
+	detach(c); detachstack(c); winclient_remove(c); free(c);
+}
+
 /* SIGHUP requests a restart: quit({1}) sets restart=1 and stops running */
 static void
 test_sighup_sets_restart_flag(void)
@@ -298,6 +471,10 @@ main(void)
 	test_setfullscreen_enter_calls_stop();
 	test_setfullscreen_exit_calls_start();
 	test_setfullscreen_enter_idempotent_no_extra_stop();
+	test_unmanage_fullscreen_last_resumes();
+	test_unmanage_non_fullscreen_no_resume_when_fullscreen_remains();
+	test_multi_fullscreen_exit_one_stays_stopped();
+	test_isanyfullscreen_global();
 	test_sighup_sets_restart_flag();
 	test_sigterm_does_not_restart();
 	test_getrootptr_true_returns_coords();

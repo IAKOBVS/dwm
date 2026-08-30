@@ -117,7 +117,7 @@ static unsigned int key_mod_used;
  * pairs rebuilt by cachekeys(); lets keypress() reject non-bindings in O(1)
  * instead of the lossy OR-masks above (which pass any keysym once enough
  * bindings are merged, and can't reject chords merely sharing a mod bit). */
-#define KEYSET_SIZE 128 /* power of two */
+#define KEYSET_SIZE 256 /* power of two; keyset_home() folds to this width */
 static unsigned long long keyset[KEYSET_SIZE];
 static unsigned int keyset_count;
 static unsigned char keyset_saturated; /* set full: masks remain the guard */
@@ -238,6 +238,7 @@ static void setfullscreen(Client *c, int fullscreen);
 static void killall(const char *name, const char *signal);
 static void killatfullscreen_stop(void);
 static void killatfullscreen_start(void);
+static void killatfullscreen_resume(void);
 static void setgaps(const Arg *arg);
 static void setlayout(const Arg *arg);
 static void setmfact(const Arg *arg);

@@ -104,6 +104,9 @@ test_updatestatus_sets_segments(void)
 {
 	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
 	winhash_count = 0;
+	/* prime the window-property mock so stext is actually populated */
+	mock_gettextprop_return = 1;
+	mock_gettextprop_value = "status";
 	selmon->bar_dirty_segments = 0;
 	stext[0] = '\0';
 	updatestatus();
@@ -113,10 +116,13 @@ test_updatestatus_sets_segments(void)
 		"updatestatus sets DIRTY_TITLE");
 	ASSERT(stext[0] != '\0',
 		"updatestatus sets stext");
+	/* restore gettextprop defaults so later tests are unaffected */
+	mock_gettextprop_return = 0;
+	mock_gettextprop_value = NULL;
 }
 
 static void
-test_updatestatus_identical_text_no_dirty(void)
+test_updatestatus_identical_text_still_dirty(void)
 {
 	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
 	winhash_count = 0;
@@ -125,15 +131,18 @@ test_updatestatus_identical_text_no_dirty(void)
 	mock_gettextprop_value = "stable-status";
 	updatestatus();
 
-	/* second call with identical text must be a full no-op */
+	/* updatestatus() always dirties (no identical-text memcmp guard): a
+	 * second call with the same text still schedules a redraw */
 	selmon->bar_dirty_segments = 0;
 	bar_draw_pending = 0;
 	updatestatus();
-	ASSERT_EQ(selmon->bar_dirty_segments, 0,
-		"identical text skips dirty segments");
-	ASSERT_EQ(bar_draw_pending, 0, "identical text skips deferred draw");
+	ASSERT(selmon->bar_dirty_segments & DIRTY_STATUS,
+		"identical text still sets DIRTY_STATUS");
+	ASSERT(selmon->bar_dirty_segments & DIRTY_TITLE,
+		"identical text still sets DIRTY_TITLE");
+	ASSERT_EQ(bar_draw_pending, 1, "identical text still defers a draw");
 
-	/* same length but different content must still dirty */
+	/* different content must also dirty and request the deferred draw */
 	mock_gettextprop_value = "stable-statuX";
 	selmon->bar_dirty_segments = 0;
 	bar_draw_pending = 0;
@@ -517,7 +526,7 @@ main(void)
 
 	restore_selmon();
 	test_updatestatus_sets_segments();
-	test_updatestatus_identical_text_no_dirty();
+	test_updatestatus_identical_text_still_dirty();
 	test_updatestatus_different_text_sets_dirty();
 	test_swallow_sets_dirty_title();
 

@@ -467,6 +467,29 @@ test_keyindex_duplicate_pairs_dedupe(void)
 	ASSERT_EQ(keyset_count, before, "duplicate pairs do not grow the set");
 }
 
+/* Every non-NULL binding in keys[] must be found via iskeybound after
+ * cachekeys() (no false negatives over the whole configured table). This
+ * guards the keyset_home()/KEYSET_SIZE agreement: shrinking the table below
+ * the hash range made some bindings undetectable, which surfaced as keys
+ * (e.g. tag switches) that silently stopped working. */
+static void
+test_keyindex_all_bindings_found(void)
+{
+	unsigned int i;
+	unsigned int before;
+
+	numlockmask = 0; /* CLEANMASK() must be a no-op for the comparison */
+	cachekeys();
+	before = keyset_count;
+	for (i = 0; i < LENGTH(keys); i++) {
+		if (!keys[i].func)
+			continue;
+		ASSERT_EQ(iskeybound(keys[i].keysym, keys[i].mod), 1,
+			"every configured binding is found by iskeybound");
+	}
+	ASSERT(before > 0, "cachekeys populated the exact set");
+}
+
 /* Lock-key sync: bindings are stored under CLEANMASK(mod); an event
  * carrying the NumLock modifier must resolve to the same cleaned state.
  * Requires cachekeys() to have been rebuilt after numlockmask changed --
@@ -596,6 +619,7 @@ main(void)
 	test_keypress_exact_index_rejects_wrong_chord();
 	test_keyindex_saturation_falls_back_to_masks();
 	test_keyindex_duplicate_pairs_dedupe();
+	test_keyindex_all_bindings_found();
 	test_keyindex_numlock_sync();
 
 	printf("=== RESULTS ===\n");
