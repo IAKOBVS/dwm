@@ -159,8 +159,8 @@ static const Key keys[] = {
 	{ .mod = MODKEY,            .keysym = XK_j,                    .func = focusstack,    .arg = { .i= +1 } },
 	{ .mod = MODKEY,            .keysym = XK_k,                    .func = focusstack,    .arg = { .i= -1 } },
 	{ .mod = MODKEY,            .keysym = XK_f,                    .func = togglefullscr, .arg = {0} },
-	{ .mod = MODKEY,            .keysym = XK_h,                    .func = setmfact,      .arg = { .f= -0.05} },
-	{ .mod = MODKEY,            .keysym = XK_l,                    .func = setmfact,      .arg = { .f= +0.05} },
+	{ .mod = MODKEY,            .keysym = XK_h,                    .func = setmfact,      .arg = { .f= -0.05f} },
+	{ .mod = MODKEY,            .keysym = XK_l,                    .func = setmfact,      .arg = { .f= +0.05f} },
 	{ .mod = MODKEY,            .keysym = XK_q,                    .func = killclient,    .arg = {0} },
 	/* {  .mod = MODKEY,            .keysym = K_q,                     .func = spawn,         .arg = CMD("gaming-kill-when-steam-running") }, */
 	{ .mod = MODKEY,            .keysym = XK_space,                .func = zoom,          .arg = {0} },
