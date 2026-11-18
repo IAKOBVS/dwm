@@ -36,8 +36,13 @@ Every new feature MUST include:
 - A **purpose comment** above the primary declaration or implementation
 - **Inline comments** for non-obvious logic (bit operations, guard conditions,
   algorithm choices, performance trade-offs)
+- A **Doxygen contract** at the definition with `@brief`, every `@param`, the
+  `@return` (for non-void), `@pre`/`@post` where real, an `@note` naming global
+  and X11 side effects, and a unique `@anchor spec_<function>` (conventions:
+  `docs/ARCHITECTURE.md` §2)
 - **Corresponding unit tests** that exercise the primary path and at least one
-  edge case
+  edge case. Name the test file `<function>.c` under
+  `tests/unit/src/<module>/` so `make spec-check` can map it to the anchor.
 
 ## Subagent & Parallelism
 
@@ -52,22 +57,81 @@ that agents apply when working.
 
 ```sh
 cd tests
-make test      # build and run all unit tests (also `make run`)
-make coverage  # clean build, run tests with gcov, show dwm.c coverage
+make test        # build and run all unit tests (also `make run`)
+make coverage    # clean build, run tests with gcov, show dwm.c coverage
+make asan-ubsan  # ASan+UBSan, artifacts in tests/build/asan-ubsan/
+make tsan-ubsan  # TSan+UBSan, artifacts in tests/build/tsan-ubsan/
 ```
+
+Sanitizer targets are isolated per build directory (including their own
+instrumented `mock_x11.o`) so ASan and TSan artifacts never overwrite each
+other or the regular `tests/bin/` build.
+
+Convenience scripts under `tests/` (logs in `tests/build/logs/`):
+
+```sh
+./test-asan-ubsan.sh          # all suites, ASan+UBSan
+./test-tsan-ubsan.sh          # all suites, TSan+UBSan
+./test-integration-sanitized.sh  # unit/src/integration/* under both
+./test-integer-sanitizer.sh   # clang -fsanitize=integer (skips without clang)
+./test-e2e.sh                 # Xvfb smoke test (skips without Xvfb/xdotool)
+./test-all.sh                 # all of the above
+```
+
+`make -C tests coverage-check` fails when `dwm.c`/`drw.c`/`util.c` drop below
+their coverage floors (95/80/85%). `.github/workflows/test.yml` runs the full
+matrix, the spec check, docs generation, and the coverage gate on push/PR.
+
+The E2E script builds an ASan+UBSan `dwm` into `tests/build/e2e/`, runs it
+under Xvfb with real client windows, and checks tiling geometry, tag hiding,
+fullscreen enter/exit, and the `XKillClient` fallback. It exits 0 with a
+`SKIP:` message when `Xvfb`, `xdotool`, or `xwininfo` is unavailable.
+
+### Specifications & Traceability
+
+- Every function definition carries a Doxygen contract with a unique
+  `@anchor spec_<function>`; the subsystem contract is
+  `docs/ARCHITECTURE.md`, which also maps each subsystem to its tests.
+- `make spec-check` (repo root) fails on duplicate anchors and on a unit test
+  file that names a missing anchor; it warns about anchors with no same-named
+  test.
+- `make docs` regenerates the HTML documentation from the source contracts and
+  `docs/ARCHITECTURE.md` into `docs/build/html/`.
+- When behavior changes, update the anchor, the architecture section, and the
+  mapped test in the same change.
 
 ### Test Architecture
 
-Unit tests live in `tests/` and compile dwm.c with mock X11 headers (no real
-X server needed). Every test `.c` file follows this pattern:
+Unit tests live in `tests/unit/src/<module>/` and compile dwm.c (or drw.c /
+util.c) against mock X11 headers (no real X server needed). Shared fixtures
+live in `tests/unit/include/`. Every test `.c` file follows this pattern:
 
-1. `#include "mock_x11.h"` + `#define DRW_H` + `#include "mock_drw.h"`
-2. `#include "../dwm.h"` + `#include "../dwm.c"` — pulls in all dwm internals
-3. A `main()` that initializes globals (`dpy`, `drw`, `selmon`, `scheme[]`) and
-   calls test functions
-4. `ASSERT()` / `ASSERT_EQ()` macros for pass/fail
+1. `#include "test_common.h"` (dwm), `"test_drw_common.h"` (drw), or
+   `"test_util_common.h"` (util); these pull in the mocks, the source under
+   test, the `ASSERT*` macros, and `main()`
+2. Cases plus a `static void run_tests(void)` entry point
+3. `ASSERT()` / `ASSERT_EQ()` / `ASSERT_NE()` assertions — meaningful state,
+   geometry, or recorded-X-call checks, not `ASSERT(1, ...)`
 
-### Current Test Files (≈4,900 assertions across 13 binaries)
+X11/Xft mocks are stateful and record calls: `mock_xmove_window`,
+`mock_xconfigure_window`, `mock_xset_input_focus`, `mock_xchange_property`,
+`mock_xsend_event`, `mock_xfill_rectangle`, and friends expose `.count`/last
+arguments; the drawing stubs expose `mock_drw_*` recorders. For drw.c tests,
+`mock_xft_font_fail`, `mock_xft_advance`, and `mock_xft_missing_codepoint`
+control the deterministic Xft fake. Reset with `mock_x11_reset()` and
+`mock_drw_reset()` per case.
+
+### Test Layout
+
+The suite was migrated from 13 aggregate `test_*.c` files to `tests/unit/`:
+176 per-function suites (`unit/src/dwm`, `unit/src/drw`, `unit/src/util`)
+plus 11 `unit/src/integration/` suites, with fixtures in `unit/include/`.
+`make test` discovers and builds all of them. The per-file inventory below
+describes the legacy aggregate suites (still the unit of record in `HEAD`
+until the migration is committed); consult `tests/unit/src/` for the current
+per-function mapping.
+
+### Legacy Aggregate Suites (≈4,900 executed checks)
 
 - **test_pure_logic.c** (~1200 lines, 122 assertions) — core dwm logic: linked-list
   ops (attach, detach, attachstack, detachstack), nexttiled, dirtomon,
@@ -224,6 +288,10 @@ X server needed). Every test `.c` file follows this pattern:
 - LSP errors about `GC` redefinition and missing `ft2build.h` are false
   positives from clangd seeing system X11 headers instead of mock redirects;
   actual compilation with `c99 -I include` succeeds
+- Mock modifier constants must match X11 (`Mod1Mask=1<<3` … `Mod5Mask=1<<7`).
+  A duplicated/shifted value silently breaks `CLEANMASK`, `keyset_put` and
+  `grabbuttons` tests; the property tests in `keyset_put.c`/`iskeybound.c`
+  catch this.
   `tests/include/X11/Xlib.h`, `mock_x11.h:26`)
 
 ### Adding a New Test

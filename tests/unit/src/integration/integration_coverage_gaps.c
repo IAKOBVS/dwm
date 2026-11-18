@@ -19,8 +19,8 @@
 #define DRW_H
 #include "mock_drw.h"
 
-#include "../dwm.h"
-#include "../dwm.c"
+#include "dwm.h"
+#include "dwm.c"
 
 static int total = 0, failed = 0;
 #define ASSERT(cond, msg) do { \
@@ -98,7 +98,7 @@ setup_drw(void)
 	/* focus()/drawbar read scheme[SchemeSel][ColBorder].pixel */
 	scheme = ecalloc(3, sizeof(Clr *));
 	for (i = 0; i < 3; i++) {
-		scheme[i] = ecalloc(1, sizeof(Clr));
+		scheme[i] = ecalloc(3, sizeof(Clr)); /* dwm indexes [ColBorder] */
 		scheme[i]->pixel = 0xFF0000UL + i;
 	}
 	/* client-click paths reach XGrabPointer with a cursor handle */

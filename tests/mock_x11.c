@@ -93,6 +93,45 @@ int mock_fontset_fail = 0;        /* 0=normal, 1=drw_fontset_create returns NULL
 int mock_getwindowattr_call_count = 0;
 int mock_getwindowattr_fail_at = 0;  /* 0=never fail */
 
+/* Recorded side effects for otherwise no-op X calls (see MockXCall). */
+MockXCall mock_xmap_window;
+MockXCall mock_xunmap_window;
+MockXCall mock_xmove_window;
+MockXCall mock_xmoveresize_window;
+MockXCall mock_xresize_window;
+MockXCall mock_xraise_window;
+MockXCall mock_xconfigure_window;
+MockXCall mock_xset_window_border;
+MockXCall mock_xset_window_border_width;
+MockXCall mock_xset_input_focus;
+MockXCall mock_xchange_property;
+MockXCall mock_xdelete_property;
+MockXCall mock_xsend_event;
+MockXCall mock_xkill_client;
+MockXCall mock_xrefresh_keyboard_mapping;
+MockXCall mock_xset_foreground;
+MockXCall mock_xfill_rectangle;
+MockXCall mock_xdraw_rectangle;
+MockXCall mock_xcopy_area;
+int mock_grabbutton_calls = 0;
+int mock_ungrabbutton_calls = 0;
+int mock_xft_draw_string_calls = 0;
+int mock_xft_text_extents_calls = 0;
+int mock_xft_char_exists_calls = 0;
+int mock_xft_font_open_calls = 0;
+int mock_xsync_calls = 0;
+int mock_xft_font_fail = 0;
+unsigned int mock_xft_advance = 7;
+long mock_xft_missing_codepoint = -1;
+int mock_xft_last_x = 0;
+int mock_xft_last_y = 0;
+int mock_xft_last_len = 0;
+unsigned char mock_xft_last_text[64];
+XEvent mock_xsend_event_last;
+XWindowChanges mock_xconfigure_last;
+unsigned char mock_xchange_property_last[32];
+int mock_xchange_property_last_len = 0;
+
 void
 mock_x11_reset(void)
 {
@@ -150,6 +189,43 @@ mock_x11_reset(void)
 	mock_fontset_fail = 0;
 	mock_getwindowattr_call_count = 0;
 	mock_getwindowattr_fail_at = 0;
+	mock_xmap_window = (MockXCall){0};
+	mock_xunmap_window = (MockXCall){0};
+	mock_xmove_window = (MockXCall){0};
+	mock_xmoveresize_window = (MockXCall){0};
+	mock_xresize_window = (MockXCall){0};
+	mock_xraise_window = (MockXCall){0};
+	mock_xconfigure_window = (MockXCall){0};
+	mock_xset_window_border = (MockXCall){0};
+	mock_xset_window_border_width = (MockXCall){0};
+	mock_xset_input_focus = (MockXCall){0};
+	mock_xchange_property = (MockXCall){0};
+	mock_xdelete_property = (MockXCall){0};
+	mock_xsend_event = (MockXCall){0};
+	mock_xkill_client = (MockXCall){0};
+	mock_xrefresh_keyboard_mapping = (MockXCall){0};
+	mock_xset_foreground = (MockXCall){0};
+	mock_xfill_rectangle = (MockXCall){0};
+	mock_xdraw_rectangle = (MockXCall){0};
+	mock_xcopy_area = (MockXCall){0};
+	mock_grabbutton_calls = 0;
+	mock_ungrabbutton_calls = 0;
+	mock_xft_draw_string_calls = 0;
+	mock_xft_text_extents_calls = 0;
+	mock_xft_char_exists_calls = 0;
+	mock_xft_font_open_calls = 0;
+	mock_xsync_calls = 0;
+	mock_xft_font_fail = 0;
+	mock_xft_advance = 7;
+	mock_xft_missing_codepoint = -1;
+	mock_xft_last_x = 0;
+	mock_xft_last_y = 0;
+	mock_xft_last_len = 0;
+	memset(mock_xft_last_text, 0, sizeof mock_xft_last_text);
+	memset(&mock_xsend_event_last, 0, sizeof mock_xsend_event_last);
+	memset(&mock_xconfigure_last, 0, sizeof mock_xconfigure_last);
+	memset(mock_xchange_property_last, 0, sizeof mock_xchange_property_last);
+	mock_xchange_property_last_len = 0;
 }
 
 Display *
@@ -215,45 +291,66 @@ XDestroyWindow(Display *dpy, Window w)
 void
 XMapWindow(Display *dpy, Window w)
 {
-	(void)dpy; (void)w;
+	(void)dpy;
+	mock_xmap_window.count++;
+	mock_xmap_window.win = w;
 }
 
 void
 XMapRaised(Display *dpy, Window w)
 {
-	(void)dpy; (void)w;
+	(void)dpy;
+	mock_xmap_window.count++;
+	mock_xmap_window.win = w;
 }
 
 void
 XUnmapWindow(Display *dpy, Window w)
 {
-	(void)dpy; (void)w;
+	(void)dpy;
+	mock_xunmap_window.count++;
+	mock_xunmap_window.win = w;
 }
 
 void
 XMoveWindow(Display *dpy, Window w, int x, int y)
 {
-	(void)dpy; (void)w; (void)x; (void)y;
+	(void)dpy;
+	mock_xmove_window.count++;
+	mock_xmove_window.win = w;
+	mock_xmove_window.x = x;
+	mock_xmove_window.y = y;
 }
 
 void
 XMoveResizeWindow(Display *dpy, Window w, int x, int y,
 		  unsigned int width, unsigned int height)
 {
-	(void)dpy; (void)w; (void)x; (void)y;
-	(void)width; (void)height;
+	(void)dpy;
+	mock_xmoveresize_window.count++;
+	mock_xmoveresize_window.win = w;
+	mock_xmoveresize_window.x = x;
+	mock_xmoveresize_window.y = y;
+	mock_xmoveresize_window.w = width;
+	mock_xmoveresize_window.h = height;
 }
 
 void
 XResizeWindow(Display *dpy, Window w, unsigned int width, unsigned int height)
 {
-	(void)dpy; (void)w; (void)width; (void)height;
+	(void)dpy;
+	mock_xresize_window.count++;
+	mock_xresize_window.win = w;
+	mock_xresize_window.w = width;
+	mock_xresize_window.h = height;
 }
 
 void
 XRaiseWindow(Display *dpy, Window w)
 {
-	(void)dpy; (void)w;
+	(void)dpy;
+	mock_xraise_window.count++;
+	mock_xraise_window.win = w;
 }
 
 void
@@ -266,19 +363,30 @@ void
 XConfigureWindow(Display *dpy, Window w, unsigned long mask,
 		 XWindowChanges *wc)
 {
-	(void)dpy; (void)w; (void)mask; (void)wc;
+	(void)dpy;
+	mock_xconfigure_window.count++;
+	mock_xconfigure_window.win = w;
+	mock_xconfigure_window.mask = mask;
+	if (wc)
+		mock_xconfigure_last = *wc;
 }
 
 void
 XSetWindowBorder(Display *dpy, Window w, unsigned long border)
 {
-	(void)dpy; (void)w; (void)border;
+	(void)dpy;
+	mock_xset_window_border.count++;
+	mock_xset_window_border.win = w;
+	mock_xset_window_border.mask = border;
 }
 
 void
 XSetWindowBorderWidth(Display *dpy, Window w, unsigned int width)
 {
-	(void)dpy; (void)w; (void)width;
+	(void)dpy;
+	mock_xset_window_border_width.count++;
+	mock_xset_window_border_width.win = w;
+	mock_xset_window_border_width.w = width;
 }
 
 void
@@ -297,13 +405,16 @@ XSelectInput(Display *dpy, Window w, long mask)
 void
 XSetInputFocus(Display *dpy, Window w, int revert, Time time)
 {
-	(void)dpy; (void)w; (void)revert; (void)time;
+	(void)dpy; (void)revert; (void)time;
+	mock_xset_input_focus.count++;
+	mock_xset_input_focus.win = w;
 }
 
 void
 XSync(Display *dpy, Bool discard)
 {
 	(void)dpy; (void)discard;
+	mock_xsync_calls++;
 }
 
 void
@@ -316,14 +427,30 @@ void
 XChangeProperty(Display *dpy, Window w, Atom property, Atom type,
 		int format, int mode, unsigned char *data, int nelements)
 {
-	(void)dpy; (void)w; (void)property; (void)type;
-	(void)format; (void)mode; (void)data; (void)nelements;
+	int bytes = 0;
+
+	(void)dpy;
+	mock_xchange_property.count++;
+	mock_xchange_property.win = w;
+	mock_xchange_property.mask = property;
+	mock_xchange_property.aux = type;
+	if (data && nelements > 0 && format > 0) {
+		bytes = nelements * (format / 8);
+		if (bytes > (int)sizeof mock_xchange_property_last)
+			bytes = (int)sizeof mock_xchange_property_last;
+		memcpy(mock_xchange_property_last, data, (size_t)bytes);
+	}
+	mock_xchange_property_last_len = bytes;
+	(void)mode;
 }
 
 void
 XDeleteProperty(Display *dpy, Window w, Atom property)
 {
-	(void)dpy; (void)w; (void)property;
+	(void)dpy;
+	mock_xdelete_property.count++;
+	mock_xdelete_property.win = w;
+	mock_xdelete_property.mask = property;
 }
 
 void
@@ -610,6 +737,7 @@ XGrabButton(Display *dpy, unsigned int button, unsigned int modifiers,
 	(void)dpy; (void)button; (void)modifiers; (void)grab_window;
 	(void)owner_events; (void)mask; (void)pointer_mode;
 	(void)keyboard_mode; (void)confine_to; (void)cursor;
+	mock_grabbutton_calls++;
 }
 
 void
@@ -617,6 +745,7 @@ XUngrabButton(Display *dpy, unsigned int button, unsigned int modifiers,
 	      Window w)
 {
 	(void)dpy; (void)button; (void)modifiers; (void)w;
+	mock_ungrabbutton_calls++;
 }
 
 void
@@ -652,8 +781,14 @@ XGetKeyboardMapping(Display *dpy, KeyCode first, int count, int *keysyms_per_key
 		return NULL;
 	*keysyms_per_keycode = 2;
 	KeySym *syms = calloc((size_t)count * 2, sizeof(KeySym));
-	if (syms && mock_keyboardmapping_first_keysym)
-		syms[0] = mock_keyboardmapping_first_keysym;
+	if (syms) {
+		/* NoSymbol (0) matches the DWM_TEST-only keys[] sentinel, so use
+		 * a value that cannot collide with a configured keysym. */
+		for (int i = 0; i < count * 2; i++)
+			syms[i] = ~0UL;
+		if (mock_keyboardmapping_first_keysym)
+			syms[0] = mock_keyboardmapping_first_keysym;
+	}
 	return syms;
 }
 
@@ -661,6 +796,7 @@ void
 XRefreshKeyboardMapping(XMappingEvent *ev)
 {
 	(void)ev;
+	mock_xrefresh_keyboard_mapping.count++;
 }
 
 KeySym
@@ -697,7 +833,9 @@ XFreeModifiermap(XModifierKeymap *m)
 void
 XKillClient(Display *dpy, XID resource)
 {
-	(void)dpy; (void)resource;
+	(void)dpy;
+	mock_xkill_client.count++;
+	mock_xkill_client.win = (Window)resource;
 }
 
 void
@@ -760,7 +898,9 @@ XSetLineAttributes(Display *dpy, GC gc, unsigned int width,
 void
 XSetForeground(Display *dpy, GC gc, unsigned long color)
 {
-	(void)dpy; (void)gc; (void)color;
+	(void)dpy; (void)gc;
+	mock_xset_foreground.count++;
+	mock_xset_foreground.mask = color;
 }
 
 void
@@ -774,7 +914,13 @@ XDrawRectangle(Display *dpy, Drawable d, GC gc,
 	       int x, int y, unsigned int w, unsigned int h)
 {
 	assert(w < 100000 && h < 100000);
-	(void)dpy; (void)d; (void)gc; (void)x; (void)y; (void)w; (void)h;
+	(void)dpy; (void)gc;
+	mock_xdraw_rectangle.count++;
+	mock_xdraw_rectangle.win = d;
+	mock_xdraw_rectangle.x = x;
+	mock_xdraw_rectangle.y = y;
+	mock_xdraw_rectangle.w = w;
+	mock_xdraw_rectangle.h = h;
 }
 
 void
@@ -782,7 +928,13 @@ XFillRectangle(Display *dpy, Drawable d, GC gc,
 	       int x, int y, unsigned int w, unsigned int h)
 {
 	assert(w < 100000 && h < 100000);
-	(void)dpy; (void)d; (void)gc; (void)x; (void)y; (void)w; (void)h;
+	(void)dpy; (void)gc;
+	mock_xfill_rectangle.count++;
+	mock_xfill_rectangle.win = d;
+	mock_xfill_rectangle.x = x;
+	mock_xfill_rectangle.y = y;
+	mock_xfill_rectangle.w = w;
+	mock_xfill_rectangle.h = h;
 }
 
 void
@@ -790,15 +942,40 @@ XCopyArea(Display *dpy, Drawable src, Drawable dest, GC gc,
 	  int src_x, int src_y, unsigned int w, unsigned int h,
 	  int dest_x, int dest_y)
 {
-	(void)dpy; (void)src; (void)dest; (void)gc;
-	(void)src_x; (void)src_y; (void)w; (void)h;
-	(void)dest_x; (void)dest_y;
+	(void)dpy; (void)src; (void)gc;
+	mock_xcopy_area.count++;
+	mock_xcopy_area.win = dest;
+	mock_xcopy_area.x = src_x;
+	mock_xcopy_area.y = src_y;
+	mock_xcopy_area.w = w;
+	mock_xcopy_area.h = h;
+	mock_xcopy_area.aux = (unsigned long)dest_x;
 }
 
 int
 XSendEvent(Display *dpy, Window w, Bool propagate, long mask, XEvent *ev)
 {
-	(void)dpy; (void)w; (void)propagate; (void)mask; (void)ev;
+	(void)dpy; (void)propagate;
+	mock_xsend_event.count++;
+	mock_xsend_event.win = w;
+	mock_xsend_event.mask = (unsigned long)mask;
+	/* Callers legally pass a pointer to a smaller event struct (configure()
+	 * passes XConfigureEvent as XEvent*), so copying the whole union would
+	 * read past the object. Copy only the subtype the caller actually built. */
+	memset(&mock_xsend_event_last, 0, sizeof mock_xsend_event_last);
+	if (ev) {
+		mock_xsend_event_last.type = ev->type;
+		switch (ev->type) {
+		case ConfigureNotify:
+			mock_xsend_event_last.xconfigure = ev->xconfigure;
+			break;
+		case ClientMessage:
+			mock_xsend_event_last.xclient = ev->xclient;
+			break;
+		default:
+			break;
+		}
+	}
 	return 1;
 }
 
@@ -1058,14 +1235,28 @@ void
 XftDrawStringUtf8(XftDraw *draw, void *color, void *font,
 		  int x, int y, const FcChar8 *string, int len)
 {
+	int copy = len;
+
 	(void)draw; (void)color; (void)font;
-	(void)x; (void)y; (void)string; (void)len;
+	mock_xft_draw_string_calls++;
+	mock_xft_last_x = x;
+	mock_xft_last_y = y;
+	mock_xft_last_len = len;
+	if (copy > (int)sizeof mock_xft_last_text - 1)
+		copy = (int)sizeof mock_xft_last_text - 1;
+	if (string && copy > 0)
+		memcpy(mock_xft_last_text, string, (size_t)copy);
+	mock_xft_last_text[copy > 0 ? copy : 0] = '\0';
 }
 
 int
 XftCharExists(void *dpy, void *xfont, unsigned long codepoint)
 {
-	(void)dpy; (void)xfont; (void)codepoint;
+	(void)dpy; (void)xfont;
+	mock_xft_char_exists_calls++;
+	if (mock_xft_missing_codepoint >= 0
+	&& (long)codepoint == mock_xft_missing_codepoint)
+		return 0;
 	return 1;
 }
 
@@ -1073,15 +1264,32 @@ void
 XftTextExtentsUtf8(void *dpy, void *xfont,
 		   const FcChar8 *text, int len, void *ext)
 {
-	(void)dpy; (void)xfont; (void)text; (void)len;
-	(void)ext;
+	XGlyphInfo *gi = ext;
+	XftFont *font = xfont;
+
+	(void)dpy; (void)text;
+	mock_xft_text_extents_calls++;
+	if (!gi)
+		return;
+	gi->xOff = (int)((unsigned int)(len > 0 ? len : 0) * mock_xft_advance);
+	gi->yOff = 0;
+	gi->width = gi->xOff;
+	gi->height = font ? font->ascent + font->descent : 0;
 }
 
 int
 XftColorAllocName(void *dpy, void *visual, unsigned long colormap,
 		  const char *name, void *dest)
 {
-	(void)dpy; (void)visual; (void)colormap; (void)name; (void)dest;
+	XftColor *clr = dest;
+
+	(void)dpy; (void)visual; (void)colormap; (void)name;
+	if (!clr)
+		return 0;
+	/* Deterministic non-zero pixel so callers cannot rely on zero-fill. */
+	clr->pixel = 0x00112233UL;
+	clr->red = clr->green = clr->blue = 0;
+	clr->alpha = 0;
 	return 1;
 }
 
@@ -1094,42 +1302,78 @@ XftColorFree(void *dpy, void *visual, unsigned long colormap, void *color)
 void *
 XftFontOpenName(void *dpy, int screen, const char *name)
 {
+	XftFont *font;
+
 	(void)dpy; (void)screen; (void)name;
-	return NULL;
+	mock_xft_font_open_calls++;
+	if (mock_xft_font_fail)
+		return NULL;
+	font = calloc(1, sizeof *font);
+	if (!font)
+		return NULL;
+	font->ascent = 11;
+	font->descent = 4;
+	return font;
 }
 
 void *
 XftFontOpenPattern(void *dpy, void *pattern)
 {
-	(void)dpy; (void)pattern;
-	return NULL;
+	XftFont *font;
+
+	(void)dpy;
+	mock_xft_font_open_calls++;
+	if (mock_xft_font_fail)
+		return NULL;
+	font = calloc(1, sizeof *font);
+	if (!font)
+		return NULL;
+	font->ascent = 11;
+	font->descent = 4;
+	/* Stash the owning pattern so XftFontClose can release it. */
+	font->xfont = pattern;
+	return font;
 }
 
 void
 XftFontClose(void *dpy, void *font)
 {
-	(void)dpy; (void)font;
+	XftFont *f = font;
+
+	(void)dpy;
+	if (!f)
+		return;
+	free(f->xfont); /* pattern stashed by XftFontOpenPattern, or NULL */
+	free(f);
 }
 
 void *
 XftFontMatch(void *dpy, int screen, void *pattern, void *result)
 {
-	(void)dpy; (void)screen; (void)pattern; (void)result;
-	return NULL;
+	(void)dpy; (void)screen; (void)pattern;
+	if (result)
+		*(XftResult *)result = 0;
+	mock_xft_font_open_calls++;
+	if (mock_xft_font_fail)
+		return NULL;
+	/* Real XftFontMatch returns a pattern; XftFontOpenPattern consumes it. */
+	return calloc(1, 1);
 }
 
 void *
 FcNameParse(const FcChar8 *name)
 {
 	(void)name;
-	return NULL;
+	if (mock_xft_font_fail)
+		return NULL;
+	return calloc(1, 1);
 }
 
 FcBool
 FcConfigSubstitute(void *config, void *pattern, FcMatchKind kind)
 {
 	(void)config; (void)pattern; (void)kind;
-	return 0;
+	return 1;
 }
 
 void
@@ -1149,14 +1393,14 @@ FcFontMatch(void *config, void *pattern, FcResult *result)
 void
 FcPatternDestroy(void *pattern)
 {
-	(void)pattern;
+	free(pattern);
 }
 
 void *
 FcPatternDuplicate(const void *pattern)
 {
 	(void)pattern;
-	return NULL;
+	return calloc(1, 1);
 }
 
 FcBool
@@ -1171,14 +1415,14 @@ FcBool
 FcPatternAddBool(void *p, const char *object, FcBool b)
 {
 	(void)p; (void)object; (void)b;
-	return 0;
+	return 1;
 }
 
 FcBool
 FcPatternAddCharSet(void *p, const char *object, FcCharSet *c)
 {
 	(void)p; (void)object; (void)c;
-	return 0;
+	return 1;
 }
 
 FcBool

@@ -10,7 +10,7 @@
  */
 
 #include "mock_x11.h"
-#include "../drw.h"
+#include "drw.h"
 
 /* die() is normally in util.h + mock_x11.c, but drw.c references it
  * and we need a version that calls abort() for test failure. */
@@ -22,7 +22,7 @@ die(const char *file, int line, const char *func, const char *fmt, ...)
 	abort();
 }
 
-#include "../drw.c"
+#include "drw.c"
 
 /* ------------------------------------------------------------------ */
 /* Test helpers                                                        */

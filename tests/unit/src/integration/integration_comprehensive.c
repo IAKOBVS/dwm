@@ -16,8 +16,8 @@
 #define DRW_H
 #include "mock_drw.h"
 
-#include "../dwm.h"
-#include "../dwm.c"
+#include "dwm.h"
+#include "dwm.c"
 
 static int total = 0, failed = 0;
 #define ASSERT(cond, msg) do { \
@@ -4194,6 +4194,53 @@ test_destroynotify_swallowing(void)
 	ASSERT(term->swallowing == NULL, "destroynotify: swallowing freed on child destroy");
 
 	/* child was freed by unmanage; only free term */
+	restore_selmon();
+	winclient_remove(term);
+	free(term); free(m);
+}
+
+/* --- terminal-window destroy while child swallowed: freed child must be
+ * evicted from the winhash (double-free / wintoclient UAF regression) --- */
+static void
+test_destroynotify_terminal_destroys_parked_child_evicts_hash(void)
+{
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
+	Monitor *m = make_monitor(0);
+	Client *term = make_client(10, m);
+	Client *child = make_client(11, m);
+	term->isterminal = 1;
+	term->swallowing = child;
+	m->clients = term;
+	term->next = NULL;
+
+	/* replicate swallow(): ids swapped, child detached from the lists,
+	 * hashed lookups re-keyed (term@11, child@10).  The child's only live
+	 * references are now term->swallowing and its winhash slot. */
+	winclient_remove(term);
+	winclient_remove(child);
+	term->win = 11;
+	child->win = 10;
+	winclient_put(term);
+	winclient_put(child);
+	child->mon = m;
+	mons = m;
+	save_selmon();
+	selmon = m;
+
+	/* terminal dies while its (now parked) id 10 is held by the child:
+	 * DestroyNotify resolves through the hash to the child, and
+	 * unmanage()'s swallow branch frees it.  Its winhash slot must be
+	 * cleared in the same breath — a later window recycling id 10 must
+	 * not resolve to freed memory (wintoclient UAF / free(c) double-free). */
+	XEvent ev;
+	memset(&ev, 0, sizeof ev);
+	ev.xdestroywindow.window = 10;
+	destroynotify(&ev);
+
+	ASSERT(term->swallowing == NULL, "unmanage: swallowed child freed and detached");
+	ASSERT_EQ(wintoclient(10) != NULL, 0, "unmanage: freed child evicted from winhash");
+
 	restore_selmon();
 	winclient_remove(term);
 	free(term); free(m);
@@ -8435,6 +8482,7 @@ main(void)
 
 	/* destroynotify swallowing */
 	test_destroynotify_swallowing();
+	test_destroynotify_terminal_destroys_parked_child_evicts_hash();
 
 	/* updatesizehints full */
 	test_updatesizehints_full();

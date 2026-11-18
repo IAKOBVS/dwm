@@ -1,4 +1,8 @@
-/* dwm.h — central header for the dynamic window manager.
+/* See LICENSE file for copyright and license details. */
+
+/**
+ * @file dwm.h
+ * @brief Central header for the dynamic window manager.
  *
  * Defines all shared types, enums, forward declarations, and global
  * variables used across dwm.c.  The core data structures are:
@@ -31,7 +35,19 @@
 #define GAP_TOGGLE 100
 #define GAP_RESET  0
 
-/* safe string helpers — memcpy + NUL-terminate with known source length */
+/**
+ * @brief Copy a known-length string and NUL-terminate it.
+ *
+ * Avoids `strlen` by taking the source length explicitly. The caller must
+ * guarantee `dst` has room for `src_len + 1` bytes.
+ *
+ * @param[out] dst      Destination buffer.
+ * @param[in]  src      Source bytes (need not be NUL-terminated).
+ * @param[in]  src_len  Number of bytes to copy.
+ * @post `dst[src_len] == '\0'`.
+ * @warning Unbounded: no destination size is checked.
+ * @anchor spec_strcpy_len
+ */
 static inline void
 strcpy_len(char *dst, const char *src, size_t src_len)
 {
@@ -39,7 +55,19 @@ strcpy_len(char *dst, const char *src, size_t src_len)
 	dst[src_len] = '\0';
 }
 
-/* like strcpy_len but returns pointer to the NUL terminator */
+/**
+ * @brief Copy a known-length string and return the new terminator position.
+ *
+ * Like @ref spec_strcpy_len but returns a pointer to the NUL byte, enabling
+ * callers to append further data without re-scanning.
+ *
+ * @param[out] dst      Destination buffer.
+ * @param[in]  src      Source bytes.
+ * @param[in]  src_len  Number of bytes to copy.
+ * @return Pointer to the written NUL terminator (`dst + src_len`).
+ * @warning Unbounded: no destination size is checked.
+ * @anchor spec_stpcpy_len
+ */
 static inline char *
 stpcpy_len(char *dst, const char *src, size_t src_len)
 {
@@ -48,7 +76,21 @@ stpcpy_len(char *dst, const char *src, size_t src_len)
 	return dst + src_len;
 }
 
-/* bounded copy — like strncpy but with explicit source length, no padding */
+/**
+ * @brief Bounded copy of a known-length string.
+ *
+ * Copies at most `dstsize - 1` bytes and always NUL-terminates, unlike
+ * `strncpy` it never pads the remainder of the destination.
+ *
+ * @param[out] dst      Destination buffer.
+ * @param[in]  dstsize  Capacity of @p dst in bytes.
+ * @param[in]  src      Source bytes.
+ * @param[in]  src_len  Available source length.
+ * @return Pointer to the written NUL terminator.
+ * @pre  dstsize > 0.
+ * @post The result is truncated to `dstsize - 1` bytes when necessary.
+ * @anchor spec_stpncpy_len
+ */
 static inline char *
 stpncpy_len(char *dst, size_t dstsize, const char *src, size_t src_len)
 {
@@ -70,104 +112,146 @@ enum { WMProtocols, WMDelete, WMState, WMTakeFocus, WMLast }; /* default atoms *
 enum { ClkTagBar, ClkLtSymbol, ClkStatusText, ClkWinTitle,
        ClkClientWin, ClkRootWin, ClkLast }; /* clicks */
 
+/**
+ * @brief Generic binding argument; one field is valid per consumer.
+ */
 typedef union {
-	int i;
-	unsigned int ui;
-	float f;
-	const void *v;
+	int i;             /**< Signed integer argument. */
+	unsigned int ui;   /**< Unsigned integer argument. */
+	float f;           /**< Floating-point argument (e.g. mfact). */
+	const void *v;     /**< Pointer argument (e.g. command vector). */
 } Arg;
 
+/**
+ * @brief Mouse binding: click region + button + modifier mask → action.
+ */
 typedef struct {
-	unsigned int click;
-	unsigned int mask;
-	unsigned int button;
-	void (*func)(const Arg *arg);
-	const Arg arg;
+	unsigned int click;              /**< Clk* region that must be clicked. */
+	unsigned int mask;               /**< Required modifier state. */
+	unsigned int button;             /**< X button number. */
+	void (*func)(const Arg *arg);    /**< Action to run on match. */
+	const Arg arg;                   /**< Argument passed to @ref func. */
 } Button;
 
 typedef struct Monitor Monitor;
 typedef struct Client Client;
+
+/**
+ * @brief A managed top-level X window.
+ *
+ * Owned by exactly one monitor while managed; linked into `mon->clients`
+ * via @ref next, `mon->stack` via @ref snext, and the global window hash.
+ */
 struct Client {
-	char name[256];
-	float mina, maxa;
-	int x, y, w, h;
-	int oldx, oldy, oldw, oldh;
-	int basew, baseh, incw, inch, maxw, maxh, minw, minh, hintsvalid;
-	int bw, oldbw;
-	unsigned int tags;
-	unsigned char isfixed, isfloating, isurgent, neverfocus, oldstate, isfullscreen, isterminal, noswallow;
-	pid_t pid;
-	Client *next;
-	Client *snext;
-	Client *swallowing;
-	Monitor *mon;
-	Window win;
+	char name[256];                      /**< WM_NAME/`_NET_WM_NAME` cache. */
+	float mina, maxa;                    /**< Aspect ratio hints (min/max). */
+	int x, y, w, h;                      /**< Last applied geometry. */
+	int oldx, oldy, oldw, oldh;          /**< Pre-fullscreen/floating geometry. */
+	int basew, baseh;                    /**< Size-hint base dimensions. */
+	int incw, inch;                      /**< Resize increment hints. */
+	int maxw, maxh;                      /**< Maximum size hints (0 = unbounded). */
+	int minw, minh;                      /**< Minimum size hints. */
+	int hintsvalid;                      /**< Non-zero once hints are cached. */
+	int bw, oldbw;                       /**< Current/previous border width. */
+	unsigned int tags;                   /**< Tag bitmask; never zero, masked to TAGMASK. */
+	unsigned char isfixed;               /**< Size hints marked the size fixed. */
+	unsigned char isfloating;            /**< Floating instead of tiled. */
+	unsigned char isurgent;              /**< Urgency hint requested attention. */
+	unsigned char neverfocus;            /**< Input hint forbids focus. */
+	unsigned char oldstate;              /**< Previous ICCCM WM_STATE. */
+	unsigned char isfullscreen;          /**< Fullscreen state. */
+	unsigned char isterminal;            /**< Matched a terminal rule. */
+	unsigned char noswallow;             /**< Must not be swallowed. */
+	pid_t pid;                           /**< Owning process PID, or 0. */
+	Client *next;                        /**< Next client on `mon->clients`. */
+	Client *snext;                       /**< Next client on `mon->stack`. */
+	Client *swallowing;                  /**< Child this client swallowed, or NULL. */
+	Monitor *mon;                        /**< Owning monitor. */
+	Window win;                          /**< X window ID. */
 };
 
+/**
+ * @brief Keyboard binding: modifier + keysym → action.
+ */
 typedef struct {
-	unsigned int mod;
-	KeySym keysym;
-	void (*func)(const Arg *);
-	const Arg arg;
+	unsigned int mod;                /**< Required modifier mask. */
+	KeySym keysym;                   /**< Key symbol. */
+	void (*func)(const Arg *);       /**< Action to run on match. */
+	const Arg arg;                   /**< Argument passed to @ref func. */
 } Key;
 
-static KeySym key_keysym_used;
-static unsigned int key_mod_used;
+static KeySym key_keysym_used;       /**< Keysym of the last matched binding. */
+static unsigned int key_mod_used;    /**< Modifier mask of the last matched binding. */
 /* Exact binding index: open-addressed set of packed (keysym, CLEANMASK(mod))
  * pairs rebuilt by cachekeys(); lets keypress() reject non-bindings in O(1)
  * instead of the lossy OR-masks above (which pass any keysym once enough
  * bindings are merged, and can't reject chords merely sharing a mod bit). */
 #define KEYSET_SIZE 256 /* power of two; keyset_home() folds to this width */
-static unsigned long long keyset[KEYSET_SIZE];
-static unsigned int keyset_count;
-static unsigned char keyset_saturated; /* set full: masks remain the guard */
-static unsigned long long button_button_used;
-static unsigned int button_mask_used;
+static unsigned long long keyset[KEYSET_SIZE]; /**< Packed exact bindings. */
+static unsigned int keyset_count;              /**< Occupied keyset slots. */
+static unsigned char keyset_saturated;         /**< Set full: masks remain the guard. */
+static unsigned long long button_button_used;  /**< OR of all bound buttons. */
+static unsigned int button_mask_used;          /**< OR of all bound button masks. */
 
+/**
+ * @brief A layout: arrange function plus the symbol shown in the bar.
+ */
 typedef struct {
-	const char *symbol;
-	void (*arrange)(Monitor *);
+	const char *symbol;              /**< Short layout symbol. */
+	void (*arrange)(Monitor *);      /**< Layout implementation. */
 } Layout;
 
+/**
+ * @brief Gap state for a monitor (toggled/adjusted by @ref spec_setgaps).
+ */
 typedef struct {
-	short realgap;
-	short gappx;
-	unsigned char isgap;
+	short realgap;            /**< Effective per-tile gap. */
+	short gappx;              /**< Configured gap size. */
+	unsigned char isgap;      /**< Non-zero when gaps are enabled. */
 } Gap;
 
+/**
+ * @brief A work area (one per Xinerama screen, or one fallback screen).
+ *
+ * Owned by the global `mons` list. Holds its clients, focus stack, tag view,
+ * layouts, geometry, and bar state.
+ */
 struct Monitor {
-	char ltsymbol[16];
-	float mfact;
-	int nmaster;
-	int num;
-	int by;               /* bar geometry */
-	int mx, my, mw, mh;   /* screen size */
-	int wx, wy, ww, wh;   /* window area  */
-	unsigned int seltags;
-	unsigned int sellt;
-	unsigned int tagset[2];
-	unsigned char showbar;
-	unsigned char topbar;
-	unsigned char bar_exposed;
-	unsigned char bar_dirty_segments;
-	Gap gap;
-	Client *clients;
-	Client *sel;
-	Client *stack;
-	Monitor *next;
-	Window barwin;
-	const Layout *lt[2];
+	char ltsymbol[16];                 /**< Current layout symbol. */
+	float mfact;                       /**< Master-area fraction (0.05-0.95). */
+	int nmaster;                       /**< Number of clients in the master area. */
+	int num;                           /**< Monitor index. */
+	int by;                            /**< Bar geometry: bar y position. */
+	int mx, my, mw, mh;                /**< Full screen geometry. */
+	int wx, wy, ww, wh;                /**< Work area (screen minus bar/gaps). */
+	unsigned int seltags;              /**< Active tag set index (0 or 1). */
+	unsigned int sellt;                /**< Active layout index (0 or 1). */
+	unsigned int tagset[2];            /**< Previous/current tag views. */
+	unsigned char showbar;             /**< Bar visibility. */
+	unsigned char topbar;              /**< Bar position (top/bottom). */
+	unsigned char bar_exposed;         /**< Expose invalidated the bar pixmap. */
+	unsigned char bar_dirty_segments;  /**< DIRTY_STATUS|DIRTY_TAGS|DIRTY_TITLE mask. */
+	Gap gap;                           /**< Gap state. */
+	Client *clients;                   /**< Managed clients in management order. */
+	Client *sel;                       /**< Selected client, or NULL. */
+	Client *stack;                     /**< Focus/stack order, most recent first. */
+	Monitor *next;                     /**< Next monitor in `mons`. */
+	Window barwin;                     /**< Bar window ID. */
+	const Layout *lt[2];               /**< Previous/current layout. */
 };
 
+/**
+ * @brief A tag/geometry rule matched by @ref spec_applyrules.
+ */
 typedef struct {
-	const char *class;
-	const char *instance;
-	const char *title;
-	unsigned int tags;
-	unsigned char isfloating;
-	unsigned char isterminal;
-	unsigned char noswallow;
-	int monitor;
+	const char *class;               /**< Substring to match WM_CLASS class. */
+	const char *instance;            /**< Substring to match WM_CLASS instance. */
+	const char *title;               /**< Substring to match the window title. */
+	unsigned int tags;               /**< Tags OR-ed onto a matching client. */
+	unsigned char isfloating;        /**< Set floating state on match. */
+	unsigned char isterminal;        /**< Mark client as a terminal. */
+	unsigned char noswallow;         /**< Prevent swallowing on match. */
+	int monitor;                     /**< Target monitor number, or -1. */
 } Rule;
 
 /* function declarations */

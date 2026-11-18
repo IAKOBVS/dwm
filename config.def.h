@@ -43,6 +43,7 @@ static const Gap default_gap        = {
 };
 static const unsigned int snap      = 32;       /* snap pixel */
 static const int swallowfloating    = 1;        /* 1 means swallow floating windows by default */
+static const int enableswallow      = 1;        /* 1 means swallow child windows into their parent terminal */
 static const int showbar            = 1;        /* 0 means no bar */
 static const int topbar             = 1;        /* 0 means bottom bar */
 

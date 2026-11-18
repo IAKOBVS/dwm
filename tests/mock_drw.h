@@ -26,6 +26,32 @@ typedef struct {
 	Fnt *fonts;
 } Drw;
 
+/* Call recorders: dwm tests assert what the bar asked the drawing layer to do. */
+static int mock_drw_text_calls;
+static int mock_drw_rect_calls;
+static int mock_drw_map_calls;
+static int mock_drw_setfontset_calls;
+static int mock_drw_setscheme_calls;
+static int mock_drw_last_text_x, mock_drw_last_text_y;
+static int mock_drw_last_text_lpad, mock_drw_last_text_invert;
+static unsigned int mock_drw_last_text_w, mock_drw_last_text_h;
+static char mock_drw_last_text[128];
+static int mock_drw_last_rect_x, mock_drw_last_rect_y;
+static unsigned int mock_drw_last_rect_w, mock_drw_last_rect_h;
+static int mock_drw_last_rect_filled, mock_drw_last_rect_invert;
+static Window mock_drw_last_map_win;
+static int mock_drw_last_map_x, mock_drw_last_map_y;
+static unsigned int mock_drw_last_map_w, mock_drw_last_map_h;
+
+static inline void
+mock_drw_reset(void)
+{
+	mock_drw_text_calls = mock_drw_rect_calls = mock_drw_map_calls = 0;
+	mock_drw_setfontset_calls = mock_drw_setscheme_calls = 0;
+	mock_drw_last_text[0] = '\0';
+	mock_drw_last_map_win = 0;
+}
+
 /* No-op stubs — these never actually render */
 static inline Drw *
 drw_create(Display *dpy, int screen, Window root,
@@ -143,12 +169,14 @@ drw_cur_free(Drw *drw, Cur *cursor)
 static inline void
 drw_setfontset(Drw *drw, Fnt *set)
 {
+	mock_drw_setfontset_calls++;
 	if (drw) drw->fonts = set;
 }
 
 static inline void
 drw_setscheme(Drw *drw, Clr *scm)
 {
+	mock_drw_setscheme_calls++;
 	if (drw) drw->scheme = scm;
 }
 
@@ -156,16 +184,38 @@ static inline void
 drw_rect(Drw *drw, int x, int y, unsigned int w, unsigned int h,
 	 int filled, int invert)
 {
-	(void)drw; (void)x; (void)y; (void)w; (void)h;
-	(void)filled; (void)invert;
+	(void)drw;
+	mock_drw_rect_calls++;
+	mock_drw_last_rect_x = x;
+	mock_drw_last_rect_y = y;
+	mock_drw_last_rect_w = w;
+	mock_drw_last_rect_h = h;
+	mock_drw_last_rect_filled = filled;
+	mock_drw_last_rect_invert = invert;
 }
 
 static inline int
 drw_text(Drw *drw, int x, int y, unsigned int w, unsigned int h,
 	 unsigned int lpad, const char *text, int invert)
 {
-	(void)drw; (void)x; (void)y; (void)w; (void)h;
-	(void)lpad; (void)text; (void)invert;
+	int i;
+	const char *p;
+
+	(void)drw;
+	mock_drw_text_calls++;
+	mock_drw_last_text_x = x;
+	mock_drw_last_text_y = y;
+	mock_drw_last_text_w = w;
+	mock_drw_last_text_h = h;
+	mock_drw_last_text_lpad = (int)lpad;
+	mock_drw_last_text_invert = invert;
+	if (text) {
+		for (p = text, i = 0; *p && i < (int)sizeof mock_drw_last_text - 1; p++, i++)
+			mock_drw_last_text[i] = *p;
+		mock_drw_last_text[i] = '\0';
+	} else {
+		mock_drw_last_text[0] = '\0';
+	}
 	return 0;
 }
 
@@ -173,7 +223,13 @@ static inline void
 drw_map(Drw *drw, Window win, int x, int y,
 	unsigned int w, unsigned int h)
 {
-	(void)drw; (void)win; (void)x; (void)y; (void)w; (void)h;
+	(void)drw;
+	mock_drw_map_calls++;
+	mock_drw_last_map_win = win;
+	mock_drw_last_map_x = x;
+	mock_drw_last_map_y = y;
+	mock_drw_last_map_w = w;
+	mock_drw_last_map_h = h;
 }
 
 #endif /* MOCK_DRW_H */

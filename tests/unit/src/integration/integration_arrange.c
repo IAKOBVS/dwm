@@ -16,8 +16,8 @@
 #define DRW_H
 #include "mock_drw.h"
 
-#include "../dwm.h"
-#include "../dwm.c"
+#include "dwm.h"
+#include "dwm.c"
 
 static int total = 0, failed = 0;
 #define ASSERT(cond, msg) do { \

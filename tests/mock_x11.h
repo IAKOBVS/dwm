@@ -503,16 +503,17 @@ typedef struct {
 #define PointerRoot     1
 #define DestroyAll      0
 #define MappingKeyboard 1
+#define MappingPointer  2
 
 /* modifier masks */
 #define ShiftMask       0x00000001
 #define LockMask        0x00000002
 #define ControlMask     0x00000004
 #define Mod1Mask        0x00000008
-#define Mod2Mask        0x00000008
+#define Mod2Mask        0x00000010
 #define Mod3Mask        0x00000020
-#define Mod4Mask        0x00000080
-#define Mod5Mask        0x00000100
+#define Mod4Mask        0x00000040
+#define Mod5Mask        0x00000080
 
 /* keysyms */
 #define XK_0            0x30
@@ -684,6 +685,55 @@ extern int mock_fontset_fail;        /* 0=normal (default), 1=drw_fontset_create
 /* XGetWindowAttributes call-count control */
 extern int mock_getwindowattr_call_count;  /* incremented on each call */
 extern int mock_getwindowattr_fail_at;     /* fail (return 0) on call N; 0=never fail */
+
+/* Recorded X calls: side-effect assertions for otherwise no-op mocks.
+ * Every recorder is cleared by mock_x11_reset(). */
+typedef struct {
+	int count;          /* number of calls since reset */
+	Window win;         /* last window argument */
+	int x, y;           /* last coordinates */
+	unsigned int w, h;  /* last dimensions */
+	unsigned long mask; /* last modifier/mask/property/atom argument */
+	unsigned long aux;  /* second value (type, border, ...) */
+} MockXCall;
+
+extern MockXCall mock_xmap_window;
+extern MockXCall mock_xunmap_window;
+extern MockXCall mock_xmove_window;
+extern MockXCall mock_xmoveresize_window;
+extern MockXCall mock_xresize_window;
+extern MockXCall mock_xraise_window;
+extern MockXCall mock_xconfigure_window;
+extern MockXCall mock_xset_window_border;
+extern MockXCall mock_xset_window_border_width;
+extern MockXCall mock_xset_input_focus;
+extern MockXCall mock_xchange_property;
+extern MockXCall mock_xdelete_property;
+extern MockXCall mock_xsend_event;
+extern MockXCall mock_xkill_client;
+extern MockXCall mock_xrefresh_keyboard_mapping;
+extern MockXCall mock_xset_foreground;
+extern MockXCall mock_xfill_rectangle;
+extern MockXCall mock_xdraw_rectangle;
+extern MockXCall mock_xcopy_area;
+extern int mock_grabbutton_calls;
+extern int mock_ungrabbutton_calls;
+extern int mock_xft_draw_string_calls;
+extern int mock_xft_text_extents_calls;
+extern int mock_xft_char_exists_calls;
+extern int mock_xft_font_open_calls;
+extern int mock_xsync_calls;
+extern int mock_xft_font_fail;          /* 1 = font open/match returns NULL */
+extern unsigned int mock_xft_advance;   /* pixels per byte from XftTextExtentsUtf8 */
+extern long mock_xft_missing_codepoint; /* XftCharExists returns 0 for this cp; -1 = none */
+extern int mock_xft_last_x;
+extern int mock_xft_last_y;
+extern int mock_xft_last_len;
+extern unsigned char mock_xft_last_text[64];
+extern XEvent mock_xsend_event_last;         /* copy of the last XSendEvent event */
+extern XWindowChanges mock_xconfigure_last;  /* copy of the last XConfigureWindow changes */
+extern unsigned char mock_xchange_property_last[32]; /* first bytes of property data */
+extern int mock_xchange_property_last_len;
 
 void mock_x11_reset(void);
 

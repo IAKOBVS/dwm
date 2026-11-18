@@ -20,8 +20,8 @@
 #define DRW_H
 #include "mock_drw.h"
 
-#include "../dwm.h"
-#include "../dwm.c"
+#include "dwm.h"
+#include "dwm.c"
 
 static int total = 0, failed = 0;
 #define ASSERT(cond, msg) do { \
@@ -183,6 +183,34 @@ test_immediate_path_outside_dispatch(void)
 	mons = saved_selmon;
 }
 
+static void
+test_pointer_grab_path_is_immediate(void)
+{
+	long before;
+
+	saved_selmon = selmon;
+	selmon = make_monitor(0);
+	mons = selmon;
+	arrange_calls = 0;
+	dispatching = 1; /* buttonpress handler runs during dispatch */
+	pointergrab = 1; /* but movemouse/resizemouse must reflow at once */
+	before = arrange_calls;
+
+	arrange(selmon);
+	arrange(selmon);
+	ASSERT_EQ(arrange_calls - before, 2,
+		"pointer grab bypasses arrange coalescing");
+	ASSERT_EQ(arrange_pending, 0, "no deferral during a pointer grab");
+
+	pointergrab = 0;
+	dispatching = 0;
+	winhash_count = 0;
+	memset(winhash, 0, sizeof winhash);
+	free(selmon);
+	selmon = saved_selmon;
+	mons = saved_selmon;
+}
+
 /* ------------------------------------------------------------------ */
 /* #4 window -> client hash                                             */
 /* ------------------------------------------------------------------ */
@@ -234,7 +262,7 @@ test_hash_overflow_suppress_and_fallback(void)
 	mons = selmon; /* fallback walk iterates mons */
 	memset(winhash, 0, sizeof winhash);
 	winhash_count = 0;
-
+	winhash_overflowed = 0;
 	/* saturate the table with synthetic clients (static storage: entries
 	 * and the fallback walk must outlive the test) */
 	static Client filler[WINHASH_SIZE];
@@ -261,10 +289,18 @@ test_hash_overflow_suppress_and_fallback(void)
 		"full-table miss falls back to list walk");
 	ASSERT(wintoclient(filler[7].win) == &filler[7],
 		"full table still resolves stored entries");
+
+	/* after a removal the count drops below capacity, but the suppressed
+	 * client is still list-only: the fallback must remain enabled */
+	winclient_remove(&filler[0]);
+	ASSERT(winhash_count < WINHASH_SIZE, "one slot freed");
+	ASSERT(wintoclient(0x999999) == &overflow_client,
+		"fallback stays enabled after a removal from a previously full table");
 	}
 
 	memset(winhash, 0, sizeof winhash);
 	winhash_count = 0;
+	winhash_overflowed = 0;
 	selmon->clients = NULL;
 	free(selmon);
 	selmon = saved_selmon;
@@ -611,6 +647,7 @@ main(void)
 	test_coalesce_geometry_matches_immediate();
 	test_creation_paths_arrange_immediately();
 	test_immediate_path_outside_dispatch();
+	test_pointer_grab_path_is_immediate();
 	test_hash_collision_chain_put_get_remove();
 	test_hash_overflow_suppress_and_fallback();
 	test_swallow_rekeys_window_index();

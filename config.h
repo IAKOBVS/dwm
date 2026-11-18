@@ -47,6 +47,11 @@ static const Gap default_gap        = {
 };
 static const unsigned int snap      = 32;       /* snap pixel */
 static int swallowfloating    = 0;        /* 1 means swallow floating windows by default */
+#ifdef DWM_TEST
+static int enableswallow      = 1;        /* tests exercise the swallow machinery */
+#else
+static int enableswallow      = 0;        /* production: never swallow children into terminals */
+#endif
 static const unsigned char showbar            = 1;        /* 0 means no bar */
 static const unsigned char topbar             = 1;        /* 0 means bottom bar */
 
@@ -70,25 +75,25 @@ static const Rule rules[] = {
          *WM_CLASS(STRING) = instance, class
            *WM_NAME(STRING) = title
              */
-	{ .class = "st-256color",             .instance = NULL, .title = NULL,       .tags = 0,      .isfloating = 0, .isterminal = 1, .noswallow = 0, .monitor = 1 },
-	{ .class = "Alacritty",               .instance = NULL, .title = NULL,       .tags = 0,      .isfloating = 0, .isterminal = 1, .noswallow = 0, .monitor = 1 },
-	{ .class = "resolve",                 .instance = NULL, .title = NULL,       .tags = 1 << 1, .isfloating = 0, .isterminal = 0, .noswallow = 0, .monitor = 1 },
-	{ .class = "Resolve",                 .instance = NULL, .title = NULL,       .tags = 1 << 1, .isfloating = 0, .isterminal = 0, .noswallow = 0, .monitor = 1 },
-	{ .class = "Gimp",                    .instance = NULL, .title = NULL,       .tags = 1 << 1, .isfloating = 0, .isterminal = 0, .noswallow = 0, .monitor = 1 },
-	{ .class = "Mail",                    .instance = NULL, .title = NULL,       .tags = 1 << 7, .isfloating = 0, .isterminal = 0, .noswallow = 0, .monitor = 1 },
-	{ .class = "discord",                 .instance = NULL, .title = NULL,       .tags = 1 << 7, .isfloating = 0, .isterminal = 0, .noswallow = 0, .monitor = 1 },
-	{ .class = "Discord",                 .instance = NULL, .title = NULL,       .tags = 1 << 7, .isfloating = 0, .isterminal = 0, .noswallow = 0, .monitor = 1 },
-	{ .class = "org.mozilla.Thunderbird", .instance = NULL, .title = NULL,       .tags = 1 << 7, .isfloating = 0, .isterminal = 0, .noswallow = 0, .monitor = 1 },
-	{ .class = "Audacity",                .instance = NULL, .title = NULL,       .tags = 1 << 8, .isfloating = 0, .isterminal = 0, .noswallow = 0, .monitor = 1 },
-	{.class =  "audacity",               .instance = NULL, .title = NULL,       .tags = 1 << 8, .isfloating = 0, .isterminal = 0, .noswallow = 0, .monitor = 1 },
-	{.class =  "obs",                    .instance = NULL, .title = NULL,       .tags = 1 << 8, .isfloating = 0, .isterminal = 0, .noswallow = 0, .monitor = 1 },
-	{.class =  "qBittorrent",            .instance = NULL, .title = NULL,       .tags = 1 << 8, .isfloating = 0, .isterminal = 0, .noswallow = 0, .monitor = 1 },
-	{.class =  "qbittorrent",            .instance = NULL, .title = NULL,       .tags = 1 << 8, .isfloating = 0, .isterminal = 0, .noswallow = 0, .monitor = 1 },
-	{.class =  "Steam",                  .instance = NULL, .title = NULL,       .tags = 1 << 8, .isfloating = 0, .isterminal = 0, .noswallow = 0, .monitor = 1 },
-	{.class =  "steam",                  .instance = NULL, .title = NULL,       .tags = 1 << 8, .isfloating = 0, .isterminal = 0, .noswallow = 0, .monitor = 1 },
-	{.class =  "steamwebhelper",         .instance = NULL, .title = NULL,       .tags = 1 << 8, .isfloating = 0, .isterminal = 0, .noswallow = 0, .monitor = 1 },
-	{.class =  NULL,                     .instance = NULL, .title = "WhatsApp", .tags = 1 << 8, .isfloating = 0, .isterminal = 0, .noswallow = 0, .monitor = 1 },
-	{.class =  NULL,                     .instance = NULL, .title = "Gmail",    .tags = 1 << 8, .isfloating = 0, .isterminal = 0, .noswallow = 0, .monitor = 1 },
+	 { .class = "st-256color",             .instance = NULL, .title = NULL,       .tags = 0,      .isfloating = 0, .isterminal = 1, .noswallow = 0, .monitor = 1 },
+	 { .class = "Alacritty",               .instance = NULL, .title = NULL,       .tags = 0,      .isfloating = 0, .isterminal = 1, .noswallow = 0, .monitor = 1 },
+	 { .class = "resolve",                 .instance = NULL, .title = NULL,       .tags = 1 << 1, .isfloating = 0, .isterminal = 0, .noswallow = 0, .monitor = 1 },
+	 { .class = "Resolve",                 .instance = NULL, .title = NULL,       .tags = 1 << 1, .isfloating = 0, .isterminal = 0, .noswallow = 0, .monitor = 1 },
+	 { .class = "Gimp",                    .instance = NULL, .title = NULL,       .tags = 1 << 1, .isfloating = 0, .isterminal = 0, .noswallow = 0, .monitor = 1 },
+	 { .class = "Mail",                    .instance = NULL, .title = NULL,       .tags = 1 << 7, .isfloating = 0, .isterminal = 0, .noswallow = 0, .monitor = 1 },
+	 { .class = "discord",                 .instance = NULL, .title = NULL,       .tags = 1 << 7, .isfloating = 0, .isterminal = 0, .noswallow = 0, .monitor = 1 },
+	 { .class = "Discord",                 .instance = NULL, .title = NULL,       .tags = 1 << 7, .isfloating = 0, .isterminal = 0, .noswallow = 0, .monitor = 1 },
+	 { .class = "org.mozilla.Thunderbird", .instance = NULL, .title = NULL,       .tags = 1 << 7, .isfloating = 0, .isterminal = 0, .noswallow = 0, .monitor = 1 },
+	 { .class = "Audacity",                .instance = NULL, .title = NULL,       .tags = 1 << 8, .isfloating = 0, .isterminal = 0, .noswallow = 0, .monitor = 1 },
+	{ .class =  "audacity",               .instance = NULL, .title = NULL,       .tags = 1 << 8, .isfloating = 0, .isterminal = 0, .noswallow = 0, .monitor = 1 },
+	{ .class =  "obs",                    .instance = NULL, .title = NULL,       .tags = 1 << 8, .isfloating = 0, .isterminal = 0, .noswallow = 0, .monitor = 1 },
+	{ .class =  "qBittorrent",            .instance = NULL, .title = NULL,       .tags = 1 << 8, .isfloating = 0, .isterminal = 0, .noswallow = 0, .monitor = 1 },
+	{ .class =  "qbittorrent",            .instance = NULL, .title = NULL,       .tags = 1 << 8, .isfloating = 0, .isterminal = 0, .noswallow = 0, .monitor = 1 },
+	{ .class =  "Steam",                  .instance = NULL, .title = NULL,       .tags = 1 << 8, .isfloating = 0, .isterminal = 0, .noswallow = 0, .monitor = 1 },
+	{ .class =  "steam",                  .instance = NULL, .title = NULL,       .tags = 1 << 8, .isfloating = 0, .isterminal = 0, .noswallow = 0, .monitor = 1 },
+	{ .class =  "steamwebhelper",         .instance = NULL, .title = NULL,       .tags = 1 << 8, .isfloating = 0, .isterminal = 0, .noswallow = 0, .monitor = 1 },
+	{ .class =  NULL,                     .instance = NULL, .title = "WhatsApp", .tags = 1 << 8, .isfloating = 0, .isterminal = 0, .noswallow = 0, .monitor = 1 },
+	{ .class =  NULL,                     .instance = NULL, .title = "Gmail",    .tags = 1 << 8, .isfloating = 0, .isterminal = 0, .noswallow = 0, .monitor = 1 },
 	/* { "kdenlive",     NULL, NULL, 1 << 1, 0, 0, 0, 1 }, */
 	/* { "jamesdsp",    NULL, NULL, 1 << 7, 0, 0, 0, 1 }, */
 #ifdef DWM_TEST
@@ -150,52 +155,51 @@ static const char *killatfullscreen[] = {
 #endif
 
 static const Key keys[] = {
-	{ .mod = MODKEY,            .keysym = XK_p,                    .func = spawn,         .arg = { .v = dmenucmd } },
-	{ .mod = MODKEY,            .keysym = XK_Return,               .func = spawn,         .arg = SHCMD("alacritty msg create-window || alacritty") },
-	/* {  .mod = MODKEY,            .keysym = XK_Return,               .func = spawn,         .arg = CMD("st") }, */
-	/* {  .mod = MODKEY,            .keysym = XK_Return,               .func = spawn,         .arg = CMD("gaming-unkill") }, */
-	/* {  .mod = ALTKEY,            .keysym =    XK_Return,            .func = spawn,         .arg = CMD("st") }, */
-	{ .mod = MODKEY,            .keysym = XK_b,                    .func = togglebar,     .arg = {0} },
-	{ .mod = MODKEY,            .keysym = XK_j,                    .func = focusstack,    .arg = { .i= +1 } },
-	{ .mod = MODKEY,            .keysym = XK_k,                    .func = focusstack,    .arg = { .i= -1 } },
-	{ .mod = MODKEY,            .keysym = XK_f,                    .func = togglefullscr, .arg = {0} },
-	{ .mod = MODKEY,            .keysym = XK_h,                    .func = setmfact,      .arg = { .f= -0.05f} },
-	{ .mod = MODKEY,            .keysym = XK_l,                    .func = setmfact,      .arg = { .f= +0.05f} },
-	{ .mod = MODKEY,            .keysym = XK_q,                    .func = killclient,    .arg = {0} },
-	/* {  .mod = MODKEY,            .keysym = K_q,                     .func = spawn,         .arg = CMD("gaming-kill-when-steam-running") }, */
-	{ .mod = MODKEY,            .keysym = XK_space,                .func = zoom,          .arg = {0} },
-	{.mod =  MODKEY,           .keysym = XK_Tab,                  .func = view,          .arg = {0} },
-	/* {  .mod =  MODKEY,           .keysym = XK_space,                .func = setlayout,     .arg = { .v = &layouts[0]} }, */ /* collided with zoom */
-	{.mod =  MODKEY,           .keysym = XK_comma,                .func = focusmon,      .arg = { .i= -1 } },
-	{.mod =  MODKEY,           .keysym = XK_period,               .func = focusmon,      .arg = { .i= +1 } },
-	/* {  .mod =  ALTKEY,           .keysym = XK_comma,                .func = tagmon,        .arg = { .i= -1 } }, */
-	/* {  .mod =  ALTKEY,           .keysym = XK_period,               .func = tagmon,        .arg = { .i= +1 } }, */
-	{.mod =  MODKEY,           .keysym = XK_w,                    .func = spawn,         .arg = CMD(BROWSER) },
-	{.mod =  MODKEY,           .keysym = XK_s,                    .func = spawn,         .arg = CMD("dsite") },
-	{.mod =  MODKEY,           .keysym = XK_c,                    .func = spawn,         .arg = CMD("dclip") },
-	{.mod =  MODKEY,           .keysym = XK_m,                    .func = spawn,         .arg = CMD(MIC_MUTE) },
-	{.mod =  MODKEY|ShiftMask, .keysym = XK_m,                    .func = spawn,         .arg = CMD(AUDIO_MUTE) },
-	{.mod =  MODKEY|ShiftMask, .keysym = XK_0,                    .func = spawn,         .arg = CMD(OBS) },
-	{.mod =  MODKEY|ShiftMask, .keysym = XK_grave,                .func = spawn,         .arg = CMD(OBS_RECORD) },
-	/* {  .mod =  MODKEY,           .keysym = XK_c,                    .func = spawn,         .arg = CMD(COLOR_PICKER) }, */ /* collided with dclip */
-	{.mod =  MODKEY|ShiftMask, .keysym = XK_a,                    .func = spawn,         .arg = CMD("switchaudioport") },
-	/* {  .mod =  MODKEY,           .keysym = XK_s,                    .func = spawn,         .arg = CMD(SCREENSHOT) }, */ /* collided with dsite */
-	{.mod =  MODKEY,           .keysym = XK_minus,                .func = spawn,         .arg = CMD_ARGS(VOLUME_DOWN, "1") },
-	{.mod =  ALTKEY,           .keysym = XK_minus,                .func = spawn,         .arg = CMD_ARGS(VOLUME_DOWN, "2") },
-	{.mod =  MODKEY,           .keysym = XK_equal,                .func = spawn,         .arg = CMD_ARGS(VOLUME_UP,   "1") },
-	{.mod =  ALTKEY,           .keysym = XK_equal,                .func = spawn,         .arg = CMD_ARGS(VOLUME_UP,   "2") },
-	{.mod =  ALTKEY,           .keysym = XK_F9,                   .func = spawn,         .arg = CMD("cfan") },
-	/* {  .mod =  MODKEY,           .keysym = XF86XK_AudioLowerVolume, .func = spawn,         .arg = CMD_ARGS("sudo", CFAN_MEDIUM) }, */
-	/* {  .mod =  MODKEY,           .keysym = XF86XK_AudioRaiseVolume, .func = spawn,         .arg = CMD_ARGS("sudo", CFAN_HIGH) }, */
-	{.mod =  MODKEY,           .keysym = XK_u,                    .func = spawn,         .arg = SHCMD(TERMINAL " -e system-update")},
-	/* {  .mod =  MODKEY,           .keysym = XK_u,                    .func = spawn,         .arg = SHCMD(TERMINAL " -e system-update-aur")}, */
-	{.mod =  MODKEY,           .keysym = XK_a,                    .func = spawn,         .arg = SHCMD("pgrep 'audacity' || auda")},
-	{.mod =  MODKEY|ShiftMask, .keysym = XK_equal,                .func = setgaps,       .arg = { .i= -1 } },
-	{.mod =  MODKEY|ShiftMask, .keysym = XK_minus,                .func = setgaps,       .arg = { .i= +1 } },
-	{.mod =  ALTKEY|ShiftMask, .keysym = XK_equal,                .func = setgaps,       .arg = { .i= -5 } },
-	{.mod =  ALTKEY|ShiftMask, .keysym = XK_minus,                .func = setgaps,       .arg = { .i= +5 } },
-	{.mod =  ALTKEY|ShiftMask, .keysym = XK_0,                    .func = setgaps,       .arg = { .i= GAP_RESET } },
-	{.mod =  MODKEY|ShiftMask, .keysym = XK_9,                    .func = setgaps,       .arg = { .i= GAP_TOGGLE} },
+	 { .mod = MODKEY,            .keysym = XK_p,                    .func = spawn,         .arg = { .v = dmenucmd } },
+	 { .mod = MODKEY,            .keysym = XK_Return,               .func = spawn,         .arg = SHCMD("alacritty msg create-window || alacritty") },
+	 {  .mod = ALTKEY,            .keysym =    XK_Return,            .func = spawn,         .arg = CMD("st") },
+	 /* {  .mod = MODKEY,            .keysym = XK_Return,               .func = spawn,         .arg = CMD("gaming-unkill") }, */
+	 { .mod = MODKEY,            .keysym = XK_b,                    .func = togglebar,     .arg = {0} },
+	 { .mod = MODKEY,            .keysym = XK_j,                    .func = focusstack,    .arg = { .i= +1 } },
+	 { .mod = MODKEY,            .keysym = XK_k,                    .func = focusstack,    .arg = { .i= -1 } },
+	 { .mod = MODKEY,            .keysym = XK_f,                    .func = togglefullscr, .arg = {0} },
+	 { .mod = MODKEY,            .keysym = XK_h,                    .func = setmfact,      .arg = { .f= -0.05f} },
+	 { .mod = MODKEY,            .keysym = XK_l,                    .func = setmfact,      .arg = { .f= +0.05f} },
+	 { .mod = MODKEY,            .keysym = XK_q,                    .func = killclient,    .arg = {0} },
+	/* {   .mod = MODKEY,            .keysym = K_q,                     .func = spawn,         .arg = CMD("gaming-kill-when-steam-running") }, */
+	 { .mod = MODKEY,            .keysym = XK_space,                .func = zoom,          .arg = {0} },
+	{ .mod =  MODKEY,           .keysym = XK_Tab,                  .func = view,          .arg = {0} },
+	/* {   .mod =  MODKEY,           .keysym = XK_space,                .func = setlayout,     .arg = { .v = &layouts[0]} }, */ /* collided with zoom */
+	{ .mod =  MODKEY,           .keysym = XK_comma,                .func = focusmon,      .arg = { .i= -1 } },
+	{ .mod =  MODKEY,           .keysym = XK_period,               .func = focusmon,      .arg = { .i= +1 } },
+	/* {   .mod =  ALTKEY,           .keysym = XK_comma,                .func = tagmon,        .arg = { .i= -1 } }, */
+	/* {   .mod =  ALTKEY,           .keysym = XK_period,               .func = tagmon,        .arg = { .i= +1 } }, */
+	{ .mod =  MODKEY,           .keysym = XK_w,                    .func = spawn,         .arg = CMD(BROWSER) },
+	{ .mod =  MODKEY,           .keysym = XK_s,                    .func = spawn,         .arg = CMD("dsite") },
+	{ .mod =  MODKEY,           .keysym = XK_c,                    .func = spawn,         .arg = CMD("dclip") },
+	{ .mod =  MODKEY,           .keysym = XK_m,                    .func = spawn,         .arg = CMD(MIC_MUTE) },
+	{ .mod =  MODKEY|ShiftMask, .keysym = XK_m,                    .func = spawn,         .arg = CMD(AUDIO_MUTE) },
+	{ .mod =  MODKEY|ShiftMask, .keysym = XK_0,                    .func = spawn,         .arg = CMD(OBS) },
+	{ .mod =  MODKEY|ShiftMask, .keysym = XK_grave,                .func = spawn,         .arg = CMD(OBS_RECORD) },
+	/* {   .mod =  MODKEY,           .keysym = XK_c,                    .func = spawn,         .arg = CMD(COLOR_PICKER) }, */ /* collided with dclip */
+	{ .mod =  MODKEY|ShiftMask, .keysym = XK_a,                    .func = spawn,         .arg = CMD("switchaudioport") },
+	/* {   .mod =  MODKEY,           .keysym = XK_s,                    .func = spawn,         .arg = CMD(SCREENSHOT) }, */ /* collided with dsite */
+	{ .mod =  MODKEY,           .keysym = XK_minus,                .func = spawn,         .arg = CMD_ARGS(VOLUME_DOWN, "1") },
+	{ .mod =  ALTKEY,           .keysym = XK_minus,                .func = spawn,         .arg = CMD_ARGS(VOLUME_DOWN, "2") },
+	{ .mod =  MODKEY,           .keysym = XK_equal,                .func = spawn,         .arg = CMD_ARGS(VOLUME_UP,   "1") },
+	{ .mod =  ALTKEY,           .keysym = XK_equal,                .func = spawn,         .arg = CMD_ARGS(VOLUME_UP,   "2") },
+	{ .mod =  ALTKEY,           .keysym = XK_F9,                   .func = spawn,         .arg = CMD("cfan") },
+	/* {   .mod =  MODKEY,           .keysym = XF86XK_AudioLowerVolume, .func = spawn,         .arg = CMD_ARGS("sudo", CFAN_MEDIUM) }, */
+	/* {   .mod =  MODKEY,           .keysym = XF86XK_AudioRaiseVolume, .func = spawn,         .arg = CMD_ARGS("sudo", CFAN_HIGH) }, */
+	{ .mod =  MODKEY,           .keysym = XK_u,                    .func = spawn,         .arg = SHCMD(TERMINAL " -e system-update")},
+	/* {   .mod =  MODKEY,           .keysym = XK_u,                    .func = spawn,         .arg = SHCMD(TERMINAL " -e system-update-aur")}, */
+	{ .mod =  MODKEY,           .keysym = XK_a,                    .func = spawn,         .arg = SHCMD("pgrep 'audacity' || auda")},
+	{ .mod =  MODKEY|ShiftMask, .keysym = XK_equal,                .func = setgaps,       .arg = { .i= -1 } },
+	{ .mod =  MODKEY|ShiftMask, .keysym = XK_minus,                .func = setgaps,       .arg = { .i= +1 } },
+	{ .mod =  ALTKEY|ShiftMask, .keysym = XK_equal,                .func = setgaps,       .arg = { .i= -5 } },
+	{ .mod =  ALTKEY|ShiftMask, .keysym = XK_minus,                .func = setgaps,       .arg = { .i= +5 } },
+	{ .mod =  ALTKEY|ShiftMask, .keysym = XK_0,                    .func = setgaps,       .arg = { .i= GAP_RESET } },
+	{ .mod =  MODKEY|ShiftMask, .keysym = XK_9,                    .func = setgaps,       .arg = { .i= GAP_TOGGLE} },
 	/* { ALTKEY|ShiftMask,          .keysym = XK_q,                    .func = quit,          .arg = {0} }, */
 	TAGKEYS(XK_1, 0)
 	TAGKEYS(XK_2, 1)

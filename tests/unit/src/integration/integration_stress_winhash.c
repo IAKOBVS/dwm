@@ -21,8 +21,8 @@
 #define DRW_H
 #include "mock_drw.h"
 
-#include "../dwm.h"
-#include "../dwm.c"
+#include "dwm.h"
+#include "dwm.c"
 
 static int total = 0, failed = 0;
 #define ASSERT(cond, msg) do { \
@@ -59,6 +59,7 @@ reset_model(void)
 	int i;
 	memset(winhash, 0, sizeof winhash);
 	winhash_count = 0;
+	winhash_overflowed = 0;
 	memset(pool, 0, sizeof pool);
 	ref_count = 0;
 	free_top = POOL_MAX;

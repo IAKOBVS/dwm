@@ -51,6 +51,16 @@ uninstall:
 	rm -f ${DESTDIR}${PREFIX}/bin/dwm\
 		${DESTDIR}${MANPREFIX}/man1/dwm.1
 
+# Architecture + function contracts. Requires doxygen.
+docs:
+	doxygen docs/Doxyfile
+	@echo "docs: docs/build/html/index.html"
+
+# Verify every @anchor spec_<fn> is unique and every unit test file
+# names an existing anchor.
+spec-check:
+	python3 tests/spec_check.py
+
 -include ${DEP}
 
-.PHONY: all options clean dist install uninstall
+.PHONY: all options clean dist install uninstall docs spec-check

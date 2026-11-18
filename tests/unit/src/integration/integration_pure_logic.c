@@ -19,10 +19,10 @@
 #include "mock_drw.h"
 
 /* drw.h (included via dwm.h) provides Drw, Cur, Clr types */
-#include "../dwm.h"
+#include "dwm.h"
 
 /* Include the actual dwm source (with main() guarded out by DWM_TEST) */
-#include "../dwm.c"
+#include "dwm.c"
 
 /* Test infrastructure */
 static int total = 0, failed = 0;

@@ -1,6 +1,6 @@
 #!/bin/sh
-# dwm test runner — builds and runs every test binary from the Makefile's
-# wildcard list (not just a hardcoded subset) and propagates failures.
+# dwm test runner — builds and runs every per-function suite discovered
+# under unit/src/<module>/ (not a hardcoded subset) and propagates failures.
 # Concurrency is capped at MAX_JOBS parallel suites.
 
 set -e
@@ -11,16 +11,17 @@ TD="/tmp/dwm-run-$$"
 trap 'rm -rf "$TD"' EXIT INT TERM
 mkdir -p "$TD"
 
-# Discover suites the same way the Makefile does
-SUITES="$(ls test_*.c | sed 's/\.c$//')"
+# Discover suite labels the same way the Makefile does; binaries are flat
+# in bin/ and named after the test source basename.
+SUITES="$(find unit -name '*.c' -exec basename {} .c \; | sort)"
 
 make -s clean 2>/dev/null || true
-make -s
+make -s -j"$MAX_JOBS"
 
 run_suite() {
 	suite=$1
 	out=$TD/$suite.log
-	if "./$suite" >"$out" 2>&1; then
+	if "./bin/$suite" >"$out" 2>&1; then
 		echo PASS >"$TD/$suite.status"
 	else
 		echo "FAIL: exit $?" >"$TD/$suite.status"

@@ -21,6 +21,7 @@
  * To understand everything else, start reading main().
  */
 #include <fcntl.h>
+#include <errno.h>
 #include <locale.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -56,12 +57,22 @@
 #define CLEANMASK(mask)         (mask & ~(numlockmask|LockMask) & (ShiftMask|ControlMask|Mod1Mask|Mod2Mask|Mod3Mask|Mod4Mask|Mod5Mask)) /* strip lock bits, keep only modifiers */
 #define INTERSECT(x,y,w,h,m)    (MAX(0, MIN((x)+(w),(m)->wx+(m)->ww) - MAX((x),(m)->wx)) /* pixel overlap of rect and monitor m */\
                                * MAX(0, MIN((y)+(h),(m)->wy+(m)->wh) - MAX((y),(m)->wy)))
+/**
+ * @brief True when a client's tags intersect the monitor's current view.
+ * @param C  Client with a valid `mon`, `tags`, and monitor tag state.
+ * @anchor spec_isvisible
+ */
 #define ISVISIBLE(C)            ((C->tags & C->mon->tagset[C->mon->seltags])) /* true if client tagged in current view */
 #define LENGTH(X)               (sizeof X / sizeof X[0])
 #define MOUSEMASK               (BUTTONMASK|PointerMotionMask)
 #define WIDTH(X)                ((X)->w + 2 * (X)->bw)
 #define HEIGHT(X)               ((X)->h + 2 * (X)->bw)
 #define TAGMASK                 ((1 << LENGTH(tags)) - 1)
+/**
+ * @brief Pixel width of a text string including horizontal padding.
+ * @param X  NUL-terminated string.
+ * @anchor spec_textw
+ */
 #define TEXTW(X)                (drw_fontset_getwidth(drw, (X)) + lrpad)
 #define S_LEN(s)     (sizeof(s) - 1)
 #define S_LITERAL(s) (s), (sizeof(s) - 1)
@@ -69,6 +80,7 @@ static const int lrpad_modifier = 1;
 static int bar_draw_pending = 0;     /* deferred drawbar requested; executed at run() loop tail */
 static int arrange_pending = 0;      /* deferred arrange requested; executed at run() loop tail */
 static int dispatching = 0;          /* true while run() dispatches an event handler; enables arrange coalescing */
+static int pointergrab = 0;          /* true inside movemouse/resizemouse; force immediate reflow */
 
 /* Window -> Client lookup cache.
  * wintoclient() is called on every event delivery (enter/notify, property,
@@ -81,6 +93,7 @@ static int dispatching = 0;          /* true while run() dispatches an event han
 #define WINHASH_SIZE 256   /* power of two */
 static Client *winhash[WINHASH_SIZE];
 static unsigned int winhash_count = 0;
+static int winhash_overflowed = 0;   /* an insert was suppressed; lists are authoritative */
 static unsigned int winhash_home(Window w);
 static void winclient_put(Client *c);
 static void winclient_remove(Client *c);
@@ -97,11 +110,28 @@ long arrange_calls = 0;              /* test observability: layout passes perfor
 /* configuration, allows nested code to access above variables */
 #include "config.h"
 
-/* compile-time check if all tags fit into an unsigned int bit array. */
+/**
+ * @brief Compile-time guard that all tags fit in an unsigned int bitmask.
+ */
 struct NumTags { char limitexceeded[LENGTH(tags) > 31 ? -1 : 1]; };
 
-/* function implementations */
-/* match client against rules[]; set isfloating, tags, monitor, isterminal, noswallow */
+/**
+ * @brief Apply matching rules[] entries to a client.
+ *
+ * Resets c->isfloating and c->tags, pulls WM_CLASS from the X server, and
+ * applies every matching rule's floating, tag, monitor, terminal and noswallow
+ * fields. When no rule supplies tags the client inherits the current view's
+ * tags.
+ *
+ * @param[in,out]  c  Client whose fields are updated; c->win and c->mon must already be set.
+ *
+ * @pre c != NULL, c->win is a valid X window and c->mon is a valid monitor.
+ * @post c->tags is non-zero and masked to TAGMASK; c->mon points into mons.
+ * @note Reads rules[]/broken; writes c->tags, c->isfloating, c->isterminal, c->noswallow and c->mon; calls XGetClassHint() and XFree().
+ * @warning The tag fallback uses c->mon, so c->mon must be initialized even when no rule matches.
+ * @see manage, termforwin, applysizehints
+ * @anchor spec_applyrules
+ */
 void
 applyrules(Client *c)
 {
@@ -140,7 +170,30 @@ applyrules(Client *c)
 	c->tags = c->tags & TAGMASK ? c->tags & TAGMASK : c->mon->tagset[c->mon->seltags];
 }
 
-/* clamp geometry to ICCCM size hints (min/max, aspect, increment), return whether geometry changed */
+/**
+ * @brief Clamp geometry to ICCCM size hints and workarea bounds.
+ *
+ * Forces at least a 1-pixel size and the bar height as a minimum, keeps the
+ * rectangle on-screen (interact uses the full screen, otherwise the client's
+ * monitor workarea), then applies base/min/max size, aspect ratio and resize
+ * increment hints when hints are honored. Returns whether the clamped geometry
+ * differs from the client's current geometry.
+ *
+ * @param[in]  c  Client whose cached hints are consulted.
+ * @param[in,out]  x  Proposed X coordinate, clamped in place.
+ * @param[in,out]  y  Proposed Y coordinate, clamped in place.
+ * @param[in,out]  w  Proposed width, clamped in place.
+ * @param[in,out]  h  Proposed height, clamped in place.
+ * @param[in]  interact  Non-zero for mouse-driven geometry, zero for layout geometry.
+ *
+ * @return Non-zero when any resulting coordinate or size differs from c->x/y/w/h; zero when the geometry is unchanged.
+ *
+ * @pre c != NULL, c->mon is valid, and x/y/w/h point to initialized integers.
+ * @post The pointed-to values hold the clamped geometry; size-hint fields may have been refreshed via updatesizehints().
+ * @note Reads resizehints, sw, sh and bh; may call updatesizehints() (which issues XGetWMNormalHints()) when c->hintsvalid is clear.
+ * @see updatesizehints, resize, resizeclient, tile
+ * @anchor spec_applysizehints
+ */
 int
 applysizehints(Client *c, int *x, int *y, int *w, int *h, int interact)
 {
@@ -211,28 +264,47 @@ applysizehints(Client *c, int *x, int *y, int *w, int *h, int interact)
 
 static void arrangenow(Monitor *m);
 
-/* hide/show clients and apply current layout on monitor m (or all if NULL).
- * While run() dispatches an event handler, requests are coalesced into a
- * single full arrange at the event-loop tail (flusheventtail()) so event
- * bursts (tag switches, multi-window property storms) cost one layout pass
- * instead of N.  The low-frequency creation paths — manage(), unmanage(),
- * swallow() — bypass the defer and call arrangenow() directly so the
- * per-window map/unmap transitions stay frame-visible.  Calls outside
- * event dispatch — pointer grabs (movemouse/resizemouse), setup(), scan()
- * — are immediate because dispatching is unset there. */
+/**
+ * @brief Request a layout pass, coalesced while an event is being dispatched.
+ *
+ * During event dispatch and outside a pointer grab the request is recorded in
+ * arrange_pending and performed once at the event-loop tail. Low-frequency
+ * creation and destruction paths bypass the deferral by calling arrangenow()
+ * directly so per-window map/unmap transitions stay visible; calls outside event
+ * dispatch (pointer grabs, setup, scan) run immediately.
+ *
+ * @param[in]  m  Monitor to arrange, or NULL to arrange every monitor.
+ *
+ * @post Either the layout ran immediately or arrange_pending is set for flusheventtail().
+ * @note Reads dispatching and pointergrab; writes arrange_pending.
+ * @see arrangenow, flusheventtail, run, arrangemon
+ * @anchor spec_arrange
+ */
 void
 arrange(Monitor *m)
 {
-	if (dispatching) {
+	if (dispatching && !pointergrab) {
 		arrange_pending = 1;
 		return;
 	}
 	arrangenow(m);
 }
 
-/* Perform a full layout pass immediately: show/hide clients, apply the
- * current layout and restack. Bypasses arrange()'s coalescing; called from
- * arrange() outside event dispatch and by flusheventtail() at loop tail. */
+/**
+ * @brief Perform a full layout pass immediately.
+ *
+ * Shows or hides clients on the requested monitor (or all monitors), invokes
+ * each monitor's current layout function and reapplies stacking. This bypasses
+ * arrange()'s event-dispatch coalescing.
+ *
+ * @param[in]  m  Monitor to arrange, or NULL to arrange every monitor.
+ *
+ * @pre The mons list is valid; if m is non-NULL it must belong to mons and have an allocated gap.
+ * @post Client visibility, geometry and stacking reflect the current layout.
+ * @note Increments arrange_calls under DWM_TEST; restack() sets bar_draw_pending; issues X11 geometry and stacking calls via the layout and restack.
+ * @see arrange, arrangemon, restack, flusheventtail
+ * @anchor spec_arrangenow
+ */
 static void
 arrangenow(Monitor *m)
 {
@@ -250,9 +322,17 @@ arrangenow(Monitor *m)
 		arrangemon(m);
 }
 
-/* Executed after each dispatched event: at most one layout pass if any
- * handler requested one, then coalesced bar redraws.  Arrange runs first
- * so bars render against post-layout geometry. */
+/**
+ * @brief Run deferred layout and bar-redraw work after an event.
+ *
+ * Performs at most one full layout pass when arrange_pending is set, then
+ * issues coalesced bar redraws when bar_draw_pending is set. The layout runs
+ * first so bars render against post-layout geometry.
+ *
+ * @note Clears arrange_pending and bar_draw_pending; calls arrangenow() and drawbars() (Xft/X11 drawing).
+ * @see arrange, drawbars, run
+ * @anchor spec_flusheventtail
+ */
 static void
 flusheventtail(void)
 {
@@ -266,8 +346,19 @@ flusheventtail(void)
 	}
 }
 
-/* Refresh the monitor's layout symbol and run its current layout function
- * (no-op layout functions leave placement untouched). */
+/**
+ * @brief Refresh the layout symbol and run a monitor's layout function.
+ *
+ * Copies the current layout's symbol into m->ltsymbol and invokes its arrange
+ * hook when one exists. Floating layouts have no arrange hook, so placement is
+ * left untouched.
+ *
+ * @param[in]  m  Monitor whose current layout is applied.
+ *
+ * @note Writes m->ltsymbol; may invoke resize() and other X11 operations through the layout function.
+ * @see arrange, setlayout, tile, monocle
+ * @anchor spec_arrangemon
+ */
 void
 arrangemon(Monitor *m)
 {
@@ -276,7 +367,18 @@ arrangemon(Monitor *m)
 		m->lt[m->sellt]->arrange(m);
 }
 
-/* Prepend a client to its monitor's client list (newest first). */
+/**
+ * @brief Prepend a client to its monitor's client list.
+ *
+ * Newest clients become the list head.
+ *
+ * @param[in,out]  c  Client to link; c->mon must be valid.
+ *
+ * @note Writes c->next and c->mon->clients.
+ * @warning Does not check whether c is already linked.
+ * @see detach, attachstack, manage
+ * @anchor spec_attach
+ */
 void
 attach(Client *c)
 {
@@ -284,7 +386,18 @@ attach(Client *c)
 	c->mon->clients = c;
 }
 
-/* Push a client onto its monitor's focus-history stack (most recent first). */
+/**
+ * @brief Push a client onto its monitor's focus-history stack.
+ *
+ * The most recently focused client becomes the stack head.
+ *
+ * @param[in,out]  c  Client to link; c->mon must be valid.
+ *
+ * @note Writes c->snext and c->mon->stack.
+ * @warning Does not check whether c is already on the stack.
+ * @see detachstack, focus
+ * @anchor spec_attachstack
+ */
 void
 attachstack(Client *c)
 {
@@ -292,14 +405,29 @@ attachstack(Client *c)
 	c->mon->stack = c;
 }
 
-/* Swallow spawned client c into its parent terminal p: the window ids swap
- * so p displays c's content, while p's terminal window is unmapped and parked
- * on c (WithdrawnState) until unswallow() reverses the exchange. */
+/**
+ * @brief Make terminal p adopt the newly spawned client c's window.
+ *
+ * The two window ids are exchanged so p displays c's content while p's own
+ * terminal window is unmapped and parked on c (WithdrawnState) until
+ * unswallow() reverses the exchange. Both hash entries are re-indexed after the
+ * swap and the parent's title is refreshed.
+ *
+ * @param[in,out]  p  Terminal client that adopts c's window.
+ * @param[in,out]  c  Spawned child client whose window is transferred.
+ *
+ * @pre c is managed and distinct from p; c->mon is valid.
+ * @post p->swallowing == c; window ids and hash entries are swapped; p's bar title segment is dirty.
+ * @note Reads enableswallow and swallowfloating; detaches c from the client and focus stacks; mutates winhash; calls XUnmapWindow(), XMoveResizeWindow(), arrangenow(), configure(), updatetitle() and updateclientlist().
+ * @warning Removes c from its monitor lists before returning; callers must not reuse the old list links.
+ * @see unswallow, swallowingclient, termforwin
+ * @anchor spec_swallow
+ */
 void
 swallow(Client *p, Client *c)
 {
 
-	if (c->noswallow || c->isterminal)
+	if (!enableswallow || c->noswallow || c->isterminal)
 		return;
 	if (!swallowfloating && c->isfloating)
 		return;
@@ -323,16 +451,29 @@ swallow(Client *p, Client *c)
 	winclient_put(c);
 	updatetitle(p);
 	/* parent adopted child's name; client list unchanged, tags untouched */
-	selmon->bar_dirty_segments |= DIRTY_TITLE;
+	p->mon->bar_dirty_segments |= DIRTY_TITLE;
 	XMoveResizeWindow(dpy, p->win, p->x, p->y, p->w, p->h);
 	arrangenow(p->mon); /* creation path: keep the swap transition visible */
 	configure(p);
 	updateclientlist();
 }
 
-/* Reverse of swallow(): give the terminal client its own window id back,
- * discard the parked placeholder, remap the terminal window and restore
- * normal state. */
+/**
+ * @brief Reverse a swallow exchange and restore the terminal window.
+ *
+ * Drops both stale hash entries, transfers the parked placeholder's window id
+ * back to c, frees the placeholder, leaves fullscreen, remaps the window and
+ * restores NormalState before refocusing.
+ *
+ * @param[in,out]  c  Holder client whose placeholder is being dissolved.
+ *
+ * @pre c->swallowing != NULL.
+ * @post c->swallowing == NULL; c owns its original window id and is mapped in NormalState.
+ * @note Calls winclient_remove()/winclient_put(), setfullscreen(), updatetitle(), arrange(), XMapWindow(), XMoveResizeWindow(), setclientstate() and focus().
+ * @warning Frees the placeholder client; it must not be referenced afterwards.
+ * @see swallow, unmanage
+ * @anchor spec_unswallow
+ */
 void
 unswallow(Client *c)
 {
@@ -357,12 +498,21 @@ unswallow(Client *c)
 	arrange(c->mon);
 }
 
-/* Route a button press: focus the clicked monitor/client, classify the click
- * position (tag label, layout symbol, status/title area, client, root) and
- * invoke every matching buttons[] entry. */
-/* Route a button press: focus the clicked monitor/client, classify the click
- * position (tag label, layout symbol, status/title area, client, root) and
- * invoke every matching buttons[] entry. */
+/**
+ * @brief Route a button press to focus, click classification and bindings.
+ *
+ * Focuses the clicked monitor and client. If no mouse binding could match, it
+ * only focuses and replays the pointer so the application receives the press;
+ * otherwise it classifies the click as tag label, layout symbol, status text,
+ * window title, client window or root and invokes every matching buttons[] entry.
+ *
+ * @param[in]  e  X ButtonPress event.
+ *
+ * @post The pointer button is either replayed to the client or consumed by a binding; selmon and selmon->sel may have changed.
+ * @note May set selmon; calls unfocus(), focus(), restack(), XAllowEvents() and TEXTW (DRW/Xft); reads buttons[] and invokes bound functions.
+ * @see mousebuttonmatch, cachebuttons, keypress
+ * @anchor spec_buttonpress
+ */
 void
 buttonpress(XEvent *e)
 {
@@ -417,9 +567,22 @@ buttonpress(XEvent *e)
 			buttons[i].func(click == ClkTagBar && buttons[i].arg.i == 0 ? &arg : &buttons[i].arg);
 }
 
-/* Fast-path filter for buttonpress(): can (button, cleaned mask) match any
- * active binding at all? Buttons beyond the bitmap width always pass; masks
- * outside the union of configured modifier masks reject immediately. */
+/**
+ * @brief Test whether a button and cleaned mask could match any binding.
+ *
+ * Uses the precomputed button and modifier bitmaps for a constant-time
+ * rejection. Buttons beyond the bitmap width always pass the button test; masks
+ * outside the union of configured modifiers are rejected immediately.
+ *
+ * @param[in]  button  Button number from the event.
+ * @param[in]  mask  Modifier state already passed through CLEANMASK().
+ *
+ * @return Non-zero when a configured binding could match, zero otherwise.
+ *
+ * @note Reads button_button_used and button_mask_used built by cachebuttons().
+ * @see cachebuttons, buttonpress
+ * @anchor spec_mousebuttonmatch
+ */
 int
 mousebuttonmatch(unsigned int button, unsigned int mask)
 {
@@ -427,9 +590,16 @@ mousebuttonmatch(unsigned int button, unsigned int mask)
 		&& !(mask & ~button_mask_used);
 }
 
-/* Build mousebuttonmatch()'s fast-path bitmaps from buttons[]: an OR of
- * every bound button number and of every cleaned modifier mask. Entries
- * without a function are ignored. */
+/**
+ * @brief Rebuild mousebuttonmatch() fast-path bitmaps from buttons[].
+ *
+ * ORs together every bound button number and every cleaned modifier mask,
+ * ignoring entries without a function.
+ *
+ * @note Writes button_button_used and button_mask_used; reads buttons[].
+ * @see mousebuttonmatch, setup
+ * @anchor spec_cachebuttons
+ */
 void
 cachebuttons(void)
 {
@@ -446,17 +616,39 @@ cachebuttons(void)
 	}
 }
 
-/* Pack a (keysym, cleaned modifier) pair into one 64-bit key. */
+/**
+ * @brief Pack a keysym and cleaned modifier into a single 64-bit key.
+ *
+ * @param[in]  keysym  X keysym.
+ * @param[in]  mod  Modifier state, normally after CLEANMASK().
+ *
+ * @return The keysym shifted into the high 32 bits ORed with the low 32 bits of mod.
+ *
+ * @note Pure computation; reads no globals.
+ * @see keyset_home, keyset_put, iskeybound
+ * @anchor spec_keypack
+ */
 static unsigned long long
 keypack(KeySym keysym, unsigned int mod)
 {
 	return ((unsigned long long)keysym << 32) | (mod & 0xffffffffULL);
 }
 
-/* Hash home slot for a packed (keysym, mod) key in the exact-match keyset.
- * The 64-bit Fibonacci hash output is folded down to the table size with
- * (KEYSET_SIZE - 1) so the slot always lands in bounds; KEYSET_SIZE must
- * stay a power of two for the mask to work. */
+/**
+ * @brief Compute the hash home slot for a packed key.
+ *
+ * Applies a 64-bit Fibonacci hash and folds the result with
+ * (KEYSET_SIZE - 1) so the slot is always in bounds.
+ *
+ * @param[in]  k  Packed (keysym, modifier) key from keypack().
+ *
+ * @return Home slot index in [0, KEYSET_SIZE).
+ *
+ * @pre KEYSET_SIZE is a power of two.
+ * @note Pure computation; reads KEYSET_SIZE.
+ * @see keyset_put, iskeybound, cachekeys
+ * @anchor spec_keyset_home
+ */
 static unsigned int
 keyset_home(unsigned long long k)
 {
@@ -464,9 +656,20 @@ keyset_home(unsigned long long k)
 	return (unsigned int)(((k * 0x9E3779B97F4A7C15ULL) >> 56) & (KEYSET_SIZE - 1));
 }
 
-/* Insert a packed key into the open-addressing exact-match keyset (linear
- * probing, duplicate-tolerant). Stops near-full and flags saturation so
- * iskeybound() falls back to the lossy OR-mask test instead. */
+/**
+ * @brief Insert a packed key into the exact-match keyset.
+ *
+ * Uses linear probing and tolerates duplicates. When the table is nearly full
+ * it suppresses the insert and sets keyset_saturated so iskeybound() falls back
+ * to the lossy OR-mask test.
+ *
+ * @param[in]  k  Packed key from keypack().
+ *
+ * @post The key may be stored and keyset_count incremented, or keyset_saturated may be set.
+ * @note Writes keyset[], keyset_count and keyset_saturated.
+ * @see keyset_home, iskeybound, cachekeys
+ * @anchor spec_keyset_put
+ */
 static void
 keyset_put(unsigned long long k)
 {
@@ -487,9 +690,21 @@ keyset_put(unsigned long long k)
 	}
 }
 
-/* Exact fast-path test for keypress(): is there any binding with this
- * keysym and cleaned modifier state?  Falls back to the lossy OR-masks
- * if the exact set could not be built (saturated table). */
+/**
+ * @brief Exact fast-path test for a keysym and modifier state.
+ *
+ * Looks up the packed key in the exact keyset. If the set is empty or
+ * saturated it falls back to the lossy union-of-masks test.
+ *
+ * @param[in]  keysym  X keysym to test.
+ * @param[in]  state  Raw event modifier state.
+ *
+ * @return Non-zero when any configured binding could match, zero otherwise.
+ *
+ * @note Reads keyset[], keyset_count, keyset_saturated, key_mod_used and key_keysym_used; cleans state with CLEANMASK().
+ * @see cachekeys, keypress, keyset_put
+ * @anchor spec_iskeybound
+ */
 static int
 iskeybound(KeySym keysym, unsigned int state)
 {
@@ -510,8 +725,17 @@ iskeybound(KeySym keysym, unsigned int state)
 	return 0;
 }
 
-/* Rebuild the keyboard lookup indexes from keys[]: lossy OR-masks of used
- * keysyms/modifiers plus the exact (keysym, mod) keyset backing iskeybound(). */
+/**
+ * @brief Rebuild keyboard fast-path masks and the exact keyset from keys[].
+ *
+ * Accumulates the lossy OR-masks of used keysyms and modifiers, clears the
+ * exact keyset, and inserts each binding's packed (keysym, cleaned modifier) key.
+ * Entries without a function are ignored.
+ *
+ * @note Writes key_keysym_used, key_mod_used, keyset[], keyset_count and keyset_saturated; calls keyset_put().
+ * @see iskeybound, grabkeys, keypress
+ * @anchor spec_cachekeys
+ */
 void
 cachekeys(void)
 {
@@ -532,9 +756,18 @@ cachekeys(void)
 	}
 }
 
-/* Die if another window manager is running: selecting SubstructureRedirectMask
- * on the root raises BadAccess only when a WM already owns it; the startup
- * error handler turns that error into a fatal message. */
+/**
+ * @brief Abort if another window manager already owns the root selection.
+ *
+ * Selecting SubstructureRedirectMask on the root raises BadAccess only when a
+ * window manager is already running. A temporary startup error handler turns
+ * that error into a fatal message; the regular handler is restored afterwards.
+ *
+ * @note X11 calls XSetErrorHandler(), XSelectInput() and XSync(); mutates the process X error handler state.
+ * @warning Calls DIE (via xerrorstart) when another window manager is present.
+ * @see xerrorstart, xerror, setup
+ * @anchor spec_checkotherwm
+ */
 void
 checkotherwm(void)
 {
@@ -546,9 +779,20 @@ checkotherwm(void)
 	XSync(dpy, False);
 }
 
-/* Tear everything down for exit/restart: view all tags, unmanage every
- * client under a no-op layout, release bars, cursors, fonts and schemes,
- * and clear EWMH focus state. */
+/**
+ * @brief Tear down dwm state for exit or restart.
+ *
+ * Clears the window hash, views all tags so every client is reachable,
+ * installs a no-op layout to suppress relayouts, unmaps and frees every client
+ * and monitor, releases grabs, cursors, colors, fonts and drawing state, then
+ * resets X input focus and EWMH state.
+ *
+ * @post mons == NULL, the window hash is empty, and X resources owned by dwm are released.
+ * @note Mutates winhash state, selmon/mons, scheme, drw and root properties; issues many X11 calls and frees clients through unmanage().
+ * @warning Must not run while the event loop still uses drw or dpy.
+ * @see cleanupmon, unmanage, setup, run
+ * @anchor spec_cleanup
+ */
 void
 cleanup(void)
 {
@@ -559,6 +803,7 @@ cleanup(void)
 
 	memset(winhash, 0, sizeof winhash); /* entries are freed with their clients below */
 	winhash_count = 0;
+	winhash_overflowed = 0;
 	/* view all tags so every client is reachable when unmanaged */
 	view(&a);
 	/* dummy layout without an arrange fn: prevent relayouts during teardown */
@@ -581,7 +826,18 @@ cleanup(void)
 	XDeleteProperty(dpy, root, netatom[NetActiveWindow]);
 }
 
-/* Unlink a monitor from the global list, destroy its bar window and free it. */
+/**
+ * @brief Unlink a monitor, destroy its bar and free it.
+ *
+ * @param[in]  mon  Monitor to remove from the global list.
+ *
+ * @pre mon != NULL and mon is linked into mons.
+ * @post mon is unlinked, its bar window is unmapped and destroyed, and its memory is freed.
+ * @note Writes mons (or the preceding next link); calls XUnmapWindow() and XDestroyWindow().
+ * @warning Does not migrate or free the monitor's clients; the caller must handle them first.
+ * @see cleanup, updategeom, createmon
+ * @anchor spec_cleanupmon
+ */
 void
 cleanupmon(Monitor *mon)
 {
@@ -598,8 +854,19 @@ cleanupmon(Monitor *mon)
 	free(mon);
 }
 
-/* Handle EWMH client messages: _NET_WM_STATE fullscreen add/remove/toggle
- * requests and _NET_ACTIVE_WINDOW urgency requests for unfocused clients. */
+/**
+ * @brief Handle EWMH client messages for fullscreen and activation.
+ *
+ * Processes _NET_WM_STATE fullscreen add/remove/toggle requests and
+ * _NET_ACTIVE_WINDOW requests, marking unselected non-urgent clients urgent.
+ *
+ * @param[in]  e  X ClientMessage event.
+ *
+ * @post The requested fullscreen or urgency state is applied when the window is managed.
+ * @note Calls wintoclient(), setfullscreen() and seturgent(); reads netatom[] and selmon.
+ * @see setfullscreen, seturgent, propertynotify
+ * @anchor spec_clientmessage
+ */
 void
 clientmessage(XEvent *e)
 {
@@ -619,9 +886,18 @@ clientmessage(XEvent *e)
 	}
 }
 
-/* Send the client a synthetic ConfigureNotify carrying dwm's geometry for it;
- * needed because dwm does not reparent, so clients cannot infer their frame
- * from real ConfigureNotify events alone. */
+/**
+ * @brief Send a client a synthetic ConfigureNotify with dwm's geometry.
+ *
+ * dwm does not reparent clients, so clients cannot infer their frame from real
+ * ConfigureNotify events alone; this reports the geometry dwm assigned.
+ *
+ * @param[in]  c  Client to notify; c->win must be valid.
+ *
+ * @note Calls XSendEvent() with StructureNotifyMask; reads c->x/y/w/h/bw.
+ * @see resizeclient, configurerequest, manage
+ * @anchor spec_configure
+ */
 void
 configure(Client *c)
 {
@@ -641,9 +917,20 @@ configure(Client *c)
 	XSendEvent(dpy, c->win, False, StructureNotifyMask, (XEvent *)&ce);
 }
 
-/* Root resize notification: re-probe monitor geometry and, if anything
- * changed, resize the drawing context and bar windows, refit fullscreen
- * clients, and rearrange. */
+/**
+ * @brief React to a root resize by refreshing geometry, bars and layout.
+ *
+ * When the root window's size changes it records the new screen dimensions,
+ * re-probes monitor geometry, resizes the drawing context and bar windows,
+ * refits fullscreen clients and finally refocuses and rearranges.
+ *
+ * @param[in]  e  X ConfigureNotify event.
+ *
+ * @pre dpy and drw are initialized.
+ * @note Writes sw and sh; calls updategeom(), drw_resize(), updatebars(), resizeclient(), XMoveResizeWindow(), focus() and arrange().
+ * @see updategeom, updatebars, arrange
+ * @anchor spec_configurenotify
+ */
 void
 configurenotify(XEvent *e)
 {
@@ -672,10 +959,21 @@ configurenotify(XEvent *e)
 	}
 }
 
-/* Answer a client's ConfigureRequest: floating clients may pick their own
- * (kept on-monitor) geometry, tiled clients are refused with a synthetic
- * configure reporting dwm's answer, and unmanaged windows get what they
- * asked for. */
+/**
+ * @brief Answer a client's ConfigureRequest.
+ *
+ * Managed clients may change their border width; floating clients or clients
+ * on a monitor without an arrange hook may choose geometry clamped to the
+ * monitor and are centered when they exceed it; tiled clients are refused with a
+ * synthetic configure reporting dwm's answer. Unmanaged windows are configured
+ * as requested.
+ *
+ * @param[in]  e  X ConfigureRequest event.
+ *
+ * @note Reads selmon; writes c->bw, c->x/y/w/h and their old values; calls configure(), XMoveResizeWindow(), XConfigureWindow() and XSync().
+ * @see configure, resize, manage
+ * @anchor spec_configurerequest
+ */
 void
 configurerequest(XEvent *e)
 {
@@ -728,8 +1026,21 @@ configurerequest(XEvent *e)
 	XSync(dpy, False);
 }
 
-/* Allocate a monitor initialized from config.h defaults; its bar starts
- * fully dirty and exposed so the first drawbar renders everything. */
+/**
+ * @brief Allocate a monitor initialized from compile-time defaults.
+ *
+ * Initializes both tagsets to tag 1, copies mfact/nmaster/showbar/topbar,
+ * clones default_gap, installs the first two layouts (guarding single-layout
+ * configs) and marks every bar segment dirty so the first draw renders
+ * everything.
+ *
+ * @return Newly allocated monitor with an embedded initialized gap.
+ *
+ * @post The caller owns the monitor; it is not yet linked into mons and has no bar window.
+ * @note Uses ecalloc(); reads mfact, nmaster, showbar, topbar, default_gap and layouts[]; sets bar_dirty_segments and bar_exposed.
+ * @see cleanupmon, updategeom, setup
+ * @anchor spec_createmon
+ */
 Monitor *
 createmon(void)
 {
@@ -751,8 +1062,19 @@ createmon(void)
 	return m;
 }
 
-/* A window was destroyed: unmanage the client that owned it, or — when the
- * dead window is a terminal parked by swallow() — discard the placeholder. */
+/**
+ * @brief Handle a destroyed window.
+ *
+ * Unmanages the client that owned the window. If the destroyed window is a
+ * terminal placeholder parked by swallow(), the holder client is unmanaged
+ * instead.
+ *
+ * @param[in]  e  X DestroyWindow event.
+ *
+ * @note Calls wintoclient(), swallowingclient() and unmanage().
+ * @see unmanage, unmapnotify, swallow
+ * @anchor spec_destroynotify
+ */
 void
 destroynotify(XEvent *e)
 {
@@ -766,7 +1088,18 @@ destroynotify(XEvent *e)
 		unmanage(c->swallowing, 1);
 }
 
-/* Remove a client from its monitor's client list. */
+/**
+ * @brief Remove a client from its monitor's client list.
+ *
+ * @param[in]  c  Client to unlink.
+ *
+ * @pre c->mon is a valid monitor.
+ * @post c is no longer linked from c->mon->clients; c->next is left unchanged.
+ * @note No-op when c is not in the list; writes the list links.
+ * @warning Does not clear c->next and does not update selection or the stack.
+ * @see attach, detachstack, unmanage
+ * @anchor spec_detach
+ */
 void
 detach(Client *c)
 {
@@ -776,7 +1109,19 @@ detach(Client *c)
 	*tc = c->next;
 }
 
-/* Remove a client from its monitor's focus-history stack. */
+/**
+ * @brief Remove a client from the focus-history stack.
+ *
+ * If the removed client was the monitor's selection, the most recent visible
+ * entry remaining on the stack is promoted to sel.
+ *
+ * @param[in]  c  Client to unlink from the stack.
+ *
+ * @post c->mon->sel may point at a different client; c->snext is unchanged.
+ * @note Writes the monitor stack and sel; reads ISVISIBLE().
+ * @see attachstack, focus, unmanage
+ * @anchor spec_detachstack
+ */
 void
 detachstack(Client *c)
 {
@@ -792,8 +1137,21 @@ detachstack(Client *c)
 	}
 }
 
-/* Return the next (dir > 0) or previous monitor relative to selmon, wrapping
- * around at the list ends. */
+/**
+ * @brief Return the next or previous monitor relative to selmon.
+ *
+ * Positive directions advance and wrap to the list head; non-positive
+ * directions walk to the predecessor and wrap from the head to the tail.
+ *
+ * @param[in]  dir  Positive for next, otherwise previous.
+ *
+ * @return Adjacent monitor in the mons list.
+ *
+ * @pre selmon belongs to mons and mons is non-NULL.
+ * @note Reads selmon and mons.
+ * @see focusmon, tagmon, recttomon
+ * @anchor spec_dirtomon
+ */
 Monitor *
 dirtomon(int dir)
 {
@@ -809,11 +1167,24 @@ dirtomon(int dir)
 	return m;
 }
 
-/* Render the monitor's bar into the retained pixmap and copy it to the bar
- * window. Work is gated three ways: fullscreen freeze skips everything,
- * clean segments skip rendering (only copying when re-exposed), and
- * per-segment dirty bits limit drawing to the status/tags/title areas that
- * actually changed. */
+/**
+ * @brief Render dirty bar segments and copy the pixmap to the bar window.
+ *
+ * Work is gated three ways: a hidden bar or an optimized fullscreen window
+ * skips everything, clean segments skip text rendering and only re-copy the
+ * retained pixmap when the window was exposed, and per-segment dirty bits limit
+ * drawing to the status, tag and title areas that changed. Status is drawn first
+ * so tags can overdraw it.
+ *
+ * @param[in]  m  Monitor whose bar is drawn.
+ *
+ * @pre m->barwin exists, drw and drw->fonts are valid, and bh is initialized.
+ * @post The bar pixmap matches the window; dirty segments are cleared except under DWM_TEST, and bar_exposed is cleared.
+ * @note Reads stext, tags[], scheme[], selmon and m->clients; calls drw_setscheme(), drw_text(), drw_rect() and drw_map() (Xft/X11); mutates bar_dirty_segments and bar_exposed.
+ * @warning Accesses drw->fonts->h before the showbar/fullscreen early returns, so drw->fonts must be valid even for callers that end up drawing nothing.
+ * @see drawbars, updatestatus, focus, setlayout
+ * @anchor spec_drawbar
+ */
 void
 drawbar(Monitor *m)
 {
@@ -891,8 +1262,13 @@ drawbar(Monitor *m)
 #endif
 }
 
-/* Draw every monitor's bar; deferred bar draws land here via
- * flusheventtail(). */
+/**
+ * @brief Draw every monitor's bar.
+ *
+ * @note Iterates mons and calls drawbar(), which performs Xft/X11 rendering.
+ * @see drawbar, flusheventtail
+ * @anchor spec_drawbars
+ */
 void
 drawbars(void)
 {
@@ -902,8 +1278,19 @@ drawbars(void)
 		drawbar(m);
 }
 
-/* Focus follows the pointer: entering a client focuses it; entering bare
- * root/monitor areas switches the selected monitor. */
+/**
+ * @brief Implement focus-follows-pointer on enter events.
+ *
+ * Ignores grab-initiated crossings and inferior moves unless the crossing is
+ * on the root window. Resolves the client and its monitor, switches the selected
+ * monitor when needed, and focuses the entered client.
+ *
+ * @param[in]  e  X EnterNotify event.
+ *
+ * @note May mutate selmon via unfocus()/focus(); reads root and mons; calls wintoclient() and wintomon().
+ * @see focus, motionnotify, wintomon
+ * @anchor spec_enternotify
+ */
 void
 enternotify(XEvent *e)
 {
@@ -925,8 +1312,18 @@ enternotify(XEvent *e)
 	focus(c);
 }
 
-/* After the last Expose of a batch the bar window's contents are gone:
- * mark it exposed and force an immediate redraw/copy (no deferral). */
+/**
+ * @brief Redraw a bar after its window contents were lost.
+ *
+ * On the last Expose of a batch it marks the monitor's bar as exposed and
+ * redraws immediately rather than deferring.
+ *
+ * @param[in]  e  X Expose event.
+ *
+ * @note Writes m->bar_exposed; calls drawbar() (Xft/X11).
+ * @see drawbar, drawbars
+ * @anchor spec_expose
+ */
 void
 expose(XEvent *e)
 {
@@ -939,9 +1336,24 @@ expose(XEvent *e)
 	}
 }
 
-/* Make c the selected client: resolve NULL/invisible picks from the focus
- * stack, switch monitors as needed, update grabs/border/input focus, and
- * dirty the bar only when the selection actually changed. */
+/**
+ * @brief Make a client the selection, resolving NULL or invisible picks.
+ *
+ * Falls back to the newest visible client on the focus stack when the
+ * requested client is NULL or hidden. Unfocuses the previous selection, switches
+ * selmon to the client's monitor, clears urgency, refreshes stack position,
+ * button grabs, border and X input focus. A NULL result clears root input focus
+ * and _NET_ACTIVE_WINDOW. The bar is dirtied only when the selection actually
+ * changed.
+ *
+ * @param[in]  c  Desired client, or NULL to clear focus.
+ *
+ * @post selmon may change; selmon->sel is the resolved client (possibly NULL); bar_draw_pending is set.
+ * @note Mutates selmon, selmon->sel, the focus stack, bar_dirty_segments and bar_draw_pending; calls seturgent(), grabbuttons(), XSetWindowBorder(), setfocus() and setfocus(NULL) X11 calls.
+ * @warning selmon must point to a valid monitor.
+ * @see unfocus, setfocus, seturgent, restack
+ * @anchor spec_focus
+ */
 void
 focus(Client *c)
 {
@@ -970,7 +1382,15 @@ focus(Client *c)
 	bar_draw_pending = 1;
 }
 
-/* there are some broken focus acquiring clients needing extra handling */
+/**
+ * @brief Reassert dwm's focus when a broken client steals it.
+ *
+ * @param[in]  e  X FocusIn event.
+ *
+ * @note Calls setfocus(); reads selmon.
+ * @see focus, setfocus
+ * @anchor spec_focusin
+ */
 void
 focusin(XEvent *e)
 {
@@ -980,8 +1400,15 @@ focusin(XEvent *e)
 		setfocus(selmon->sel);
 }
 
-/* Move the selection to the monitor adjacent to selmon in direction arg->i,
- * carrying focus along. */
+/**
+ * @brief Select the monitor adjacent to selmon and carry focus along.
+ *
+ * @param[in]  arg  arg->i selects the direction.
+ *
+ * @note Mutates selmon; calls unfocus() and focus(); no-op for a single monitor or when the target is already selected.
+ * @see dirtomon, focus
+ * @anchor spec_focusmon
+ */
 void
 focusmon(const Arg *arg)
 {
@@ -996,8 +1423,15 @@ focusmon(const Arg *arg)
 	focus(NULL);
 }
 
-/* Focus the next (arg->i > 0) or previous visible client in the client list,
- * wrapping around at the ends. */
+/**
+ * @brief Focus the next or previous visible client, wrapping around.
+ *
+ * @param[in]  arg  arg->i > 0 selects next, otherwise previous.
+ *
+ * @note Calls focus() and restack(); skips work when nothing is selected or a locked fullscreen client blocks focus changes.
+ * @see focus, nexttiled, pop
+ * @anchor spec_focusstack
+ */
 void
 focusstack(const Arg *arg)
 {
@@ -1024,8 +1458,18 @@ focusstack(const Arg *arg)
 	}
 }
 
-/* Read an Atom-typed property from a client window.
- * Returns the Atom value, or None if the property is absent/invalid. */
+/**
+ * @brief Read an Atom-typed property from a client window.
+ *
+ * @param[in]  c  Client whose window is queried; c->win must be valid.
+ * @param[in]  prop  Property atom.
+ *
+ * @return The Atom value, or None when the property is absent or not an Atom.
+ *
+ * @note Calls XGetWindowProperty() and XFree().
+ * @see getstate, gettextprop, updatewindowtype
+ * @anchor spec_getatomprop
+ */
 Atom
 getatomprop(Client *c, Atom prop)
 {
@@ -1042,8 +1486,18 @@ getatomprop(Client *c, Atom prop)
 	return atom;
 }
 
-/* Query the root-relative pointer position.
- * Returns True on success, with x/y filled in; False on failure. */
+/**
+ * @brief Query the root-relative pointer position.
+ *
+ * @param[out]  x  Receives the pointer X coordinate on success.
+ * @param[out]  y  Receives the pointer Y coordinate on success.
+ *
+ * @return True on success, False on failure.
+ *
+ * @note Calls XQueryPointer().
+ * @see wintomon, motionnotify, movemouse
+ * @anchor spec_getrootptr
+ */
 int
 getrootptr(int *x, int *y)
 {
@@ -1054,8 +1508,17 @@ getrootptr(int *x, int *y)
 	return XQueryPointer(dpy, root, &dummy, &dummy, x, y, &di, &di, &dui);
 }
 
-/* Read the WM_STATE property of a window.
- * Returns the state value (e.g. NormalState/IconicState) or -1 on error. */
+/**
+ * @brief Read a window's WM_STATE property.
+ *
+ * @param[in]  w  Window to query.
+ *
+ * @return The state value (for example NormalState or IconicState), or -1 on error or absent property.
+ *
+ * @note Calls XGetWindowProperty() and XFree().
+ * @see setclientstate, scan, unmapnotify
+ * @anchor spec_getstate
+ */
 long
 getstate(Window w)
 {
@@ -1074,9 +1537,26 @@ getstate(Window w)
 	return result;
 }
 
-/* Fetch a text property from window w into the given buffer.
- * Handles XA_STRING and compound-text (Xmb) encoding.
- * Returns string length on success, 0 on failure. */
+/**
+ * @brief Fetch a text property into a caller-owned buffer.
+ *
+ * Handles XA_STRING directly and compound-text through XmbTextPropertyToTextList,
+ * always NUL-terminating and truncating to the supplied capacity.
+ *
+ * @param[in]  w  Window to query.
+ * @param[in]  atom  Text property atom.
+ * @param[out]  text  Destination buffer.
+ * @param[in]  size  Capacity of text in bytes.
+ *
+ * @return Number of bytes written excluding the NUL terminator, or 0 on failure or empty property.
+ *
+ * @pre text != NULL and size > 0; otherwise the function returns 0 immediately.
+ * @post text is NUL-terminated; on failure text[0] is set to NUL.
+ * @note Calls XGetTextProperty(), XmbTextPropertyToTextList(), XFree() and XFreeStringList(); uses stpncpy_len().
+ * @warning The returned length excludes the terminator; the buffer remains owned by the caller.
+ * @see updatetitle, updatestatus
+ * @anchor spec_gettextprop
+ */
 size_t
 gettextprop(Window w, Atom atom, char *text, unsigned int size)
 {
@@ -1108,9 +1588,20 @@ gettextprop(Window w, Atom atom, char *text, unsigned int size)
 	return len;
 }
 
-/* Grab/release mouse buttons for a client window.
- * When focused=1, applies user-defined button bindings (ClkClientWin).
- * When focused=0, grabs AnyButton in Sync mode so buttonpress can replay. */
+/**
+ * @brief Grab or release mouse buttons on a client window.
+ *
+ * With focused=1 it grabs the configured ClkClientWin bindings across the
+ * normal lock-modifier combinations. With focused=0 it grabs AnyButton in
+ * synchronous mode so buttonpress() can classify and replay the click.
+ *
+ * @param[in]  c  Client whose window is grabbed.
+ * @param[in]  focused  Non-zero for normal bindings, zero for replay grabs.
+ *
+ * @note Calls updatenumlockmask(), XUngrabButton() and XGrabButton(); reads buttons[], numlockmask and LockMask.
+ * @see buttonpress, manage, unfocus, updatenumlockmask
+ * @anchor spec_grabbuttons
+ */
 void
 grabbuttons(Client *c, int focused)
 {
@@ -1132,10 +1623,18 @@ grabbuttons(Client *c, int focused)
 	}
 }
 
-/* Grab all configured key combinations on the root window.
- * Iterates every physical keycode and matches it against the keys[]
- * array; each match is grabbed with NumLock/CapsLock modifiers so
- * bindings work regardless of lock-key state. */
+/**
+ * @brief Grab all configured key combinations on the root window.
+ *
+ * Refreshes NumLock state, rebuilds the exact keypress index, ungrabs all
+ * keys, obtains the keycode-to-keysym map and grabs each matching keycode for
+ * every lock-modifier variant.
+ *
+ * @pre dpy and root are initialized.
+ * @note Calls updatenumlockmask(), cachekeys(), XUngrabKey(), XDisplayKeycodes(), XGetKeyboardMapping(), XGrabKey() and XFree(); reads keys[].
+ * @see keypress, mappingnotify, updatenumlockmask
+ * @anchor spec_grabkeys
+ */
 void
 grabkeys(void)
 {
@@ -1168,8 +1667,15 @@ grabkeys(void)
 	}
 }
 
-/* Increase/decrease the number of master windows on the selected monitor.
- * arg->i is the delta (positive or negative); clamps >= 0. */
+/**
+ * @brief Adjust the selected monitor's master-window count.
+ *
+ * @param[in]  arg  arg->i is the signed delta.
+ *
+ * @note Writes selmon->nmaster clamped to at least zero; calls arrange().
+ * @see tile, setmfact
+ * @anchor spec_incnmaster
+ */
 void
 incnmaster(const Arg *arg)
 {
@@ -1178,24 +1684,45 @@ incnmaster(const Arg *arg)
 }
 
 #ifdef XINERAMA
-/* Deduplicate Xinerama screen geometries: return 0 if info matches any
- * already-seen entry in unique[0..n), 1 if it is genuinely new.
- * This avoids creating per-monitor state for clone-mode outputs whose
- * geometry is identical. */
+/**
+ * @brief Test whether an Xinerama geometry has not been seen yet.
+ *
+ * @param[in]  unique  Array of already-accepted geometries.
+ * @param[in]  n  Number of entries in unique.
+ * @param[in]  info  Candidate geometry.
+ *
+ * @return 1 when the geometry is new, 0 when it duplicates an existing entry.
+ *
+ * @note Compiled only when XINERAMA is defined; reads no globals.
+ * @see updategeom
+ * @anchor spec_isuniquegeom
+ */
 static int
 isuniquegeom(XineramaScreenInfo *unique, size_t n, XineramaScreenInfo *info)
 {
-	while (n--)
+	while (n) {
+		n--;
 		if (unique[n].x_org == info->x_org && unique[n].y_org == info->y_org
 		&& unique[n].width == info->width && unique[n].height == info->height)
 			return 0;
+	}
 	return 1;
 }
 #endif /* XINERAMA */
 
-/* Dispatch keyboard events to key bindings.
- * Fast-path: skip the keys[] walk when neither modifier nor keysym
- * matches any configured binding (using precomputed bitmasks). */
+/**
+ * @brief Dispatch a key event to a matching keys[] binding.
+ *
+ * The iskeybound() fast path rejects events that cannot match any configured
+ * keysym and modifier before walking the binding table; a full exact match then
+ * invokes the binding function.
+ *
+ * @param[in]  e  X KeyPress event.
+ *
+ * @note Calls XKeycodeToKeysym() and iskeybound(); reads keys[] and invokes the bound function.
+ * @see iskeybound, grabkeys, cachekeys
+ * @anchor spec_keypress
+ */
 void
 keypress(XEvent *e)
 {
@@ -1214,8 +1741,19 @@ keypress(XEvent *e)
 			keys[i].func(&(keys[i].arg));
 }
 
-/* Terminate the selected client: try WM_DELETE_WINDOW protocol
- * first; fall back to XKillClient if the client doesn't support it. */
+/**
+ * @brief Ask the selected client to close.
+ *
+ * Tries the WM_DELETE_WINDOW protocol first. If the client does not support it,
+ * the X connection is grabbed, errors are suppressed, and the client is killed
+ * with XKillClient().
+ *
+ * @param[in]  arg  Unused.
+ *
+ * @note Reads selmon->sel; calls sendevent(), XGrabServer(), XSetErrorHandler(), XSetCloseDownMode(), XKillClient(), XSync() and XUngrabServer().
+ * @see sendevent, unmanage
+ * @anchor spec_killclient
+ */
 void
 killclient(const Arg *arg)
 {
@@ -1232,11 +1770,26 @@ killclient(const Arg *arg)
 	}
 }
 
-/* Adopt a new window into dwm's client list.
- * Sets geometry, applies rules, sets up Swallowing (winpid →
- * getparentprocess → isdescprocess → termforwin chain), and
- * maps the window. Side effects: updates _NET_CLIENT_LIST,
- * may swallow the new client into its parent terminal. */
+/**
+ * @brief Adopt a new window as a managed client.
+ *
+ * Allocates a Client, copies geometry and title, inherits monitor and tags
+ * from a transient parent or applies rules, clamps the initial position to the
+ * workarea, sets the border, refreshes type/size/WM hints, selects input events,
+ * grabs buttons, applies floating defaults, indexes the window id, links the
+ * client into the monitor lists, appends to _NET_CLIENT_LIST, maps it, swallows
+ * it into a matching terminal when possible, and focuses it.
+ *
+ * @param[in]  w  X window id to adopt.
+ * @param[in]  wa  Attributes from XGetWindowAttributes() for w.
+ *
+ * @pre w is not already managed and wa describes a valid window.
+ * @post The client is in its monitor's lists and the window hash, mapped, selected and focused; _NET_CLIENT_LIST includes w.
+ * @note Allocates memory; mutates winhash, selmon and monitor lists/tags/bar state; almost every X11 setup call; may call swallow().
+ * @warning The client is owned by dwm and must be released through unmanage(); wa must remain valid for the duration of the call.
+ * @see unmanage, applyrules, swallow, winclient_put
+ * @anchor spec_manage
+ */
 void
 manage(Window w, XWindowAttributes *wa)
 {
@@ -1304,9 +1857,15 @@ manage(Window w, XWindowAttributes *wa)
 	focus(NULL);
 }
 
-/* Handle keyboard mapping changes (e.g. Xkb layout switch).
- * Refreshes Xlib's internal mapping and re-grabs keys if the
- * keyboard mapping itself changed. */
+/**
+ * @brief Refresh keyboard mapping and re-grab keys after a layout change.
+ *
+ * @param[in]  e  X MappingNotify event.
+ *
+ * @note Calls XRefreshKeyboardMapping(); calls grabkeys() when a keyboard mapping change is reported.
+ * @see grabkeys, keypress
+ * @anchor spec_mappingnotify
+ */
 void
 mappingnotify(XEvent *e)
 {
@@ -1317,8 +1876,18 @@ mappingnotify(XEvent *e)
 		grabkeys();
 }
 
-/* A new window wants to be mapped: create a client for it unless it
- * has override_redirect set or is already managed. */
+/**
+ * @brief Adopt a newly mapped window.
+ *
+ * Windows with override_redirect set and windows already managed are ignored;
+ * everything else is passed to manage().
+ *
+ * @param[in]  e  X MapRequest event.
+ *
+ * @note Calls XGetWindowAttributes(), wintoclient() and manage().
+ * @see manage, scan
+ * @anchor spec_maprequest
+ */
 void
 maprequest(XEvent *e)
 {
@@ -1333,8 +1902,18 @@ maprequest(XEvent *e)
 		manage(ev->window, &wa);
 }
 
-/* Monocle layout: each visible client fills the entire monitor area.
- * The layout symbol shows the count of visible clients. */
+/**
+ * @brief Monocle layout: every visible tiled client fills the monitor.
+ *
+ * Counts visible clients, updates the layout symbol with that count, and
+ * resizes each tiled client to the full workarea.
+ *
+ * @param[in]  m  Monitor to lay out.
+ *
+ * @note Writes m->ltsymbol; calls resize() (X11); skips floating and invisible clients.
+ * @see tile, arrangemon
+ * @anchor spec_monocle
+ */
 void
 monocle(Monitor *m)
 {
@@ -1350,8 +1929,19 @@ monocle(Monitor *m)
 		resize(c, m->wx, m->wy, m->ww - 2 * c->bw, m->wh - 2 * c->bw, 0);
 }
 
-/* Track pointer motion across monitors; switch focus to the monitor
- * under the cursor when it crosses an edge. */
+/**
+ * @brief Switch the selected monitor when the pointer crosses monitors.
+ *
+ * Tracks root-window motion, maps the pointer position to a monitor and
+ * focuses that monitor when it changes. Single-monitor setups return
+ * immediately.
+ *
+ * @param[in]  e  X MotionNotify event.
+ *
+ * @note Mutates selmon; calls unfocus(), focus() and recttomon(); reads mons.
+ * @see enternotify, recttomon
+ * @anchor spec_motionnotify
+ */
 void
 motionnotify(XEvent *e)
 {
@@ -1371,11 +1961,21 @@ motionnotify(XEvent *e)
 	mon = m;
 }
 
-/* Interactive window move via mouse drag.
- * Grabs the pointer, warps to the bottom-right corner, and follows
- * MotionNotify events to reposition the window. Snaps to monitor
- * edges. Automatically floats a tiled client dragged past the snap
- * threshold. */
+/**
+ * @brief Interactively move the selected client with the mouse.
+ *
+ * Grabs the pointer, warps relative to the grab point, then processes motion
+ * events (throttled to about 60 per second) while snapping to workarea edges.
+ * Dragging a tiled client past the snap threshold floats it. On release the
+ * client is handed off to the monitor under it.
+ *
+ * @param[in]  arg  Unused.
+ *
+ * @note Calls XGrabPointer(), XMaskEvent(), XUngrabPointer(), getrootptr(), togglefloating(), resize() and sendmon(); sets pointergrab; may mutate selmon and the client's geometry/floating state.
+ * @warning Returns early when nothing is selected, the client is fullscreen, or the pointer grab fails.
+ * @see resizemouse, togglefloating, sendmon, recttomon
+ * @anchor spec_movemouse
+ */
 void
 movemouse(const Arg *arg)
 {
@@ -1397,6 +1997,7 @@ movemouse(const Arg *arg)
 		return;
 	if (!getrootptr(&x, &y))
 		return;
+	pointergrab = 1; /* reflow immediately inside the grab (togglefloating) */
 	do {
 		XMaskEvent(dpy, MOUSEMASK|ExposureMask|SubstructureRedirectMask, &ev);
 		switch(ev.type) {
@@ -1429,6 +2030,7 @@ movemouse(const Arg *arg)
 			break;
 		}
 	} while (ev.type != ButtonRelease);
+	pointergrab = 0;
 	XUngrabPointer(dpy, CurrentTime);
 	if ((m = recttomon(c->x, c->y, c->w, c->h)) != selmon) {
 		sendmon(c, m);
@@ -1437,9 +2039,19 @@ movemouse(const Arg *arg)
 	}
 }
 
-/* Walk the client list and return the first non-floating visible
- * client starting from c. Used by layout functions to iterate
- * only clients that participate in tiling. */
+/**
+ * @brief Return the next tiled client starting from c.
+ *
+ * Skips floating and invisible clients in the client list.
+ *
+ * @param[in]  c  Starting point, possibly NULL.
+ *
+ * @return First non-floating visible client at or after c, or NULL.
+ *
+ * @note Reads ISVISIBLE().
+ * @see tile, monocle, zoom
+ * @anchor spec_nexttiled
+ */
 Client *
 nexttiled(Client *c)
 {
@@ -1447,8 +2059,15 @@ nexttiled(Client *c)
 	return c;
 }
 
-/* Move client to the front of its monitor's client list and focus it.
- * Used by zoom() to swap the selected client with the master. */
+/**
+ * @brief Move a client to the front of its monitor's client list and focus it.
+ *
+ * @param[in]  c  Client to promote.
+ *
+ * @note Calls detach(), attach(), focus() and arrange(); mutates list order and selection.
+ * @see zoom, focus, attach
+ * @anchor spec_pop
+ */
 void
 pop(Client *c)
 {
@@ -1458,9 +2077,20 @@ pop(Client *c)
 	arrange(c->mon);
 }
 
-/* Respond to X11 property changes: WM_NAME on root updates status;
- * per-client property changes trigger title/type/hints updates and
- * set dirty segments for the bar. */
+/**
+ * @brief Handle X property changes relevant to dwm.
+ *
+ * Applies a cheap atom filter before any list walk. Root WM_NAME updates the
+ * status text; per-client transient-for, normal-hints, WM_HINTS, name and window
+ * type changes update client state and mark the relevant bar segments dirty,
+ * deferring bar redraws to the event-loop tail.
+ *
+ * @param[in]  e  X PropertyNotify event.
+ *
+ * @note Reads selmon and stext; writes client fields plus bar_dirty_segments and bar_draw_pending; may call arrange(); uses updatestatus(), updatetitle(), updatewmhints() and updatewindowtype().
+ * @see updatestatus, updatetitle, updatewmhints, updatewindowtype
+ * @anchor spec_propertynotify
+ */
 void
 propertynotify(XEvent *e)
 {
@@ -1498,7 +2128,7 @@ propertynotify(XEvent *e)
 		case XA_WM_HINTS:
 			updatewmhints(c);
 		/* urgency indicators in tag rects changed */
-		selmon->bar_dirty_segments |= DIRTY_TAGS;
+		c->mon->bar_dirty_segments |= DIRTY_TAGS;
 		bar_draw_pending = 1;    /* defer to event-loop tail for coalescing */
 			break;
 		}
@@ -1506,7 +2136,7 @@ propertynotify(XEvent *e)
 			updatetitle(c);
 			if (c == c->mon->sel) {
 				/* selected client's window title changed */
-				selmon->bar_dirty_segments |= DIRTY_TITLE;
+				c->mon->bar_dirty_segments |= DIRTY_TITLE;
 				bar_draw_pending = 1;    /* defer to event-loop tail */
 			}
 		}
@@ -1515,8 +2145,15 @@ propertynotify(XEvent *e)
 	}
 }
 
-/* Exit the event loop. If arg->i is set, the process will execvp
- * itself (restart) after cleanup instead of exiting. */
+/**
+ * @brief Stop the event loop, optionally requesting a restart.
+ *
+ * @param[in]  arg  arg->i non-zero requests an exec restart.
+ *
+ * @note Writes running and restart.
+ * @see run, cleanup, sighup, sigterm
+ * @anchor spec_quit
+ */
 void
 quit(const Arg *arg)
 {
@@ -1524,8 +2161,20 @@ quit(const Arg *arg)
 	running = 0;
 }
 
-/* Return the monitor whose screen area has the largest intersection
- * with the given rectangle. Defaults to selmon. */
+/**
+ * @brief Return the monitor with the largest overlap with a rectangle.
+ *
+ * @param[in]  x  Rectangle X coordinate.
+ * @param[in]  y  Rectangle Y coordinate.
+ * @param[in]  w  Rectangle width.
+ * @param[in]  h  Rectangle height.
+ *
+ * @return Best-overlapping monitor, or selmon when no monitor overlaps.
+ *
+ * @note Reads mons and selmon; uses the INTERSECT macro.
+ * @see wintomon, motionnotify, movemouse
+ * @anchor spec_recttomon
+ */
 Monitor *
 recttomon(int x, int y, int w, int h)
 {
@@ -1540,8 +2189,20 @@ recttomon(int x, int y, int w, int h)
 	return r;
 }
 
-/* Move/resize c after clamping against its ICCCM size hints; nothing is
- * sent when the clamped geometry equals the current one. */
+/**
+ * @brief Move or resize a client after clamping to its size hints.
+ *
+ * @param[in]  c  Client to resize.
+ * @param[in]  x  Requested X coordinate.
+ * @param[in]  y  Requested Y coordinate.
+ * @param[in]  w  Requested width.
+ * @param[in]  h  Requested height.
+ * @param[in]  interact  Non-zero for mouse-driven geometry.
+ *
+ * @note Calls applysizehints() and, only when the geometry changed, resizeclient() (XConfigureWindow/XSendEvent/XSync).
+ * @see applysizehints, resizeclient
+ * @anchor spec_resize
+ */
 void
 resize(Client *c, int x, int y, int w, int h, int interact)
 {
@@ -1549,9 +2210,20 @@ resize(Client *c, int x, int y, int w, int h, int interact)
 		resizeclient(c, x, y, w, h);
 }
 
-/* Unconditionally apply new geometry (no hint checks): remember previous
- * values, reconfigure the window and send a synthetic configure. Used where
- * hints must not interfere, e.g. fitting fullscreen clients. */
+/**
+ * @brief Apply geometry unconditionally and notify the client.
+ *
+ * @param[in]  c  Client to configure.
+ * @param[in]  x  New X coordinate.
+ * @param[in]  y  New Y coordinate.
+ * @param[in]  w  New width.
+ * @param[in]  h  New height.
+ *
+ * @note Writes c->oldx/oldy/oldw/oldh and c->x/y/w/h; calls XConfigureWindow(), configure() and XSync().
+ * @warning Bypasses size hints; use resize() when hints must be honored.
+ * @see resize, configure, setfullscreen
+ * @anchor spec_resizeclient
+ */
 void
 resizeclient(Client *c, int x, int y, int w, int h)
 {
@@ -1567,9 +2239,21 @@ resizeclient(Client *c, int x, int y, int w, int h)
 	XSync(dpy, False);
 }
 
-/* Interactive bottom-right resize drag: warps to the corner, applies size
- * hints, auto-floats tiled clients dragged past the snap threshold, and
- * hands off to another monitor on release. */
+/**
+ * @brief Interactively resize the selected client from the bottom-right.
+ *
+ * Grabs the pointer, warps to the client's bottom-right corner, then processes
+ * throttled motion events while applying size hints. Dragging a tiled client
+ * past the snap threshold floats it. On release the client is handed off to the
+ * monitor under it and pending enter events are drained.
+ *
+ * @param[in]  arg  Unused.
+ *
+ * @note Calls XGrabPointer(), XWarpPointer(), XMaskEvent(), XCheckMaskEvent(), XUngrabPointer(), togglefloating(), resize() and sendmon(); sets pointergrab; may mutate selmon.
+ * @warning Returns early when nothing is selected, the client is fullscreen, or the pointer grab fails.
+ * @see movemouse, resize, togglefloating
+ * @anchor spec_resizemouse
+ */
 void
 resizemouse(const Arg *arg)
 {
@@ -1590,6 +2274,7 @@ resizemouse(const Arg *arg)
 		None, cursor[CurResize]->cursor, CurrentTime) != GrabSuccess))
 		return;
 	XWarpPointer(dpy, None, c->win, 0, 0, 0, 0, c->w + c->bw - 1, c->h + c->bw - 1);
+	pointergrab = 1; /* reflow immediately inside the grab (togglefloating) */
 	do {
 		XMaskEvent(dpy, MOUSEMASK|ExposureMask|SubstructureRedirectMask, &ev);
 		switch(ev.type) {
@@ -1618,6 +2303,7 @@ resizemouse(const Arg *arg)
 			break;
 		}
 	} while (ev.type != ButtonRelease);
+	pointergrab = 0;
 	XWarpPointer(dpy, None, c->win, 0, 0, 0, 0, c->w + c->bw - 1, c->h + c->bw - 1);
 	XUngrabPointer(dpy, CurrentTime);
 	while (XCheckMaskEvent(dpy, EnterWindowMask, &ev));
@@ -1628,9 +2314,19 @@ resizemouse(const Arg *arg)
 	}
 }
 
-/* Fix stacking order: raise the selected floating window, then chain tiled
- * clients directly below one another with everything beneath the bar; drain
- * the EnterNotify storm the reordering produces. */
+/**
+ * @brief Fix the stacking order on a monitor.
+ *
+ * Raises the selected floating or non-tiled client, then chains visible tiled
+ * clients directly below one another with the bar beneath them. Reordering
+ * generates EnterNotify storms, which are drained before returning.
+ *
+ * @param[in]  m  Monitor whose stack is fixed.
+ *
+ * @note Writes bar_draw_pending; calls XRaiseWindow(), XConfigureWindow(), XSync() and XCheckMaskEvent().
+ * @see drawbar, focus, arrange
+ * @anchor spec_restack
+ */
 void
 restack(Monitor *m)
 {
@@ -1656,8 +2352,18 @@ restack(Monitor *m)
 	while (XCheckMaskEvent(dpy, EnterWindowMask, &ev));
 }
 
-/* Event loop: dispatch each event with coalescing enabled, then flush at
- * most one deferred layout pass and one deferred bar redraw per iteration. */
+/**
+ * @brief Run the main event loop.
+ *
+ * Synchronizes with the X server, then repeatedly waits for events while
+ * running. Each handler runs with dispatching set so arrange() requests coalesce;
+ * after each dispatch, flusheventtail() performs at most one layout pass and one
+ * bar redraw.
+ *
+ * @note Writes dispatching; reads running; flusheventtail() clears arrange_pending/bar_draw_pending and redraws bars.
+ * @see flusheventtail, handler, quit
+ * @anchor spec_run
+ */
 void
 run(void)
 {
@@ -1673,8 +2379,16 @@ run(void)
 	}
 }
 
-/* Adopt windows that already exist at startup: normal visible/iconic ones
- * first, transients afterwards so their parents are already managed. */
+/**
+ * @brief Adopt windows that already exist at startup.
+ *
+ * Queries the root tree and manages normal visible or iconic windows first,
+ * then transients, so transient parents are already managed.
+ *
+ * @note Calls XQueryTree(), XGetWindowAttributes(), XGetTransientForHint(), getstate(), manage() and XFree().
+ * @see manage, setup
+ * @anchor spec_scan
+ */
 void
 scan(void)
 {
@@ -1703,8 +2417,22 @@ scan(void)
 	}
 }
 
-/* Move c to monitor m: refocus away, relink into m's lists, adopt m's tags,
- * then refocus and rearrange. */
+/**
+ * @brief Move a client to another monitor.
+ *
+ * Refocuses away, unlinks the client from its old lists, assigns it the
+ * target monitor's current tags, relinks it there, then refocuses and
+ * rearranges.
+ *
+ * @param[in,out]  c  Client being moved.
+ * @param[in]  m  Destination monitor.
+ *
+ * @pre c and m are non-NULL; a no-op when c is already on m.
+ * @post c belongs to m's client and focus stacks with m's current tags; focus and layout are refreshed.
+ * @note Calls unfocus(), detach(), detachstack(), attach(), attachstack(), focus() and arrange(); X11 work happens through the layout.
+ * @see tagmon, movemouse, resizemouse
+ * @anchor spec_sendmon
+ */
 void
 sendmon(Client *c, Monitor *m)
 {
@@ -1721,8 +2449,16 @@ sendmon(Client *c, Monitor *m)
 	arrange(NULL);
 }
 
-/* Write the client's WM_STATE property (NormalState/IconicState/
- * WithdrawnState). */
+/**
+ * @brief Write a client's ICCCM WM_STATE property.
+ *
+ * @param[in]  c  Client whose window is updated.
+ * @param[in]  state  NormalState, IconicState or WithdrawnState.
+ *
+ * @note Calls XChangeProperty() with the WM_STATE atom.
+ * @see getstate, unmanage, swallow
+ * @anchor spec_setclientstate
+ */
 void
 setclientstate(Client *c, long state)
 {
@@ -1732,8 +2468,18 @@ setclientstate(Client *c, long state)
 		PropModeReplace, (unsigned char *)data, 2);
 }
 
-/* Check that the client supports WM protocol atom proto and, if so, deliver
- * it as a ClientMessage; returns whether it was sent. */
+/**
+ * @brief Send a WM protocol ClientMessage when the client supports it.
+ *
+ * @param[in]  c  Client to notify.
+ * @param[in]  proto  Protocol atom to send.
+ *
+ * @return Non-zero when the protocol is supported and the message was sent, zero otherwise.
+ *
+ * @note Calls XGetWMProtocols(), XFree() and XSendEvent(); uses CurrentTime.
+ * @see killclient, setfocus
+ * @anchor spec_sendevent
+ */
 int
 sendevent(Client *c, Atom proto)
 {
@@ -1759,9 +2505,19 @@ sendevent(Client *c, Atom proto)
 	return exists;
 }
 
-/* Assert focus on c: XSetInputFocus plus _NET_ACTIVE_WINDOW unless the
- * client asked to be excluded (neverfocus), always followed by the
- * WM_TAKE_FOCUS request so input-less clients still learn about it. */
+/**
+ * @brief Assert X input focus and announce the active window.
+ *
+ * Unless the client requested neverfocus, it receives XSetInputFocus() and
+ * becomes _NET_ACTIVE_WINDOW. WM_TAKE_FOCUS is always delivered so input-less
+ * clients still learn about the focus change.
+ *
+ * @param[in]  c  Client to focus.
+ *
+ * @note Calls XSetInputFocus(), XChangeProperty() and sendevent(); reads c->neverfocus, netatom[] and wmatom[].
+ * @see focus, focusin, sendevent
+ * @anchor spec_setfocus
+ */
 void
 setfocus(Client *c)
 {
@@ -1774,27 +2530,66 @@ setfocus(Client *c)
 	sendevent(c, wmatom[WMTakeFocus]);
 }
 
-/* Fork a child that execs killall(1) for the given process name and signal;
- * the child closes the X connection first. Target of the killall_impl seam. */
+/**
+ * @brief Run killall(1) for a process name and signal with ordered delivery.
+ *
+ * Forks a child that closes the X connection, starts a new session and execs
+ * killall. The parent waits for pipe EOF, which proves the child exited and the
+ * signal was delivered; this orders a STOP before a later CONT.
+ *
+ * @param[in]  name  Process name passed to killall.
+ * @param[in]  signal  Signal argument passed to killall, e.g. -STOP.
+ *
+ * @note Calls pipe(), fork(), close(), setsid(), execlp() and read(); may close the X connection file descriptor in the child; ignores EINTR while waiting.
+ * @warning Fork/pipe failure silently returns; name and signal must be valid strings.
+ * @see killatfullscreen_stop, killatfullscreen_start_body
+ * @anchor spec_killall
+ */
 void
 killall(const char *name, const char *signal)
 {
-	if (fork() == 0) {
+	int pfd[2];
+	pid_t pid;
+	ssize_t n;
+	char b;
+
+	if (pipe(pfd) == -1)
+		return;
+	if ((pid = fork()) == -1) {
+		close(pfd[0]);
+		close(pfd[1]);
+		return;
+	}
+	if (pid == 0) {
+		close(pfd[0]);
 		if (dpy)
 			close(ConnectionNumber(dpy));
 		setsid();
 		execlp("killall", "killall", signal, name, NULL);
-		exit(EXIT_SUCCESS);
+		_exit(EXIT_FAILURE);
 	}
+	close(pfd[1]);
+	/* pipe EOF means the killall child has exited, so the signal has been
+	 * delivered; ignore EINTR from unrelated signal handlers */
+	do
+		n = read(pfd[0], &b, 1);
+	while (n > 0 || (n < 0 && errno == EINTR));
+	close(pfd[0]);
 }
 
 /* indirection seam: tests point this at a recorder so killall invocations
  * can be asserted without fork/exec'ing the real binary */
 static void (*killall_impl)(const char *, const char *) = killall;
 
-/* True when any managed client is in fullscreen; used to pair the
- * STOP on the first enter with the CONT+HUP on the last exit, so
- * multiple fullscreen windows and abrupt destroys stay balanced. */
+/**
+ * @brief Return whether any managed client is fullscreen.
+ *
+ * @return Non-zero when at least one client has isfullscreen set, zero otherwise.
+ *
+ * @note Walks every monitor's client list.
+ * @see setfullscreen, unmanage, main
+ * @anchor spec_isanyfullscreen
+ */
 static int
 isanyfullscreen(void)
 {
@@ -1805,8 +2600,13 @@ isanyfullscreen(void)
 	return 0;
 }
 
-/* Suspend (SIGSTOP) every process named in killatfullscreen[] while a client
- * is fullscreen; undone by killatfullscreen_start() on exit. */
+/**
+ * @brief Suspend every configured fullscreen-blocked process.
+ *
+ * @note Calls killall_impl() with -STOP for each entry in killatfullscreen[].
+ * @see killatfullscreen_resume, killatfullscreen_start_body
+ * @anchor spec_killatfullscreen_stop
+ */
 void
 killatfullscreen_stop(void)
 {
@@ -1814,8 +2614,17 @@ killatfullscreen_stop(void)
 		killall_impl(killatfullscreen[i], "-STOP");
 }
 
-/* CONT → grace period → HUP sequence; split from the fork wrapper so
- * tests can execute it synchronously and observe every invocation */
+/**
+ * @brief Send CONT, wait, then HUP to configured processes.
+ *
+ * Sends SIGCONT to let targets resume, sleeps for a one-second grace period,
+ * then sends SIGHUP to ask them to terminate. Split from the fork wrapper so
+ * tests can execute it synchronously.
+ *
+ * @note Calls killall_impl() in order and sleep(1).
+ * @see killatfullscreen_start, killatfullscreen_stop
+ * @anchor spec_killatfullscreen_start_body
+ */
 static void
 killatfullscreen_start_body(void)
 {
@@ -1826,8 +2635,17 @@ killatfullscreen_start_body(void)
 		killall_impl(killatfullscreen[i], "-HUP");
 }
 
-/* Resume the suspended processes and ask them to terminate (CONT, grace
- * period, HUP); forked so the sleep does not stall the event loop. */
+/**
+ * @brief Resume and then terminate fullscreen-suspended processes.
+ *
+ * Under DWM_TEST the body runs synchronously so invocations are observable;
+ * in production it is forked so the grace-period sleep does not stall the event
+ * loop.
+ *
+ * @note Depends on DWM_TEST behavior; calls fork() in the non-test build.
+ * @see killatfullscreen_start_body, setfullscreen
+ * @anchor spec_killatfullscreen_start
+ */
 void
 killatfullscreen_start(void)
 {
@@ -1843,10 +2661,16 @@ killatfullscreen_start(void)
 #endif
 }
 
-/* Lightweight resume: only CONT, no HUP. Used to repair a stale STOP
- * after a crash/restart when no fullscreen client remains (e.g. dwm
- * died while dwmblocks-fast was stopped). CONT on a running process
- * is a no-op. */
+/**
+ * @brief Send only CONT to repair stale fullscreen STOPs.
+ *
+ * Used after a crash or restart when no fullscreen client remains. CONT on an
+ * already-running process is a no-op, so the repair is unconditional.
+ *
+ * @note Calls killall_impl() with -CONT for each configured process.
+ * @see killatfullscreen_stop, main
+ * @anchor spec_killatfullscreen_resume
+ */
 void
 killatfullscreen_resume(void)
 {
@@ -1854,12 +2678,25 @@ killatfullscreen_resume(void)
 		killall_impl(killatfullscreen[i], "-CONT");
 }
 
-/* Enter/leave EWMH fullscreen on c: update _NET_WM_STATE, save or restore
- * geometry/border/floating state, size to the monitor area, suspend/resume
- * the killatfullscreen[] processes, and force a full bar redraw on exit
- * since the bar was frozen during fullscreen. STOP is paired with the
- * first enter and START with the last exit so leaked STOPS (destroy
- * while fullscreen, multiple fullscreen windows) stay balanced. */
+/**
+ * @brief Enter or leave EWMH fullscreen on a client.
+ *
+ * Updates _NET_WM_STATE, saves or restores floating/border/geometry state,
+ * resizes the client to its monitor, raises it, suspends or resumes the
+ * killatfullscreen[] processes, forces a full bar redraw on exit, and rearranges.
+ * STOP is paired with the first enter and START with the last exit so leaked
+ * STOPs (destroyed while fullscreen, multiple fullscreen clients) stay
+ * balanced.
+ *
+ * @param[in,out]  c  Managed client whose fullscreen state changes.
+ * @param[in]  fullscreen  Non-zero to enter, zero to leave fullscreen.
+ *
+ * @post c->isfullscreen reflects the requested state; on exit the saved geometry, border and floating state are restored.
+ * @note Calls isanyfullscreen(), XChangeProperty(), resizeclient(), XRaiseWindow(), killatfullscreen_stop/start() and arrange(); writes c->oldstate/oldbw/isfullscreen/isfloating/bw, bar_dirty_segments and bar_draw_pending.
+ * @warning Enter and exit are idempotent; c must remain managed while the call runs.
+ * @see clientmessage, updatewindowtype, togglefullscr, isanyfullscreen
+ * @anchor spec_setfullscreen
+ */
 void
 setfullscreen(Client *c, int fullscreen)
 {
@@ -1887,15 +2724,25 @@ setfullscreen(Client *c, int fullscreen)
 		c->w = c->oldw;
 		c->h = c->oldh;
 		resizeclient(c, c->x, c->y, c->w, c->h);
-		/* refresh status text (was skipped during fullscreen) and force full redraw */
-		selmon->bar_dirty_segments = DIRTY_STATUS | DIRTY_TAGS | DIRTY_TITLE;
+		/* force full redraw of the bar owning this client */
+		c->mon->bar_dirty_segments = DIRTY_STATUS | DIRTY_TAGS | DIRTY_TITLE;
+		bar_draw_pending = 1;
 		arrange(c->mon);
 		if (!isanyfullscreen())
 			killatfullscreen_start();
 	}
 }
 
-/* Field-wise copy of a Gap struct (used to propagate per-monitor defaults). */
+/**
+ * @brief Copy a Gap struct field by field.
+ *
+ * @param[out]  to  Destination gap.
+ * @param[in]  from  Source gap.
+ *
+ * @note Pure copy; reads no globals. Both pointers must be non-NULL.
+ * @see setgaps, createmon
+ * @anchor spec_gap_copy
+ */
 void
 gap_copy(Gap *to, const Gap *from)
 {
@@ -1904,8 +2751,20 @@ gap_copy(Gap *to, const Gap *from)
 	to->gappx   = from->gappx;
 }
 
-/* Toggle, reset or increment the selected monitor's gaps; gappx collapses to
- * zero whenever gaps are disabled so layouts need no extra checks. */
+/**
+ * @brief Toggle, reset or adjust the selected monitor's gaps.
+ *
+ * GAP_TOGGLE flips the enable flag, GAP_RESET restores default_gap, and any
+ * other value adds arg->i to the real gap (clamped to zero) and enables gaps.
+ * The effective gappx is realgap multiplied by isgap so layouts need no extra
+ * checks.
+ *
+ * @param[in]  arg  arg->i is GAP_TOGGLE, GAP_RESET or a signed delta.
+ *
+ * @note Writes selmon->gap; calls arrange().
+ * @see gap_copy, tile, setmfact
+ * @anchor spec_setgaps
+ */
 void
 setgaps(const Arg *arg)
 {
@@ -1929,9 +2788,20 @@ setgaps(const Arg *arg)
 	arrange(selmon);
 }
 
-/* Select the layout passed in arg->v, or toggle between the two layout
- * slots when called without one. The bar is dirtied only when the effective
- * layout actually changed; with no client to arrange only the bar updates. */
+/**
+ * @brief Select or toggle the selected monitor's layout.
+ *
+ * Without an argument, or when the requested layout is already active, it
+ * flips to the other layout slot. The layout symbol is refreshed and the tag
+ * segment is dirtied only when the effective layout changed. Clients are
+ * rearranged when one is selected; otherwise only a bar redraw is scheduled.
+ *
+ * @param[in]  arg  Optional layout pointer in arg->v; NULL toggles slots.
+ *
+ * @note Writes selmon->sellt, selmon->lt and selmon->ltsymbol, plus bar_dirty_segments; calls arrange() or sets bar_draw_pending.
+ * @see arrangemon, setmfact, tile
+ * @anchor spec_setlayout
+ */
 void
 setlayout(const Arg *arg)
 {
@@ -1951,7 +2821,20 @@ setlayout(const Arg *arg)
 		bar_draw_pending = 1;    /* no selected client; just update bar content */
 }
 
-/* arg > 1.0 will set mfact absolutely */
+/**
+ * @brief Set or adjust the master-area fraction.
+ *
+ * Values below 1.0 are relative additions to the current mfact; values of 1.0
+ * or more set the fraction absolutely as arg->f - 1.0, matching the historical
+ * binding convention.
+ *
+ * @param[in]  arg  Fraction delta or absolute value.
+ *
+ * @note Writes selmon->mfact; calls arrange(); requires an active layout with an arrange hook.
+ * @warning Results outside [0.05, 0.95] are rejected, so some absolute values silently do nothing.
+ * @see incnmaster, tile
+ * @anchor spec_setmfact
+ */
 void
 setmfact(const Arg *arg)
 {
@@ -1966,9 +2849,22 @@ setmfact(const Arg *arg)
 	arrange(selmon);
 }
 
-/* One-time initialization: child reaping and signal handlers, screen and
- * drawing context, atoms, cursors, color schemes, bars, EWMH support
- * windows, root event selection, and initial key/button grabs. */
+/**
+ * @brief Perform one-time initialization of dwm.
+ *
+ * Installs child-reaping and signal handlers, initializes the screen, drawing
+ * context and fonts, interns atoms, creates cursors and color schemes, builds
+ * button and key caches, creates bars, publishes EWMH support/check windows,
+ * selects root events, grabs keys/buttons and performs the first draw and
+ * focus.
+ *
+ * @pre main() has already opened dpy and xcon.
+ * @post Event-handling state is ready; callers proceed to scan() and run().
+ * @note Allocates and initializes dpy-derived globals including root, sw, sh, drw, scheme, atoms, cursors, wmcheckwin, lrpad and bh; issues many X11 calls.
+ * @warning Calls DIE when no font can be loaded.
+ * @see main, run, cleanup, updategeom
+ * @anchor spec_setup
+ */
 void
 setup(void)
 {
@@ -2052,8 +2948,16 @@ setup(void)
 	focus(NULL);
 }
 
-/* Set/clear the internal urgency flag and mirror it in the window's WM_HINTS
- * XUrgencyHint so external pagers agree with dwm's view. */
+/**
+ * @brief Set or clear a client's urgency flag and mirror it in WM_HINTS.
+ *
+ * @param[in,out]  c  Client to update.
+ * @param[in]  urg  Non-zero to mark urgent, zero to clear.
+ *
+ * @note Writes c->isurgent; calls XGetWMHints(), XSetWMHints() and XFree(). Does not itself dirty the bar.
+ * @see updatewmhints, clientmessage, focus
+ * @anchor spec_seturgent
+ */
 void
 seturgent(Client *c, int urg)
 {
@@ -2067,9 +2971,20 @@ seturgent(Client *c, int urg)
 	XFree(wmh);
 }
 
-/* Recursively place visible clients at their current coordinates (top-down)
- * and park invisible ones far off-screen (bottom-up) instead of unmapping,
- * avoiding UnmapNotify/withdraw churn on every tag switch. */
+/**
+ * @brief Place visible clients and park invisible ones off-screen.
+ *
+ * Visible clients are processed top-down at their current coordinates;
+ * invisible clients are processed bottom-up and moved two widths to the left so
+ * even their borders stay off-screen. Unmapping is avoided to prevent
+ * UnmapNotify/withdraw churn on tag switches.
+ *
+ * @param[in]  c  Start of the monitor's focus stack, possibly NULL.
+ *
+ * @note Calls XMoveWindow() and resize() (X11); reads ISVISIBLE/monitor layout; does not modify list membership.
+ * @see arrange, arrangenow
+ * @anchor spec_showhide
+ */
 void
 showhide(Client *c)
 {
@@ -2089,7 +3004,15 @@ showhide(Client *c)
 	}
 }
 
-/* SIGHUP: restart dwm by exec'ing itself after the event loop exits. */
+/**
+ * @brief SIGHUP handler requesting a restart.
+ *
+ * @param[in]  unused  Signal number, ignored.
+ *
+ * @note Calls quit() with the restart flag; runs in signal-handler context.
+ * @see sigterm, quit, setup
+ * @anchor spec_sighup
+ */
 void
 sighup(int unused)
 {
@@ -2097,7 +3020,15 @@ sighup(int unused)
 	quit(&a);
 }
 
-/* SIGTERM: shut down cleanly via quit(). */
+/**
+ * @brief SIGTERM handler requesting a clean shutdown.
+ *
+ * @param[in]  unused  Signal number, ignored.
+ *
+ * @note Calls quit() without requesting a restart; runs in signal-handler context.
+ * @see sighup, quit
+ * @anchor spec_sigterm
+ */
 void
 sigterm(int unused)
 {
@@ -2105,8 +3036,20 @@ sigterm(int unused)
 	quit(&a);
 }
 
-/* Fork and exec arg->v; the child starts its own session and closes the X
- * connection so it outlives dwm. dmenu is retargeted to selmon. */
+/**
+ * @brief Fork and exec a configured command.
+ *
+ * When spawning dmenu the monitor argument is retargeted to selmon. The child
+ * starts a new session and closes the X connection so the program outlives
+ * dwm.
+ *
+ * @param[in]  arg  arg->v is the NULL-terminated command vector.
+ *
+ * @note May write dmenumon; calls fork(), setsid(), close() and execvp().
+ * @warning The child calls DIE if execvp fails; arg->v must be NULL-terminated.
+ * @see main, setup
+ * @anchor spec_spawn
+ */
 void
 spawn(const Arg *arg)
 {
@@ -2121,8 +3064,15 @@ spawn(const Arg *arg)
 	}
 }
 
-/* Replace the selected client's tags with arg->ui; refocus in case the
- * client became invisible on the current view. */
+/**
+ * @brief Replace the selected client's tags.
+ *
+ * @param[in]  arg  arg->ui is the new tag mask.
+ *
+ * @note Writes c->tags; calls focus() and arrange(); no-op without a selection or when the mask has no valid tags.
+ * @see toggletag, tagmon, toggleview
+ * @anchor spec_tag
+ */
 void
 tag(const Arg *arg)
 {
@@ -2133,8 +3083,15 @@ tag(const Arg *arg)
 	}
 }
 
-/* Send the selected client to the monitor adjacent to selmon in direction
- * arg->i. */
+/**
+ * @brief Send the selected client to the adjacent monitor.
+ *
+ * @param[in]  arg  arg->i selects the direction.
+ *
+ * @note Calls dirtomon() and sendmon(); no-op for a single monitor or without a selection.
+ * @see sendmon, focusmon
+ * @anchor spec_tagmon
+ */
 void
 tagmon(const Arg *arg)
 {
@@ -2143,9 +3100,21 @@ tagmon(const Arg *arg)
 	sendmon(selmon->sel, dirtomon(arg->i));
 }
 
-/* Default layout: nmaster clients share the master column (width mfact of
- * the workarea), the rest stack in the slave column, with gaps carved around
- * and between windows. */
+/**
+ * @brief Apply the default master/stack tiling layout.
+ *
+ * Snapshots the visible non-floating clients once so placement is linear
+ * rather than restarting a filtered scan per window. The master column takes
+ * mfact of the workarea when it holds clients; remaining clients fill the slave
+ * column. Gaps are carved around and between windows.
+ *
+ * @param[in]  m  Monitor to lay out.
+ *
+ * @note Allocates and frees a temporary client array; calls resize() (X11); reads m->nmaster, m->mfact and m->gap.
+ * @warning The monitor's gap must be initialized; ecalloc() may terminate on allocation failure.
+ * @see monocle, arrangemon, setmfact, incnmaster
+ * @anchor spec_tile
+ */
 void
 tile(Monitor *m)
 {
@@ -2163,7 +3132,8 @@ tile(Monitor *m)
 	if (n == 0)
 		return;
 
-	Client *tiled[n]; /* C99 VLA: bounded by live client count */
+	/* heap snapshot: avoids a large stack VLA at high client counts */
+	Client **tiled = ecalloc(n, sizeof *tiled);
 	for (i = 0, c = m->clients; c; c = c->next)
 		if (!c->isfloating && ISVISIBLE(c))
 			tiled[i++] = c;
@@ -2186,10 +3156,18 @@ tile(Monitor *m)
 				ty += HEIGHT(c) + m->gap.gappx;
 		}
 	}
+	free(tiled);
 }
 
-/* Show/hide the selected monitor's bar, moving the workarea and forcing a
- * full bar redraw either way. */
+/**
+ * @brief Show or hide the selected monitor's bar.
+ *
+ * @param[in]  arg  Unused.
+ *
+ * @note Writes selmon->showbar; calls updatebarpos(), XMoveResizeWindow(); marks all bar segments dirty and arranges.
+ * @see updatebarpos, drawbar
+ * @anchor spec_togglebar
+ */
 void
 togglebar(const Arg *arg)
 {
@@ -2201,8 +3179,18 @@ togglebar(const Arg *arg)
 	arrange(selmon);
 }
 
-/* Toggle the selected client between floating and tiled; fixed-size clients
- * always remain floating. Floating keeps the current geometry. */
+/**
+ * @brief Toggle the selected client between floating and tiled.
+ *
+ * Fixed-size clients always remain floating. Switching to floating preserves
+ * the current geometry.
+ *
+ * @param[in]  arg  Unused.
+ *
+ * @note Writes c->isfloating; calls resize() and arrange(); no-op without a selection or for fullscreen clients.
+ * @see movemouse, resizemouse, tile
+ * @anchor spec_togglefloating
+ */
 void
 togglefloating(const Arg *arg)
 {
@@ -2218,7 +3206,15 @@ togglefloating(const Arg *arg)
 	arrange(selmon);
 }
 
-/* Toggle the selected client's EWMH fullscreen state. */
+/**
+ * @brief Toggle the selected client's EWMH fullscreen state.
+ *
+ * @param[in]  arg  Unused.
+ *
+ * @note Calls setfullscreen(); no-op without a selected client.
+ * @see setfullscreen, clientmessage
+ * @anchor spec_togglefullscr
+ */
 void
 togglefullscr(const Arg *arg)
 {
@@ -2226,8 +3222,15 @@ togglefullscr(const Arg *arg)
     setfullscreen(selmon->sel, !selmon->sel->isfullscreen);
 }
 
-/* XOR arg->ui into the selected client's tags, refusing the transition that
- * would leave it tagged nowhere; refocus may change if it left the view. */
+/**
+ * @brief XOR tags on the selected client, refusing an empty result.
+ *
+ * @param[in]  arg  arg->ui is the tag mask to toggle.
+ *
+ * @note Writes c->tags; calls focus() and arrange(); no-op when the result would tag the client nowhere.
+ * @see tag, toggleview
+ * @anchor spec_toggletag
+ */
 void
 toggletag(const Arg *arg)
 {
@@ -2243,7 +3246,15 @@ toggletag(const Arg *arg)
 	}
 }
 
-/* XOR arg->ui into the viewed tagset of selmon, refusing an empty view. */
+/**
+ * @brief XOR tags in the selected monitor's current view.
+ *
+ * @param[in]  arg  arg->ui is the tag mask to toggle.
+ *
+ * @note Writes selmon->tagset and bar_dirty_segments; calls focus() and arrange(); no-op when the result would be an empty view.
+ * @see view, tag
+ * @anchor spec_toggleview
+ */
 void
 toggleview(const Arg *arg)
 {
@@ -2257,8 +3268,16 @@ toggleview(const Arg *arg)
 	}
 }
 
-/* Deselect c visually (normal border, released button grabs); with setfocus
- * set, also return X input focus to the root and clear _NET_ACTIVE_WINDOW. */
+/**
+ * @brief Deselect a client visually and optionally clear X input focus.
+ *
+ * @param[in]  c  Client to unfocus, possibly NULL.
+ * @param[in]  setfocus  Non-zero to return input focus to the root window.
+ *
+ * @note Calls grabbuttons() and XSetWindowBorder(); with setfocus also calls XSetInputFocus() and deletes _NET_ACTIVE_WINDOW. Does not modify selmon->sel.
+ * @see focus, grabbuttons
+ * @anchor spec_unfocus
+ */
 void
 unfocus(Client *c, int setfocus)
 {
@@ -2272,9 +3291,25 @@ unfocus(Client *c, int setfocus)
 	}
 }
 
-/* Stop managing c: unwind any swallow relationship first, remove it from
- * lists and the window-index hash, restore or withdraw the window (unless X
- * already destroyed it), free the client and reflow the monitor. */
+/**
+ * @brief Stop managing a client and release its resources.
+ *
+ * Unwinds a swallow relationship first. Otherwise removes the client from the
+ * client and focus stacks and the window hash, restores its border and withdraws
+ * it unless X already destroyed it, frees the client, reflows the monitor,
+ * rebuilds _NET_CLIENT_LIST, and resumes fullscreen-blocked processes when the
+ * last fullscreen client disappeared.
+ *
+ * @param[in]  c  Managed client to release.
+ * @param[in]  destroyed  Non-zero when X already destroyed the window.
+ *
+ * @pre c is managed by dwm.
+ * @post c is freed, lists and hash are updated, the monitor is rearranged and focused.
+ * @note Frees c or its parked placeholder; mutates winhash and monitor lists; calls detach/detachstack/arrangenow/focus/updateclientlist and X11 border/withdraw calls.
+ * @warning Do not use c after this returns; swallow-related paths return early after freeing only the placeholder.
+ * @see manage, destroynotify, unmapnotify, unswallow
+ * @anchor spec_unmanage
+ */
 void
 unmanage(Client *c, int destroyed)
 {
@@ -2289,6 +3324,7 @@ unmanage(Client *c, int destroyed)
 
 	Client *s = swallowingclient(c->win);
 	if (s) {
+		winclient_remove(s->swallowing); /* child's sole ref besides p->swallowing: drop it before free */
 		free(s->swallowing);
 		s->swallowing = NULL;
 		arrangenow(m); /* destruction path: immediate like manage() */
@@ -2322,9 +3358,19 @@ unmanage(Client *c, int destroyed)
 	}
 }
 
-/* Window unmapped: a synthetic UnmapNotify means the client withdrew
- * (ICCCM state change only); an unsynthesized one means it vanished, so
- * unmanage it. */
+/**
+ * @brief Handle an UnmapNotify event.
+ *
+ * A synthetic UnmapNotify means the client withdrew by ICCCM state change, so
+ * only WM_STATE is updated. An unsynthesized event means the window vanished and
+ * the client is unmanaged.
+ *
+ * @param[in]  e  X UnmapNotify event.
+ *
+ * @note Calls wintoclient(), setclientstate() or unmanage().
+ * @see manage, unmanage, destroynotify
+ * @anchor spec_unmapnotify
+ */
 void
 unmapnotify(XEvent *e)
 {
@@ -2339,8 +3385,13 @@ unmapnotify(XEvent *e)
 	}
 }
 
-/* Create a bar window for each monitor lacking one; safe to call repeatedly
- * (e.g. after new monitors appear). */
+/**
+ * @brief Create a bar window for every monitor that lacks one.
+ *
+ * @note Allocates m->barwin and calls XCreateWindow(), XDefineCursor(), XMapRaised() and XSetClassHint(); reads cursor[], bh and screen. Safe to call repeatedly.
+ * @see updatebarpos, drawbar, setup
+ * @anchor spec_updatebars
+ */
 void
 updatebars(void)
 {
@@ -2363,8 +3414,19 @@ updatebars(void)
 	}
 }
 
-/* Recompute the workarea (wy/wh) and bar position (by) from showbar/topbar;
- * a hidden bar parks at -bh, off-screen. */
+/**
+ * @brief Recompute a monitor's workarea and bar position.
+ *
+ * Starts from the full monitor rectangle. With the bar visible it subtracts bh
+ * from the workarea and places the bar at the top or bottom according to
+ * topbar; a hidden bar is parked at -bh, off-screen.
+ *
+ * @param[in,out]  m  Monitor whose wy/wh/by are recomputed.
+ *
+ * @note Writes m->wy, m->wh and m->by; reads m->my/m->mh/m->showbar/m->topbar and bh.
+ * @see togglebar, updategeom, createmon
+ * @anchor spec_updatebarpos
+ */
 void
 updatebarpos(Monitor *m)
 {
@@ -2378,8 +3440,13 @@ updatebarpos(Monitor *m)
 		m->by = -bh;
 }
 
-/* Rebuild the EWMH _NET_CLIENT_LIST root property from every monitor's
- * client list. */
+/**
+ * @brief Rebuild the EWMH _NET_CLIENT_LIST root property.
+ *
+ * @note Calls XDeleteProperty() and XChangeProperty(); walks every monitor's client list.
+ * @see manage, unmanage
+ * @anchor spec_updateclientlist
+ */
 void
 updateclientlist()
 {
@@ -2394,9 +3461,21 @@ updateclientlist()
 				(unsigned char *) &(c->win), 1);
 }
 
-/* Sync dwm's monitor list with the X server (Xinerama heads deduplicated by
- * geometry, else one full-screen monitor), migrating clients off removed
- * monitors; returns whether anything changed or moved. */
+/**
+ * @brief Synchronize dwm's monitor list with the X server.
+ *
+ * When Xinerama is active it deduplicates screen geometries, adds and removes
+ * monitors, and migrates clients off removed monitors to the head of mons. With
+ * no Xinerama it maintains a single full-screen monitor. The return value tells
+ * the caller whether geometry changed or clients moved.
+ *
+ * @return Non-zero when monitor geometry changed or clients were migrated, zero otherwise.
+ *
+ * @note Allocates monitors and a temporary unique-geometry array; calls XineramaIsActive/XineramaQueryScreens or uses sw/sh; may reassign selmon; calls createmon(), cleanupmon(), updatebarpos() and XFree().
+ * @warning Removed monitors' clients are migrated to the mons head; callers must refresh bars and the drawing context.
+ * @see configurenotify, setup, createmon, cleanupmon
+ * @anchor spec_updategeom
+ */
 int
 updategeom(void)
 {
@@ -2475,8 +3554,17 @@ updategeom(void)
 	return dirty;
 }
 
-/* Find which modifier bit NumLock occupies so lock-combination variants of
- * key/button grabs can be generated. */
+/**
+ * @brief Determine the modifier bit occupied by NumLock.
+ *
+ * Scans the X modifier map for the keycode bound to XK_Num_Lock and records
+ * the corresponding modifier mask so lock variants of grabs can be
+ * generated.
+ *
+ * @note Writes numlockmask; calls XGetModifierMapping(), XKeysymToKeycode() and XFreeModifiermap().
+ * @see grabbuttons, grabkeys
+ * @anchor spec_updatenumlockmask
+ */
 void
 updatenumlockmask(void)
 {
@@ -2493,9 +3581,19 @@ updatenumlockmask(void)
 	XFreeModifiermap(modmap);
 }
 
-/* Cache a client's ICCCM WM_NORMAL_HINTS (base/min/max sizes, increments,
- * aspect) into the Client and mark the cache valid until the property
- * changes. Also derives isfixed from an equal min/max size. */
+/**
+ * @brief Cache a client's ICCCM WM_NORMAL_HINTS.
+ *
+ * Reads base/min/max size, increment and aspect fields, treating absent hints
+ * as zero. An equal non-zero min and max size sets isfixed. The cache is marked
+ * valid until the property changes.
+ *
+ * @param[in,out]  c  Client whose hint fields are refreshed.
+ *
+ * @note Calls XGetWMNormalHints(); writes c->basew/baseh, minw/minh, maxw/maxh, incw/inch, mina/maxa, isfixed and hintsvalid.
+ * @see applysizehints, propertynotify
+ * @anchor spec_updatesizehints
+ */
 void
 updatesizehints(Client *c)
 {
@@ -2540,22 +3638,55 @@ updatesizehints(Client *c)
 	c->hintsvalid = 1;
 }
 
-/* Read the root window's WM_NAME into stext as the status text (fallback:
- * the version string); skips work when fullscreen-frozen or unchanged. */
+/**
+ * @brief Refresh the status text from the root window's WM_NAME.
+ *
+ * Skips work while the bar is frozen by fullscreen optimization. Falls back to
+ * the version string when the property is absent, and skips the redraw when the
+ * text is byte-for-byte unchanged. A changed status dirties the status and title
+ * segments because the title boundary may shift.
+ *
+ * @note Writes stext, stext_len, selmon->bar_dirty_segments and bar_draw_pending; calls gettextprop() (X11).
+ * @see drawbar, propertynotify, updatetitle
+ * @anchor spec_updatestatus
+ */
 void
 updatestatus(void)
 {
+	size_t len;
+	char buf[sizeof stext];
+
 	/* skip when fullscreen - bar is frozen, status would never be drawn */
 	if (optimizefullscreen && selmon->sel && selmon->sel->isfullscreen)
 		return;
-	stext_len = gettextprop(root, XA_WM_NAME, stext, sizeof(stext));
+	len = gettextprop(root, XA_WM_NAME, buf, sizeof buf);
+	if (!len) {
+		/* stock dwm fallback: version string when the root has no WM_NAME */
+		len = sizeof("dwm-" VERSION) - 1;
+		strcpy_len(buf, "dwm-" VERSION, len);
+	}
+	/* status unchanged byte-for-byte: no redraw needed */
+	if (len == stext_len && !memcmp(buf, stext, len + 1))
+		return;
+	memcpy(stext, buf, len + 1);
+	stext_len = len;
 	/* status changed; title boundary may shift if width differs */
 	selmon->bar_dirty_segments |= DIRTY_STATUS | DIRTY_TITLE;
 	bar_draw_pending = 1;            /* coalesce with other pending draws */
 }
 
-/* Fetch the client's title, preferring UTF-8 _NET_WM_NAME over WM_NAME;
- * empty titles become the "broken" marker. */
+/**
+ * @brief Refresh a client's cached title.
+ *
+ * Prefers the UTF-8 _NET_WM_NAME property, falling back to WM_NAME. An empty
+ * result is replaced with the "broken" marker.
+ *
+ * @param[in,out]  c  Client whose name buffer is refreshed.
+ *
+ * @note Writes c->name; calls gettextprop() (X11) and stpcpy_len().
+ * @see gettextprop, propertynotify, manage
+ * @anchor spec_updatetitle
+ */
 void
 updatetitle(Client *c)
 {
@@ -2565,8 +3696,18 @@ updatetitle(Client *c)
 		stpcpy_len(c->name, broken, sizeof(broken));
 }
 
-/* Apply EWMH window state/type: honor a pre-map fullscreen request and make
- * dialog-type windows float. */
+/**
+ * @brief Apply EWMH window state and type hints.
+ *
+ * A pre-map fullscreen state request enters fullscreen; a dialog window type
+ * makes the client floating.
+ *
+ * @param[in,out]  c  Client whose EWMH properties are applied.
+ *
+ * @note Calls getatomprop() and setfullscreen(); writes c->isfloating.
+ * @see getatomprop, setfullscreen, manage
+ * @anchor spec_updatewindowtype
+ */
 void
 updatewindowtype(Client *c)
 {
@@ -2579,8 +3720,19 @@ updatewindowtype(Client *c)
 		c->isfloating = 1;
 }
 
-/* Track WM_HINTS changes: urgency flag and the Input focus-mode hint
- * (neverfocus means dwm won't XSetInputFocus and relies on WM_TAKE_FOCUS). */
+/**
+ * @brief Track WM_HINTS urgency and input focus mode.
+ *
+ * Clears urgency at the source for the selected client; for others it mirrors
+ * the XUrgencyHint into c->isurgent. An InputHint with input unset makes the
+ * client neverfocus.
+ *
+ * @param[in,out]  c  Client whose WM_HINTS are read.
+ *
+ * @note Calls XGetWMHints(), XSetWMHints() and XFree(); reads selmon; writes c->isurgent and c->neverfocus.
+ * @see seturgent, manage, propertynotify
+ * @anchor spec_updatewmhints
+ */
 void
 updatewmhints(Client *c)
 {
@@ -2601,9 +3753,19 @@ updatewmhints(Client *c)
 	}
 }
 
-/* View the tags in arg->ui; an empty mask keeps the alternate tagset slot's
- * contents, i.e. reverts to the previously viewed tags. Same-view requests
- * are ignored. */
+/**
+ * @brief View the tags in arg->ui, or revert to the alternate tagset.
+ *
+ * An empty mask leaves the alternate tagset's contents in place, effectively
+ * reverting to the previously viewed tags. Requests for the already-current view
+ * are ignored.
+ *
+ * @param[in]  arg  arg->ui is the desired tag mask.
+ *
+ * @note Writes selmon->seltags/tagset and bar_dirty_segments; calls focus() and arrange().
+ * @see toggleview, tag, focus
+ * @anchor spec_view
+ */
 void
 view(const Arg *arg)
 {
@@ -2617,8 +3779,21 @@ view(const Arg *arg)
 	arrange(selmon);
 }
 
-/* Determine the PID owning a client window: X-Res extension query on Linux,
- * _NET_WM_PID property on OpenBSD; 0 when unavailable. */
+/**
+ * @brief Determine the PID owning a client window.
+ *
+ * On Linux this queries the X-Res extension; on OpenBSD it reads the
+ * _NET_WM_PID property. Zero is returned when the owner cannot be
+ * determined.
+ *
+ * @param[in]  w  Client window id.
+ *
+ * @return Owning process id, or 0 when unavailable.
+ *
+ * @note Linux uses xcb_res_query_client_ids() and frees the reply/error; OpenBSD uses XGetWindowProperty() and XFree().
+ * @see getparentprocess, manage, termforwin
+ * @anchor spec_winpid
+ */
 pid_t
 winpid(Window w)
 {
@@ -2634,15 +3809,17 @@ winpid(Window w)
 	xcb_res_query_client_ids_cookie_t c = xcb_res_query_client_ids(xcon, 1, &spec);
 	xcb_res_query_client_ids_reply_t *r = xcb_res_query_client_ids_reply(xcon, c, &e);
 
-	if (unlikely(!r))
+	if (unlikely(!r)) {
+		free(e);
 		return (pid_t)0;
+	}
 
 	xcb_res_client_id_value_iterator_t i = xcb_res_query_client_ids_ids_iterator(r);
 	for (; i.rem; xcb_res_client_id_value_next(&i)) {
 		spec = i.data->spec;
 		if (spec.mask & XCB_RES_CLIENT_ID_MASK_LOCAL_CLIENT_PID) {
 			uint32_t *t = xcb_res_client_id_value_value(i.data);
-			result = *t;
+			result = (pid_t)*t; /* 0xFFFFFFFF is the -1 "no pid" sentinel */
 			break;
 		}
 	}
@@ -2672,8 +3849,21 @@ winpid(Window w)
 	return result;
 }
 
-/* Retrieve parent process PID (ppid) for a given process PID 'p'.
- * Returns parent PID on success, or 0 if parent PID cannot be determined. */
+/**
+ * @brief Return the parent PID of a process.
+ *
+ * On Linux it parses /proc/&lt;pid&gt;/stat after the last ')' so process names
+ * containing spaces or parentheses are handled. On OpenBSD it uses kvm. Returns
+ * zero for invalid PIDs or unreadable data.
+ *
+ * @param[in]  p  Process id to inspect.
+ *
+ * @return Parent process id, or 0 when it cannot be determined or p <= 0.
+ *
+ * @note Opens/reads /proc or kvm structures; performs no X11 calls.
+ * @see isdescprocess, termforwin, winpid
+ * @anchor spec_getparentprocess
+ */
 pid_t
 getparentprocess(pid_t p)
 {
@@ -2735,9 +3925,18 @@ getparentprocess(pid_t p)
 	return (pid_t)v;
 }
 
-/* Checks if process 'c' is a descendant of process 'p'.
- * Returns non-zero (true) if 'p' is an ancestor of 'c',
- * or 0 (false) if 'p' is not an ancestor or if relationship cannot be determined. */
+/**
+ * @brief Test whether one process is an ancestor of another.
+ *
+ * @param[in]  p  Candidate ancestor PID.
+ * @param[in]  c  Candidate descendant PID; the walk uses a local copy.
+ *
+ * @return Non-zero when p is an ancestor of c, zero otherwise or when the relationship cannot be determined.
+ *
+ * @note Repeatedly calls getparentprocess(); rejects non-positive PIDs.
+ * @see getparentprocess, termforwin
+ * @anchor spec_isdescprocess
+ */
 int
 isdescprocess(pid_t p, pid_t c)
 {
@@ -2750,9 +3949,21 @@ isdescprocess(pid_t p, pid_t c)
 	return (p == c && c != 0);
 }
 
-/* Find a terminal client whose process is an ancestor of w's process — the
- * candidate to swallow w. Terminals already hosting a swallowed window don't
- * qualify, and neither does w being a terminal itself. */
+/**
+ * @brief Find the terminal client that should swallow a new window.
+ *
+ * Windows without a PID and terminal windows themselves never swallow. Scans
+ * every monitor for a terminal whose process is an ancestor of w's process and
+ * which is not already hosting a swallowed window.
+ *
+ * @param[in]  w  Newly managed client to match.
+ *
+ * @return Candidate terminal client, or NULL when none qualifies.
+ *
+ * @note Reads mons and client lists; calls isdescprocess().
+ * @see swallow, isdescprocess, winpid
+ * @anchor spec_termforwin
+ */
 Client *
 termforwin(const Client *w)
 {
@@ -2772,8 +3983,17 @@ termforwin(const Client *w)
 	return NULL;
 }
 
-/* If window w is a terminal parked by a swallow swap, return the holder
- * client whose placeholder owns it; otherwise NULL. */
+/**
+ * @brief Find the client holding a swallowed placeholder for a window.
+ *
+ * @param[in]  w  Placeholder window id.
+ *
+ * @return Holder client whose c->swallowing->win == w, or NULL.
+ *
+ * @note Walks every monitor's client list; reads no X properties.
+ * @see swallow, unswallow, destroynotify
+ * @anchor spec_swallowingclient
+ */
 Client *
 swallowingclient(Window w)
 {
@@ -2790,23 +4010,51 @@ swallowingclient(Window w)
 	return NULL;
 }
 
-/* Home slot for a window id: Fibonacci hashing spreads the structured
- * XID bit patterns evenly across the table. */
+/**
+ * @brief Compute the hash home slot for a window id.
+ *
+ * Uses a multiplicative Fibonacci-style hash to spread structured XID bit patterns evenly.
+ *
+ * @param[in]  w  Window id to hash.
+ *
+ * @return Home slot index in [0, WINHASH_SIZE).
+ *
+ * @note Pure computation; relies on WINHASH_SIZE being a power of two.
+ * @see winclient_put, winclient_remove, wintoclient
+ * @anchor spec_winhash_home
+ */
 static unsigned int
 winhash_home(Window w)
 {
 	return ((unsigned int)w * 2654435761u) >> 24;
 }
 
-/* Insert c under its current window id.  Suppressed when the table is
- * full — lookups then fall back to the list walk, keeping correctness. */
+/**
+ * @brief Insert a client into the window-id hash.
+ *
+ * Uses linear probing. When the table is full the insert is suppressed and
+ * winhash_overflowed is set permanently, because the suppressed client lives
+ * only in the authoritative monitor lists.
+ *
+ * @param[in]  c  Client to index under its current c->win.
+ *
+ * @note Writes winhash[], winhash_count and winhash_overflowed.
+ * @warning Suppressed clients are list-only; lookups must keep the overflow fallback enabled.
+ * @see winclient_remove, wintoclient
+ * @anchor spec_winclient_put
+ */
 static void
 winclient_put(Client *c)
 {
 	unsigned int i = winhash_home(c->win);
 
-	if (winhash_count >= WINHASH_SIZE)
+	if (winhash_count >= WINHASH_SIZE) {
+		/* remember the overflow permanently: after any later removal the
+		 * count drops below capacity, but the suppressed client is still
+		 * list-only, so the fallback must stay enabled. */
+		winhash_overflowed = 1;
 		return;
+	}
 	while (winhash[i] && winhash[i] != c)
 		i = (i + 1) & (WINHASH_SIZE - 1);
 	if (!winhash[i]) {
@@ -2815,9 +4063,19 @@ winclient_put(Client *c)
 	}
 }
 
-/* Remove c's entry.  Clearing a slot can break probe chains for entries
- * inserted after it during a collision, so the whole cluster following
- * the removed slot is rehashed until the next empty slot. */
+/**
+ * @brief Remove a client from the window-id hash.
+ *
+ * Clears the probed slot, then rehashes the following collision cluster until
+ * the next empty slot so probe chains stay valid.
+ *
+ * @param[in]  c  Client to remove, keyed by its current c->win.
+ *
+ * @note Writes winhash[] and winhash_count; calls winclient_put() while rehashing.
+ * @warning Absent or previously suppressed entries are silently ignored.
+ * @see winclient_put, wintoclient
+ * @anchor spec_winclient_remove
+ */
 static void
 winclient_remove(Client *c)
 {
@@ -2841,9 +4099,21 @@ winclient_remove(Client *c)
 	}
 }
 
-/* Map a window id to its Client through the open-addressing index; falls
- * back to the authoritative monitor-list walk only when the table has ever
- * run full (suppressed inserts live solely in the lists). */
+/**
+ * @brief Map a window id to its Client through the hash index.
+ *
+ * Probes the open-addressing table. An empty-slot miss is authoritative unless
+ * an insert was ever suppressed; then the monitor client lists are walked as the
+ * fallback.
+ *
+ * @param[in]  w  Window id to resolve.
+ *
+ * @return Matching client, or NULL when the window is not managed.
+ *
+ * @note Reads winhash[], winhash_overflowed, mons and client lists.
+ * @see wintomon, winclient_put, winclient_remove
+ * @anchor spec_wintoclient
+ */
 Client *
 wintoclient(Window w)
 {
@@ -2858,9 +4128,9 @@ wintoclient(Window w)
 		if (++probe >= WINHASH_SIZE)
 			break;
 	}
-	/* An empty-slot miss is authoritative unless the table ever ran full
-	 * (suppressed inserts live only in the lists). */
-	if (winhash_count < WINHASH_SIZE)
+	/* An empty-slot miss is authoritative unless an insert was ever
+	 * suppressed (suppressed inserts live only in the lists). */
+	if (!winhash_overflowed)
 		return NULL;
 	for (m = mons; m; m = m->next)
 		for (c = m->clients; c; c = c->next)
@@ -2869,8 +4139,21 @@ wintoclient(Window w)
 	return NULL;
 }
 
-/* Resolve a window to a monitor: root follows the pointer, bar windows and
- * client windows map to their owner, anything else defaults to selmon. */
+/**
+ * @brief Resolve a window id to its monitor.
+ *
+ * The root window follows the pointer through getrootptr()/recttomon(); bar
+ * windows map to their owner monitor; client windows map to c->mon; anything
+ * else defaults to selmon.
+ *
+ * @param[in]  w  Window id to resolve.
+ *
+ * @return Owning or best-matching monitor; never NULL while selmon is valid.
+ *
+ * @note Calls getrootptr() (XQueryPointer), wintoclient() and recttomon(); reads mons, root and selmon.
+ * @see wintoclient, recttomon
+ * @anchor spec_wintomon
+ */
 Monitor *
 wintomon(Window w)
 {
@@ -2888,9 +4171,22 @@ wintomon(Window w)
 	return selmon;
 }
 
-/* There's no way to check accesses to destroyed windows, thus those cases are
- * ignored (especially on UnmapNotify's). Other types of errors call Xlibs
- * default error handler, which may call exit. */
+/**
+ * @brief Non-fatal X error handler for race-prone requests.
+ *
+ * Ignores known benign failures on destroyed or already-configured windows
+ * (BadWindow, certain BadMatch/BadDrawable cases, and duplicate grabs). Other
+ * errors are printed and delegated to the previously installed handler.
+ *
+ * @param[in]  dpy  Display connection (unused).
+ * @param[in]  ee  X error event.
+ *
+ * @return 0 for ignored errors, otherwise the delegate handler's result, which may exit the process.
+ *
+ * @note Reads xerrorxlib; delegates through it, possibly calling exit().
+ * @see xerrordummy, xerrorstart
+ * @anchor spec_xerror
+ */
 int
 xerror(Display *dpy, XErrorEvent *ee)
 {
@@ -2909,16 +4205,35 @@ xerror(Display *dpy, XErrorEvent *ee)
 	return xerrorxlib(dpy, ee); /* may call exit */
 }
 
-/* Ignore-all error handler installed around deliberate race-prone sections,
- * e.g. killing clients or restoring borders of dying windows. */
+/**
+ * @brief Ignore-all X error handler for deliberate race sections.
+ *
+ * @param[in]  dpy  Display connection (unused).
+ * @param[in]  ee  X error event (unused).
+ *
+ * @return Always 0.
+ *
+ * @see xerror, killclient, unmanage
+ * @anchor spec_xerrordummy
+ */
 int
 xerrordummy(Display *dpy, XErrorEvent *ee)
 {
 	return 0;
 }
 
-/* Startup Error handler to check if another window manager
- * is already running. */
+/**
+ * @brief Startup X error handler that aborts on a conflicting window manager.
+ *
+ * @param[in]  dpy  Display connection (unused).
+ * @param[in]  ee  X error event (unused).
+ *
+ * @return -1; unreachable because DIE terminates the process.
+ *
+ * @note Calls DIE() with a fatal message.
+ * @see checkotherwm, xerror
+ * @anchor spec_xerrorstart
+ */
 int
 xerrorstart(Display *dpy, XErrorEvent *ee)
 {
@@ -2926,8 +4241,18 @@ xerrorstart(Display *dpy, XErrorEvent *ee)
 	return -1;
 }
 
-/* Promote the selected tiled client to master; if it already is master,
- * promote the next tiled client instead. */
+/**
+ * @brief Promote the selected tiled client to master.
+ *
+ * When the selected client is already master, the next tiled client is
+ * promoted instead.
+ *
+ * @param[in]  arg  Unused.
+ *
+ * @note Calls nexttiled() and pop(); X11 work happens through the resulting arrange.
+ * @see pop, nexttiled, tile
+ * @anchor spec_zoom
+ */
 void
 zoom(const Arg *arg)
 {
@@ -2942,6 +4267,24 @@ zoom(const Arg *arg)
 }
 
 #ifndef DWM_TEST
+/**
+ * @brief Program entry point: open the display, initialize, scan, run and clean up.
+ *
+ * Handles -v/usage, sets the locale, opens the X display and XCB connection,
+ * checks for a conflicting window manager, initializes dwm, adopts existing
+ * windows, repairs a stale fullscreen STOP, runs the event loop, optionally
+ * re-execs itself for a restart, then cleans up.
+ *
+ * @param[in]  argc  Argument count.
+ * @param[in]  argv  Argument vector; argv[0] is reused for a restart.
+ *
+ * @return EXIT_SUCCESS after a clean shutdown.
+ *
+ * @note Compiled only when DWM_TEST is not defined; writes dpy, xcon and restart; calls checkotherwm(), setup(), scan(), run(), cleanup(), XCloseDisplay() and execvp() on restart.
+ * @warning Calls DIE on invalid usage or when the display cannot be opened.
+ * @see setup, scan, run, cleanup
+ * @anchor spec_main
+ */
 int
 main(int argc, char *argv[])
 {

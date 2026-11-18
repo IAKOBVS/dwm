@@ -18,8 +18,8 @@
 #define DRW_H
 #include "mock_drw.h"
 
-#include "../dwm.h"
-#include "../dwm.c"
+#include "dwm.h"
+#include "dwm.c"
 
 static int total = 0, failed = 0;
 #define ASSERT(cond, msg) do { \
@@ -169,6 +169,34 @@ test_setfullscreen_exit_calls_start(void)
 	ASSERT_EQ(ncalls, 2, "restart sequence ran synchronously");
 	ASSERT(strcmp(call_signal[0], "-CONT") == 0, "exit first resumes (-CONT)");
 	ASSERT(strcmp(call_signal[1], "-HUP") == 0, "exit then terminates (-HUP)");
+}
+
+/* Enter then exit must deliver STOP before CONT: a delayed STOP arriving
+ * after the resume is what used to leave targets stuck in T state. */
+static void
+test_enter_then_exit_orders_stop_before_cont(void)
+{
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
+	Client c;
+
+	memset(&c, 0, sizeof c);
+	c.win = 42;
+	c.mon = selmon;
+	c.isfloating = 0;
+	c.bw = 2;
+	c.x = 100; c.y = 200; c.w = 300; c.h = 400;
+	c.oldx = 100; c.oldy = 200; c.oldw = 300; c.oldh = 400;
+
+	install_recorder();
+	setfullscreen(&c, 1);
+	setfullscreen(&c, 0);
+	restore_killall();
+
+	ASSERT_EQ(ncalls, 3, "STOP then CONT then HUP");
+	ASSERT(strcmp(call_signal[0], "-STOP") == 0, "STOP delivered first");
+	ASSERT(strcmp(call_signal[1], "-CONT") == 0, "CONT after STOP");
+	ASSERT(strcmp(call_signal[2], "-HUP") == 0, "HUP last");
 }
 
 /* Idempotent setfullscreen(1) must not re-suspend (no duplicate STOP) */
@@ -470,6 +498,7 @@ main(void)
 	test_start_body_cont_then_hup_in_order();
 	test_setfullscreen_enter_calls_stop();
 	test_setfullscreen_exit_calls_start();
+	test_enter_then_exit_orders_stop_before_cont();
 	test_setfullscreen_enter_idempotent_no_extra_stop();
 	test_unmanage_fullscreen_last_resumes();
 	test_unmanage_non_fullscreen_no_resume_when_fullscreen_remains();

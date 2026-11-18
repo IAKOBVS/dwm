@@ -1,4 +1,6 @@
 -std=c99
+-I.
+-Iunit/include
 -Iinclude
 -I..
 -DDWM_TEST

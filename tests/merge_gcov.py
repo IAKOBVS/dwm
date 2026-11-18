@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Merge gcov output from multiple test binaries to produce combined dwm.c coverage.
+"""Merge gcov output from multiple test binaries and report combined coverage.
 
-Usage: python3 merge_gcov.py <test-source-dir> <test-binary-labels...>
+Usage: python3 merge_gcov.py <test-dir> [--min=name=percent ...] <label...>
 
-Each binary label corresponds to a cov_test_<label> binary. The script:
-1. Runs each binary
-2. Runs gcov on dlass source
-3. Merges all gcov outputs
-4. Prints combined coverage summary
+Each label corresponds to a cov_test_<label> binary. The script runs every
+binary, merges the gcov results and prints per-source coverage. With --min it
+also fails (exit 1) when a source falls below its threshold, e.g.:
+
+    python3 merge_gcov.py . --min=dwm.c=95 --min=drw.c=80 <labels...>
 """
 import subprocess, sys, os, re, tempfile, shutil
 
@@ -124,10 +124,34 @@ def merge_gcovs(test_dir, test_labels):
 
 if __name__ == '__main__':
     if len(sys.argv) < 3:
-        print(f"Usage: {sys.argv[0]} <test-dir> <label1> [label2 ...]")
+        print(f"Usage: {sys.argv[0]} <test-dir> [--min=name=percent ...] <label...>")
         print(f"  Each label is the suffix after 'cov_test_'")
         sys.exit(1)
-    
+
     test_dir = sys.argv[1]
-    labels = sys.argv[2:]
-    merge_gcovs(test_dir, labels)
+    mins = {}
+    labels = []
+    for arg in sys.argv[2:]:
+        if arg.startswith('--min='):
+            name, _, pct = arg[len('--min='):].partition('=')
+            mins[name] = float(pct)
+        else:
+            labels.append(arg)
+
+    combined = merge_gcovs(test_dir, labels)
+
+    failed = False
+    for src in SOURCES:
+        name = os.path.basename(src)
+        if name not in mins:
+            continue
+        table = combined[src]
+        total = len(table)
+        covered = sum(1 for c in table.values() if c > 0)
+        pct = covered / total * 100 if total else 0.0
+        status = "OK" if pct >= mins[name] else "BELOW MINIMUM"
+        print(f"GATE {name}: {pct:.1f}% (minimum {mins[name]:.1f}%) {status}")
+        if pct < mins[name]:
+            failed = True
+
+    sys.exit(1 if failed else 0)

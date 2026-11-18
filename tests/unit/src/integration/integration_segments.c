@@ -8,8 +8,8 @@
 #include "mock_x11.h"
 #define DRW_H
 #include "mock_drw.h"
-#include "../dwm.h"
-#include "../dwm.c"
+#include "dwm.h"
+#include "dwm.c"
 
 static int total = 0, failed = 0;
 static Monitor *orig_selmon = NULL;
@@ -109,6 +109,7 @@ test_updatestatus_sets_segments(void)
 	mock_gettextprop_value = "status";
 	selmon->bar_dirty_segments = 0;
 	stext[0] = '\0';
+	stext_len = 0;
 	updatestatus();
 	ASSERT(selmon->bar_dirty_segments & DIRTY_STATUS,
 		"updatestatus sets DIRTY_STATUS");
@@ -122,7 +123,25 @@ test_updatestatus_sets_segments(void)
 }
 
 static void
-test_updatestatus_identical_text_still_dirty(void)
+test_updatestatus_fallback_version(void)
+{
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
+	/* no root WM_NAME -> stock fallback to "dwm-" VERSION */
+	mock_gettextprop_return = 0;
+	mock_gettextprop_value = NULL;
+	stext[0] = '\0';
+	stext_len = 0;
+	selmon->bar_dirty_segments = 0;
+	updatestatus();
+	ASSERT(strncmp(stext, "dwm-", 4) == 0,
+		"updatestatus falls back to the version string");
+	ASSERT(selmon->bar_dirty_segments & DIRTY_STATUS,
+		"fallback status sets DIRTY_STATUS");
+}
+
+static void
+test_updatestatus_identical_text_no_dirty(void)
 {
 	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
 	winhash_count = 0;
@@ -131,16 +150,13 @@ test_updatestatus_identical_text_still_dirty(void)
 	mock_gettextprop_value = "stable-status";
 	updatestatus();
 
-	/* updatestatus() always dirties (no identical-text memcmp guard): a
-	 * second call with the same text still schedules a redraw */
+	/* identical text is a no-op: the memcmp guard skips the redraw */
 	selmon->bar_dirty_segments = 0;
 	bar_draw_pending = 0;
 	updatestatus();
-	ASSERT(selmon->bar_dirty_segments & DIRTY_STATUS,
-		"identical text still sets DIRTY_STATUS");
-	ASSERT(selmon->bar_dirty_segments & DIRTY_TITLE,
-		"identical text still sets DIRTY_TITLE");
-	ASSERT_EQ(bar_draw_pending, 1, "identical text still defers a draw");
+	ASSERT_EQ(selmon->bar_dirty_segments, 0,
+		"identical text leaves segments clean");
+	ASSERT_EQ(bar_draw_pending, 0, "identical text does not defer a draw");
 
 	/* different content must also dirty and request the deferred draw */
 	mock_gettextprop_value = "stable-statuX";
@@ -224,6 +240,40 @@ test_swallow_sets_dirty_title(void)
 }
 
 static void
+test_propertynotify_uses_client_monitor(void)
+{
+	Monitor mon1 = {0}, mon2 = {0};
+	Client c = { .win = 0x5151, .mon = &mon2 };
+	XEvent ev = {0};
+	Monitor *saved = selmon;
+
+	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
+	winhash_count = 0;
+	selmon = &mon1;
+	winclient_put(&c);
+
+	ev.xproperty.type = PropertyNotify;
+	ev.xproperty.window = c.win;
+	ev.xproperty.atom = XA_WM_HINTS;
+	propertynotify(&ev);
+	ASSERT(mon2.bar_dirty_segments & DIRTY_TAGS,
+		"WM_HINTS urgency dirties the owning monitor");
+	ASSERT_EQ(mon1.bar_dirty_segments, 0,
+		"selmon bar left clean for another monitor's client");
+
+	mon2.bar_dirty_segments = 0;
+	mon2.sel = &c;
+	ev.xproperty.atom = XA_WM_NAME;
+	propertynotify(&ev);
+	ASSERT(mon2.bar_dirty_segments & DIRTY_TITLE,
+		"WM_NAME title dirties the owning monitor");
+
+	winclient_remove(&c);
+	winhash_overflowed = 0;
+	selmon = saved;
+}
+
+static void
 test_setlayout_sets_segments(void)
 {
 	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
@@ -302,6 +352,7 @@ test_bar_draw_pending_on_updatestatus(void)
 	winhash_count = 0;
 	bar_draw_pending = 0;
 	stext[0] = '\0';
+	stext_len = 0;
 	updatestatus();
 	ASSERT_EQ(bar_draw_pending, 1, "updatestatus sets bar_draw_pending");
 }
@@ -526,9 +577,11 @@ main(void)
 
 	restore_selmon();
 	test_updatestatus_sets_segments();
-	test_updatestatus_identical_text_still_dirty();
+	test_updatestatus_fallback_version();
+	test_updatestatus_identical_text_no_dirty();
 	test_updatestatus_different_text_sets_dirty();
 	test_swallow_sets_dirty_title();
+	test_propertynotify_uses_client_monitor();
 
 	restore_selmon();
 	test_setlayout_sets_segments();
