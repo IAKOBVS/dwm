@@ -1,0 +1,45 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  full-matrix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential clang doxygen python3 \
+            libx11-dev libxft-dev libxinerama-dev \
+            libxcb1-dev libxcb-res0-dev libfontconfig1-dev \
+            xvfb x11-xserver-utils x11-utils xdotool
+
+      - name: Build dwm
+        run: make -j2
+
+      - name: Spec traceability
+        run: make spec-check
+
+      - name: Generate documentation
+        run: make docs
+
+      - name: Full test matrix
+        # plain unit tests, ASan+UBSan, TSan+UBSan, sanitized integration,
+        # Clang integer sanitizer, and the Xvfb E2E smoke test.
+        run: cd tests && ./test-all.sh
+
+      - name: Coverage gate
+        run: make -C tests coverage-check
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs
+          path: tests/build/logs/
+          if-no-files-found: warn
