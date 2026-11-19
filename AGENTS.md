@@ -126,6 +126,8 @@ control the deterministic Xft fake. Reset with `mock_x11_reset()` and
 The suite was migrated from 13 aggregate `test_*.c` files to `tests/unit/`:
 176 per-function suites (`unit/src/dwm`, `unit/src/drw`, `unit/src/util`)
 plus 11 `unit/src/integration/` suites, with fixtures in `unit/include/`.
+`tests/contradictions/` holds reproduction tests for previously fixed
+contradictory states; each one fails if its fix is reverted.
 `make test` discovers and builds all of them. The per-file inventory below
 describes the legacy aggregate suites (still the unit of record in `HEAD`
 until the migration is committed); consult `tests/unit/src/` for the current

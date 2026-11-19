@@ -25,6 +25,7 @@
 #define DWM_H 1
 
 #include <sys/types.h>
+#include <signal.h>
 #include <string.h>
 #include <X11/Xlib.h>
 #include <X11/Xlib-xcb.h>
@@ -140,9 +141,20 @@ typedef struct Client Client;
  * @brief A managed top-level X window.
  *
  * Owned by exactly one monitor while managed; linked into `mon->clients`
- * via @ref next, `mon->stack` via @ref snext, and the global window hash.
+ * via `next`, `mon->stack` via `snext`, and the global window hash.
  */
+/** @brief Explicit lifecycle state of a managed client. */
+typedef enum {
+	CST_ABSENT = 0,      /**< not allocated */
+	CST_LISTED,          /**< linked into monitor lists and winhash */
+	CST_WITHDRAWN,       /**< still managed, ICCCM WithdrawnState */
+	CST_HOLDER,          /**< listed terminal owning a swallowed placeholder */
+	CST_PLACEHOLDER,     /**< off-list child parked under a holder */
+	CST_FREED            /**< released */
+} ClientState;
+
 struct Client {
+	ClientState state;                   /**< Explicit lifecycle state. */
 	char name[256];                      /**< WM_NAME/`_NET_WM_NAME` cache. */
 	float mina, maxa;                    /**< Aspect ratio hints (min/max). */
 	int x, y, w, h;                      /**< Last applied geometry. */
@@ -159,6 +171,8 @@ struct Client {
 	unsigned char isurgent;              /**< Urgency hint requested attention. */
 	unsigned char neverfocus;            /**< Input hint forbids focus. */
 	unsigned char oldstate;              /**< Previous ICCCM WM_STATE. */
+	unsigned char fs_oldfloating;        /**< Floating state captured at fullscreen entry. */
+	unsigned char transient_floating;    /**< Dialog/fixed state that must remain floating. */
 	unsigned char isfullscreen;          /**< Fullscreen state. */
 	unsigned char isterminal;            /**< Matched a terminal rule. */
 	unsigned char noswallow;             /**< Must not be swallowed. */
@@ -166,6 +180,7 @@ struct Client {
 	Client *next;                        /**< Next client on `mon->clients`. */
 	Client *snext;                       /**< Next client on `mon->stack`. */
 	Client *swallowing;                  /**< Child this client swallowed, or NULL. */
+	Client *holder;                      /**< Owning client when CST_PLACEHOLDER. */
 	Monitor *mon;                        /**< Owning monitor. */
 	Window win;                          /**< X window ID. */
 };
@@ -354,6 +369,8 @@ static void updatewmhints(Client *c);
 static void view(const Arg *arg);
 static Client *wintoclient(Window w);
 static Monitor *wintomon(Window w);
+static void error_guard_begin(void);
+static void error_guard_end(void);
 static int xerror(Display *dpy, XErrorEvent *ee);
 static int xerrordummy(Display *dpy, XErrorEvent *ee);
 static int xerrorstart(Display *dpy, XErrorEvent *ee);
@@ -392,8 +409,33 @@ static void (*handler[LASTEvent]) (XEvent *) = {
 	[UnmapNotify] = unmapnotify
 };
 static Atom wmatom[WMLast], netatom[NetLast];
-static int restart = 0;
-static int running = 1;
+
+/** @brief Explicit process lifecycle: one atomic state, no contradictory pairs. */
+typedef enum {
+	LIFE_LIVE = 0,       /**< event loop running */
+	LIFE_QUIT,           /**< clean shutdown requested */
+	LIFE_RESTART         /**< clean shutdown followed by execvp() */
+} LifecycleState;
+static volatile sig_atomic_t lifecycle = LIFE_LIVE;
+
+/** @brief Explicit state of the processes suspended for fullscreen. */
+typedef enum {
+	PROC_RUNNING = 0,  /**< targets are running */
+	PROC_STOPPED,      /**< STOP has been sent, no HUP pending */
+	PROC_RESTARTING    /**< CONT sent, HUP may be pending */
+} ProcessState;
+/** @brief Structured result of a monitor geometry reprobe. */
+typedef struct {
+	unsigned int added;      /**< monitors added */
+	unsigned int removed;    /**< monitors removed */
+	unsigned int resized;    /**< monitors whose geometry changed */
+	Monitor *removed_mon;    /**< last removed monitor (may be freed) */
+} GeomChange;
+static GeomChange lastgeom;
+
+static ProcessState procstate = PROC_RUNNING;
+static unsigned int fs_epoch = 0;    /**< incremented on each fullscreen stop session */
+static unsigned int start_epoch = 0; /**< epoch captured by the pending start */
 static Cur *cursor[CurLast];
 static Clr **scheme;
 static Display *dpy;
@@ -407,5 +449,6 @@ static xcb_connection_t *xcon;
 #define DIRTY_STATUS 1
 #define DIRTY_TAGS   2
 #define DIRTY_TITLE  4
+#define DIRTY_ALL    (DIRTY_STATUS | DIRTY_TAGS | DIRTY_TITLE)
 
 #endif /* DWM_H */

@@ -37,6 +37,7 @@ test_glyph_getwidth_cache_hit(void)
 	drw_fontset_invalidate_cache();
 	glyph_cache[cp & (GLYPH_CACHE_SIZE - 1)].codepoint = cp;
 	glyph_cache[cp & (GLYPH_CACHE_SIZE - 1)].width = 42;
+	glyph_cache[cp & (GLYPH_CACHE_SIZE - 1)].generation = font_generation;
 
 	ASSERT_EQ(glyph_getwidth(&drw, cp, "x", 1), 42,
 		"glyph_getwidth: cache hit returns stored width");

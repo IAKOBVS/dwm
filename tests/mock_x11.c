@@ -88,6 +88,8 @@ unsigned int mock_querytree_nchildren = 0;
 int mock_fork_return = -1;
 
 int mock_grabpointer_return = 0;  /* 0=GrabSuccess, non-zero=failure */
+int mock_xgrabpointer_calls = 0;
+int mock_xungrabpointer_calls = 0;
 int mock_fontset_fail = 0;        /* 0=normal, 1=drw_fontset_create returns NULL */
 
 int mock_getwindowattr_call_count = 0;
@@ -186,6 +188,8 @@ mock_x11_reset(void)
 	mock_querytree_nchildren = 0;
 	mock_fork_return = -1;
 	mock_grabpointer_return = 0;
+	mock_xgrabpointer_calls = 0;
+	mock_xungrabpointer_calls = 0;
 	mock_fontset_fail = 0;
 	mock_getwindowattr_call_count = 0;
 	mock_getwindowattr_fail_at = 0;
@@ -706,6 +710,7 @@ XGrabPointer(Display *dpy, Window w, Bool owner_events, unsigned int mask,
 	(void)dpy; (void)w; (void)owner_events; (void)mask;
 	(void)pointer_mode; (void)keyboard_mode; (void)confine_to;
 	(void)cursor; (void)time;
+	mock_xgrabpointer_calls++;
 	return mock_grabpointer_return;
 }
 
@@ -713,6 +718,7 @@ void
 XUngrabPointer(Display *dpy, Time time)
 {
 	(void)dpy; (void)time;
+	mock_xungrabpointer_calls++;
 }
 
 int

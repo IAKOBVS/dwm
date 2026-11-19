@@ -70,6 +70,7 @@ typedef struct {
 	int w;              /* glyph width in pixels */
 	unsigned long fg;   /* foreground pixel the pixmap was rendered with */
 	unsigned long bg;   /* background pixel baked into the cached pixmap  */
+	unsigned int generation; /* font generation the pixmap was rendered with */
 } EmojiCacheSlot;
 
 /**

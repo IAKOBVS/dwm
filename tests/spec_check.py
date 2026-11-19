@@ -88,7 +88,7 @@ def main() -> int:
         rel = path.relative_to(ROOT)
         if stem in EXEMPT_TESTS:
             continue
-        if stem.startswith("integration_"):
+        if stem.startswith("integration_") or stem.startswith("contradiction_"):
             continue
         if stem not in anchors:
             errors.append(f"{rel}: no source anchor spec_{stem}")

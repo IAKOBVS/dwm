@@ -57,7 +57,17 @@
 static struct {
 	long codepoint; /* -1 = empty */
 	unsigned int width;
+	unsigned int generation;
 } glyph_cache[GLYPH_CACHE_SIZE];
+static unsigned int font_generation = 1;
+
+/* Per-font fallback bookkeeping; cleared when the font chain changes. */
+#define NOMATCHES_LEN 64
+static struct {
+	long codepoint[NOMATCHES_LEN];
+	unsigned int idx;
+} nomatches;
+static unsigned int ellipsis_width;
 
 /**
  * @brief Look up or measure the advance width of a non-ASCII codepoint.
@@ -95,7 +105,8 @@ glyph_getwidth(Drw *drw, long codepoint, const char *utf8str, unsigned int utf8l
 	/* open-addressing probe: search the slot at index (codepoint % GLYPH_CACHE_SIZE)
 	 * and linear-probe forward, wrapping at GLYPH_CACHE_SIZE. */
 	while (glyph_cache[i].codepoint != -1) {
-		if (glyph_cache[i].codepoint == codepoint)
+		if (glyph_cache[i].codepoint == codepoint
+		&& glyph_cache[i].generation == font_generation)
 			return glyph_cache[i].width;
 		i = (i + 1) & (GLYPH_CACHE_SIZE - 1);
 		if (++probe >= GLYPH_CACHE_SIZE)
@@ -111,6 +122,7 @@ glyph_getwidth(Drw *drw, long codepoint, const char *utf8str, unsigned int utf8l
 			if (probe < GLYPH_CACHE_SIZE) {
 				glyph_cache[i].codepoint = codepoint;
 				glyph_cache[i].width = tmpw;
+				glyph_cache[i].generation = font_generation;
 			}
 			return tmpw;
 		}
@@ -149,7 +161,8 @@ emoji_cache_lookup(Drw *drw, long codepoint, unsigned long fg, unsigned long bg)
 	while (drw->emoji_cache[i].codepoint != -1) {
 		if (drw->emoji_cache[i].codepoint == codepoint
 		&& drw->emoji_cache[i].fg == fg
-		&& drw->emoji_cache[i].bg == bg)
+		&& drw->emoji_cache[i].bg == bg
+		&& drw->emoji_cache[i].generation == font_generation)
 			return (int)i;
 		i = (i + 1) & (EMOJI_CACHE_SIZE - 1);
 		if (++probe >= EMOJI_CACHE_SIZE)
@@ -203,6 +216,7 @@ emoji_cache_insert(Drw *drw, long codepoint, Pixmap pixmap, int w,
 	drw->emoji_cache[i].w = w;
 	drw->emoji_cache[i].fg = fg;
 	drw->emoji_cache[i].bg = bg;
+	drw->emoji_cache[i].generation = font_generation;
 }
 
 /**
@@ -228,6 +242,7 @@ emoji_cache_invalidate(Drw *drw)
 		drw->emoji_cache[i].codepoint = -1;
 		drw->emoji_cache[i].pixmap = 0;
 		drw->emoji_cache[i].w = 0;
+		drw->emoji_cache[i].generation = 0;
 	}
 }
 
@@ -695,8 +710,12 @@ drw_scm_create(Drw *drw, const char *clrnames[], size_t clrcount)
 void
 drw_setfontset(Drw *drw, Fnt *set)
 {
-	if (drw)
-		drw->fonts = set;
+	if (!drw)
+		return;
+	drw->fonts = set;
+	/* A different font chain changes metrics and glyph images. */
+	emoji_cache_invalidate(drw);
+	drw_fontset_invalidate_cache();
 }
 
 /**
@@ -817,13 +836,6 @@ drw_text(Drw *drw, int x, int y, unsigned int w, unsigned int h, unsigned int lp
 	XftResult result;
 	int charexists = 0, overflow = 0;
 	/* keep track of a couple codepoints for which we have no match. */
-	enum { nomatches_len = 64 };
-	static struct {
-		long codepoint[nomatches_len];
-		unsigned int idx;
-	} nomatches;
-	static unsigned int ellipsis_width = 0;
-
 	if (!drw || (render && (!drw->scheme || !w)) || !text || !drw->fonts)
 		return 0;
 
@@ -994,7 +1006,7 @@ drw_text(Drw *drw, int x, int y, unsigned int w, unsigned int h, unsigned int lp
 
 			/* match-nomatch optimization: skip XftFontMatch for codepoints
 			 * we have previously failed to find — XftFontMatch is expensive. */
-			for (i = 0; i < nomatches_len; ++i) {
+			for (i = 0; i < NOMATCHES_LEN; ++i) {
 				if (utf8codepoint == nomatches.codepoint[i])
 					goto no_match;
 			}
@@ -1035,7 +1047,7 @@ no_match:
 				/* remember this codepoint as a no-match so we skip the
 				 * expensive XftFontMatch call next time we see it */
 				/* ++idx cycles slots round-robin, overwriting the oldest entry */
-				nomatches.codepoint[++nomatches.idx % nomatches_len] = utf8codepoint;
+				nomatches.codepoint[++nomatches.idx % NOMATCHES_LEN] = utf8codepoint;
 				text += utf8charlen;
 				usedfont = drw->fonts;
 			}
@@ -1130,6 +1142,9 @@ drw_fontset_getwidth(Drw *drw, const char *text)
 void
 drw_fontset_invalidate_cache(void)
 {
+	font_generation++;
+	memset(&nomatches, 0, sizeof nomatches);
+	ellipsis_width = 0;
 	for (int i = 0; i < GLYPH_CACHE_SIZE; i++)
 		glyph_cache[i].codepoint = -1;
 }

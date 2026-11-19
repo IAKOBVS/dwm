@@ -680,6 +680,8 @@ extern int mock_fork_return;  /* 0=child, >0=parent, -1=error (default) */
 
 /* XGrabPointer return control */
 extern int mock_grabpointer_return;  /* 0=GrabSuccess (default), non-zero=failure */
+extern int mock_xgrabpointer_calls;  /* recorded XGrabPointer calls */
+extern int mock_xungrabpointer_calls;/* recorded XUngrabPointer calls */
 extern int mock_fontset_fail;        /* 0=normal (default), 1=drw_fontset_create returns NULL */
 
 /* XGetWindowAttributes call-count control */

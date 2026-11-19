@@ -39,7 +39,7 @@ MOCK_OBJ = mock_x11.o
 # Every per-function suite lives under unit/src/<module>/<function>.c;
 # shared fixtures live under unit/include/. Discovery is recursive so adding
 # a module directory is enough.
-TEST_SRC   := $(shell find unit -name '*.c' | sort)
+TEST_SRC   := $(shell find unit contradictions -name '*.c' | sort)
 TEST_NAMES := $(notdir $(basename $(TEST_SRC)))
 TEST_BIN   := $(addprefix bin/,$(TEST_NAMES))
 INTEGRATION_NAMES := $(notdir $(basename $(wildcard unit/src/integration/*.c)))

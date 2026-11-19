@@ -107,6 +107,7 @@ test_start_body_cont_then_hup_in_order(void)
 	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
 	winhash_count = 0;
 	install_recorder();
+	start_epoch = fs_epoch; /* start body belongs to the current session */
 	killatfullscreen_start_body();
 	restore_killall();
 
@@ -400,11 +401,9 @@ test_sighup_sets_restart_flag(void)
 {
 	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
 	winhash_count = 0;
-	running = 1;
-	restart = 0;
+	lifecycle = LIFE_LIVE;
 	sighup(0);
-	ASSERT_EQ(running, 0, "sighup stops the event loop");
-	ASSERT_EQ(restart, 1, "sighup requests restart via execvp");
+	ASSERT_EQ(lifecycle, LIFE_RESTART, "sighup requests restart via execvp");
 }
 
 /* SIGTERM exits without restart: quit({0}) leaves restart untouched */
@@ -413,11 +412,10 @@ test_sigterm_does_not_restart(void)
 {
 	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
 	winhash_count = 0;
-	running = 1;
-	restart = 0;
+	lifecycle = LIFE_LIVE;
 	sigterm(0);
-	ASSERT_EQ(running, 0, "sigterm stops the event loop");
-	ASSERT_EQ(restart, 0, "sigterm does not request restart");
+	ASSERT_EQ(lifecycle, LIFE_QUIT, "sigterm stops the event loop");
+	ASSERT(lifecycle != LIFE_RESTART, "sigterm does not request restart");
 }
 
 /* getrootptr returns True and writes coordinates when X reports pointer

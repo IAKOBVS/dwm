@@ -462,6 +462,24 @@ own build tree and allowlists only intentional wraparound (hash functions,
 matrix plus spec/docs/coverage gates on every push and PR.
 See `CODEBASE-REVIEW.md` for the current gap list.
 
+## 13a. Explicit state machines
+
+Several previously implicit machines are now explicit in code:
+
+| Machine | State type | Single writer / helper |
+|---|---|---|
+| Process lifecycle | `LifecycleState` (`dwm.h`) | `quit()` (`spec_quit`) |
+| Mouse drag | `DragPhase` / `DragState` (`dwm.c`) | `drag_begin()` / `drag_end()` (`spec_drag_begin`, `spec_drag_end`) |
+| Fullscreen processes | `ProcessState` + `fs_epoch` (`dwm.h`) | `killatfullscreen_stop/start/resume` |
+| Client lifecycle | `ClientState` + `holder` (`dwm.h`) | lifecycle call sites in `manage`, `swallow`, `unswallow`, `unmanage` |
+| Bar rendering | `BarState` + `DIRTY_ALL` (`dwm.h`) | `bar_mark_dirty()` (`spec_bar_mark_dirty`) |
+| Geometry reprobe | `GeomChange` (`dwm.h`) | `updategeom()` populates `lastgeom` |
+| X errors | scoped guard | `error_guard_begin/end()` |
+
+Conventions: a state transition must go through the named helper; never mix a
+raw field write with a helper call for the same state. Tests for each helper
+live in `tests/unit/src/dwm/<function>.c`.
+
 ## 14. Traceability matrix
 
 | Subsystem | Primary anchors | Strongest tests |

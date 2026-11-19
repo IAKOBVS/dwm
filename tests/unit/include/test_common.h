@@ -224,7 +224,8 @@ init_test_globals(void)
 	sw = 1920; sh = 1080;
 	bh = 22; lrpad = 11;
 	wmcheckwin = 0;
-	running = 1;
+	lifecycle = LIFE_LIVE;
+	bar_clear_on_draw = 0; /* keep dirty segments observable after drawbar() */
 	arrange_calls = 0;
 
 	selmon = calloc(1, sizeof(Monitor));

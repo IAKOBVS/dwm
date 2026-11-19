@@ -976,17 +976,16 @@ test_quit(void)
 {
 	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
 	winhash_count = 0;
-	running = 1; restart = 0;
+	lifecycle = LIFE_LIVE;
 	Arg arg = { .i = 0 };
 	quit(&arg);
-	ASSERT_EQ(running, 0, "quit: running == 0");
-	ASSERT_EQ(restart, 0, "quit: restart == 0 (arg.i=0)");
+	ASSERT_EQ(lifecycle, LIFE_QUIT, "quit: running == 0");
+	ASSERT(lifecycle != LIFE_RESTART, "quit: restart == 0 (arg.i=0)");
 
-	running = 1; restart = 0;
+	lifecycle = LIFE_LIVE;
 	Arg arg2 = { .i = 1 };
 	quit(&arg2);
-	ASSERT_EQ(running, 0, "quit restart: running == 0");
-	ASSERT_EQ(restart, 1, "quit restart: restart == 1");
+	ASSERT_EQ(lifecycle, LIFE_RESTART, "quit restart: restart == 1");
 }
 
 /* --- togglefloating --- */

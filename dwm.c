@@ -82,6 +82,23 @@ static int arrange_pending = 0;      /* deferred arrange requested; executed at 
 static int dispatching = 0;          /* true while run() dispatches an event handler; enables arrange coalescing */
 static int pointergrab = 0;          /* true inside movemouse/resizemouse; force immediate reflow */
 
+/** @brief Phases of an interactive mouse drag. */
+typedef enum {
+	DRAG_IDLE = 0,   /**< no grab owned */
+	DRAG_GRABBED,    /**< XGrabPointer succeeded, loop not entered */
+	DRAG_ACTIVE,     /**< motion loop running */
+	DRAG_RELEASING   /**< ungrab in progress */
+} DragPhase;
+
+/** @brief State owned by a single mouse drag; no overlapping drags are allowed. */
+typedef struct {
+	Client *c;        /**< client being dragged */
+	Monitor *origin;  /**< monitor the drag started on */
+	Time lasttime;    /**< throttling timestamp */
+	DragPhase phase;  /**< current phase */
+} DragState;
+static DragState drag = { .phase = DRAG_IDLE };
+
 /* Window -> Client lookup cache.
  * wintoclient() is called on every event delivery (enter/notify, property,
  * configure...); the linear walk over all monitors' client lists showed
@@ -109,6 +126,67 @@ long arrange_calls = 0;              /* test observability: layout passes perfor
 
 /* configuration, allows nested code to access above variables */
 #include "config.h"
+
+/** @brief Logical phase of a monitor's bar, derived from its flag fields. */
+typedef enum {
+	BAR_HIDDEN = 0,    /**< bar not shown */
+	BAR_FROZEN,        /**< fullscreen policy suppresses drawing */
+	BAR_CLEAN,         /**< pixmap matches screen and content */
+	BAR_EXPOSED_ONLY,  /**< only the retained pixmap needs a blit */
+	BAR_DIRTY          /**< one or more content segments changed */
+} BarState;
+
+/* Tests observe the dirty mask after drawbar(); production clears it. */
+#ifdef DWM_TEST
+static int bar_clear_on_draw = 0;
+#else
+static int bar_clear_on_draw = 1;
+#endif
+
+/**
+ * @brief Derive the explicit bar phase from a monitor's current flags.
+ *
+ * @param[in] m  Monitor whose bar state is inspected.
+ * @return The current BarState.
+ * @note Pure read of m->showbar, m->sel, m->bar_dirty_segments and
+ *       m->bar_exposed.
+ * @anchor spec_bar_state_of
+ */
+static BarState
+bar_state_of(Monitor *m)
+{
+	if (!m->showbar)
+		return BAR_HIDDEN;
+	if (optimizefullscreen && m->sel && m->sel->isfullscreen)
+		return BAR_FROZEN;
+	if (m->bar_dirty_segments)
+		return BAR_DIRTY;
+	if (m->bar_exposed)
+		return BAR_EXPOSED_ONLY;
+	return BAR_CLEAN;
+}
+
+/**
+ * @brief Mark bar segments dirty and request a coalesced redraw.
+ *
+ * This is the single writer for bar_dirty_segments and bar_draw_pending;
+ * direct writes elsewhere are replaced by calls to this helper.
+ *
+ * @param[in,out] m     Monitor whose bar changes; NULL is ignored.
+ * @param[in]     bits  DIRTY_* segment mask.
+ * @post m->bar_dirty_segments includes @p bits and bar_draw_pending is set.
+ * @note Writes per-monitor bar state and the global pending flag.
+ * @anchor spec_bar_mark_dirty
+ */
+static void
+bar_mark_dirty(Monitor *m, unsigned int bits)
+{
+	if (!m)
+		return;
+	m->bar_dirty_segments |= bits;
+	bar_draw_pending = 1;
+}
+
 
 /**
  * @brief Compile-time guard that all tags fit in an unsigned int bitmask.
@@ -337,7 +415,8 @@ static void
 flusheventtail(void)
 {
 	if (arrange_pending) {
-		arrange_pending = 0;
+		arrange_pending = 0; /* restack skipped by arrangenow(NULL) */
+		bar_draw_pending = 1;
 		arrangenow(NULL);
 	}
 	if (bar_draw_pending) {
@@ -439,6 +518,9 @@ swallow(Client *p, Client *c)
 	XUnmapWindow(dpy, p->win);
 
 	p->swallowing = c;
+	p->state = CST_HOLDER;
+	c->state = CST_PLACEHOLDER;
+	c->holder = p;
 	c->mon = p->mon;
 
 	/* window identities changed hands; re-index both lookup entries */
@@ -451,7 +533,7 @@ swallow(Client *p, Client *c)
 	winclient_put(c);
 	updatetitle(p);
 	/* parent adopted child's name; client list unchanged, tags untouched */
-	p->mon->bar_dirty_segments |= DIRTY_TITLE;
+	bar_mark_dirty(p->mon, DIRTY_TITLE);
 	XMoveResizeWindow(dpy, p->win, p->x, p->y, p->w, p->h);
 	arrangenow(p->mon); /* creation path: keep the swap transition visible */
 	configure(p);
@@ -484,8 +566,15 @@ unswallow(Client *c)
 	c->win = c->swallowing->win;
 	winclient_put(c);
 
-	free(c->swallowing);
+	{
+		Client *ph = c->swallowing;
+
+		ph->state = CST_FREED;
+		ph->holder = NULL;
+		free(ph);
+	}
 	c->swallowing = NULL;
+	c->state = CST_LISTED;
 
 	/* unfullscreen the client */
 	setfullscreen(c, 0);
@@ -948,6 +1037,7 @@ configurenotify(XEvent *e)
 			drw_resize(drw, sw, bh);
 			updatebars();
 			for (m = mons; m; m = m->next) {
+				bar_mark_dirty(m, DIRTY_ALL); /* resize invalidated the pixmap */
 				for (c = m->clients; c; c = c->next)
 					if (c->isfullscreen)
 						resizeclient(c, m->mx, m->my, m->mw, m->mh);
@@ -1057,7 +1147,7 @@ createmon(void)
 	/* 1 % LENGTH guards single-layout configs */
 	m->lt[1] = &layouts[1 % LENGTH(layouts)];
 	stpncpy_len(m->ltsymbol, sizeof m->ltsymbol, layouts[0].symbol, strlen(layouts[0].symbol));
-	m->bar_dirty_segments = DIRTY_STATUS | DIRTY_TAGS | DIRTY_TITLE;
+	bar_mark_dirty(m, DIRTY_ALL);
 	m->bar_exposed = 1;
 	return m;
 }
@@ -1257,9 +1347,8 @@ drawbar(Monitor *m)
 	drw_map(drw, m->barwin, 0, 0, m->ww, bh);
 	m->bar_exposed = 0;             /* pixmap now matches screen; no copy needed until next expose */
 	/* content now matches pixmap; skip next expose/restack */
-#ifndef DWM_TEST
-	m->bar_dirty_segments = 0;
-#endif
+	if (bar_clear_on_draw)
+		m->bar_dirty_segments = 0; /* tests keep the mask observable */
 }
 
 /**
@@ -1357,6 +1446,8 @@ expose(XEvent *e)
 void
 focus(Client *c)
 {
+	Monitor *oldmon = selmon;
+
 	if (!c || !ISVISIBLE(c))
 		for (c = selmon->stack; c && !ISVISIBLE(c); c = c->snext);
 	if (selmon->sel && selmon->sel != c)
@@ -1375,9 +1466,12 @@ focus(Client *c)
 		XSetInputFocus(dpy, root, RevertToPointerRoot, CurrentTime);
 		XDeleteProperty(dpy, root, netatom[NetActiveWindow]);
 	}
+	/* A monitor switch must repaint status on the newly selected monitor. */
+	if (selmon != oldmon)
+		bar_mark_dirty(selmon, DIRTY_STATUS | DIRTY_TITLE);
 	/* only dirty bar if focus actually changed — skip redundant redraws */
 	if (c != selmon->sel)
-		selmon->bar_dirty_segments |= DIRTY_TITLE | DIRTY_TAGS;
+		bar_mark_dirty(selmon, DIRTY_TITLE | DIRTY_TAGS);
 	selmon->sel = c;
 	bar_draw_pending = 1;
 }
@@ -1761,11 +1855,10 @@ killclient(const Arg *arg)
 		return;
 	if (unlikely(!sendevent(selmon->sel, wmatom[WMDelete]))) {
 		XGrabServer(dpy);
-		XSetErrorHandler(xerrordummy);
+		error_guard_begin();
 		XSetCloseDownMode(dpy, DestroyAll);
 		XKillClient(dpy, selmon->sel->win);
-		XSync(dpy, False);
-		XSetErrorHandler(xerror);
+		error_guard_end();
 		XUngrabServer(dpy);
 	}
 }
@@ -1798,6 +1891,7 @@ manage(Window w, XWindowAttributes *wa)
 	XWindowChanges wc;
 
 	c = ecalloc(1, sizeof(Client));
+	c->state = CST_LISTED;
 	c->win = w;
 	c->pid = winpid(w);
 	/* geometry */
@@ -1834,8 +1928,10 @@ manage(Window w, XWindowAttributes *wa)
 	updatewmhints(c);
 	XSelectInput(dpy, w, EnterWindowMask|FocusChangeMask|PropertyChangeMask|StructureNotifyMask);
 	grabbuttons(c, 0);
-	if (!c->isfloating)
-		c->isfloating = c->oldstate = trans != None || c->isfixed;
+	if (!c->isfloating) {
+		c->transient_floating = trans != None || c->isfixed;
+		c->isfloating = c->oldstate = c->transient_floating;
+	}
 	if (c->isfloating)
 		XRaiseWindow(dpy, c->win);
 	winclient_put(c); /* index for O(1) wintoclient lookups */
@@ -1962,6 +2058,60 @@ motionnotify(XEvent *e)
 }
 
 /**
+ * @brief Acquire the pointer grab and enter the drag state machine.
+ *
+ * On failure the state remains DRAG_IDLE, so every later path can call
+ * drag_end() unconditionally without releasing someone else's grab.
+ *
+ * @param[in] c      Client to drag; must be non-NULL and live.
+ * @param[in] shape  Cursor shape to display during the drag.
+ * @return 1 on success, 0 when the grab failed or shutdown was requested.
+ *
+ * @pre  drag.phase == DRAG_IDLE.
+ * @post On success drag.phase == DRAG_GRABBED and pointergrab == 1.
+ * @note Calls XGrabPointer; writes the drag state and pointergrab.
+ * @anchor spec_drag_begin
+ */
+static int
+drag_begin(Client *c, Cursor shape)
+{
+	if (!c || lifecycle != LIFE_LIVE || drag.phase != DRAG_IDLE)
+		return 0;
+	if (unlikely(XGrabPointer(dpy, root, False, MOUSEMASK, GrabModeAsync,
+		GrabModeAsync, None, shape, CurrentTime) != GrabSuccess))
+		return 0;
+	drag.c = c;
+	drag.origin = selmon;
+	drag.lasttime = 0;
+	drag.phase = DRAG_GRABBED;
+	pointergrab = 1; /* reflow immediately inside the grab */
+	return 1;
+}
+
+/**
+ * @brief Leave the drag state machine and always release the pointer grab.
+ *
+ * Idempotent: calling it with no active drag is a no-op, so all early-return
+ * and failure paths share the same cleanup.
+ *
+ * @post drag.phase == DRAG_IDLE and pointergrab == 0.
+ * @note Calls XUngrabPointer; writes the drag state and pointergrab.
+ * @anchor spec_drag_end
+ */
+static void
+drag_end(void)
+{
+	if (drag.phase == DRAG_IDLE)
+		return;
+	drag.phase = DRAG_RELEASING;
+	pointergrab = 0;
+	XUngrabPointer(dpy, CurrentTime);
+	drag.c = NULL;
+	drag.origin = NULL;
+	drag.phase = DRAG_IDLE;
+}
+
+/**
  * @brief Interactively move the selected client with the mouse.
  *
  * Grabs the pointer, warps relative to the grab point, then processes motion
@@ -1992,14 +2142,16 @@ movemouse(const Arg *arg)
 	restack(selmon);
 	ocx = c->x;
 	ocy = c->y;
-	if (unlikely(XGrabPointer(dpy, root, False, MOUSEMASK, GrabModeAsync, GrabModeAsync,
-		None, cursor[CurMove]->cursor, CurrentTime) != GrabSuccess))
+	if (!drag_begin(c, cursor[CurMove]->cursor))
 		return;
-	if (!getrootptr(&x, &y))
+	if (!getrootptr(&x, &y)) { /* grab is already owned: funnel through cleanup */
+		drag_end();
 		return;
-	pointergrab = 1; /* reflow immediately inside the grab (togglefloating) */
-	do {
-		XMaskEvent(dpy, MOUSEMASK|ExposureMask|SubstructureRedirectMask, &ev);
+	}
+	drag.phase = DRAG_ACTIVE;
+	while (drag.phase == DRAG_ACTIVE && lifecycle == LIFE_LIVE) {
+		if (XMaskEvent(dpy, MOUSEMASK|ExposureMask|SubstructureRedirectMask|StructureNotifyMask, &ev) < 0)
+			break;
 		switch(ev.type) {
 		case ConfigureRequest:
 		case Expose:
@@ -2029,9 +2181,10 @@ movemouse(const Arg *arg)
 				resize(c, nx, ny, c->w, c->h, 1);
 			break;
 		}
-	} while (ev.type != ButtonRelease);
-	pointergrab = 0;
-	XUngrabPointer(dpy, CurrentTime);
+		if (ev.type == ButtonRelease || ev.type == DestroyNotify || ev.type == UnmapNotify)
+			drag.phase = DRAG_RELEASING;
+	}
+	drag_end();
 	if ((m = recttomon(c->x, c->y, c->w, c->h)) != selmon) {
 		sendmon(c, m);
 		selmon = m;
@@ -2128,7 +2281,7 @@ propertynotify(XEvent *e)
 		case XA_WM_HINTS:
 			updatewmhints(c);
 		/* urgency indicators in tag rects changed */
-		c->mon->bar_dirty_segments |= DIRTY_TAGS;
+		bar_mark_dirty(c->mon, DIRTY_TAGS);
 		bar_draw_pending = 1;    /* defer to event-loop tail for coalescing */
 			break;
 		}
@@ -2136,7 +2289,7 @@ propertynotify(XEvent *e)
 			updatetitle(c);
 			if (c == c->mon->sel) {
 				/* selected client's window title changed */
-				c->mon->bar_dirty_segments |= DIRTY_TITLE;
+				bar_mark_dirty(c->mon, DIRTY_TITLE);
 				bar_draw_pending = 1;    /* defer to event-loop tail */
 			}
 		}
@@ -2146,19 +2299,26 @@ propertynotify(XEvent *e)
 }
 
 /**
- * @brief Stop the event loop, optionally requesting a restart.
+ * @brief Move the process lifecycle from LIVE to QUIT or RESTART.
+ *
+ * The first request wins: a later SIGTERM cannot cancel a pending restart,
+ * and a SIGTERM after QUIT is ignored. This keeps the state machine free of
+ * contradictory (running=0, restart=1-then-cleared) combinations.
  *
  * @param[in]  arg  arg->i non-zero requests an exec restart.
  *
- * @note Writes running and restart.
+ * @pre  Called from the main loop or from a signal handler.
+ * @post `lifecycle` is LIFE_QUIT or LIFE_RESTART.
+ * @note Writes the single `volatile sig_atomic_t lifecycle` global.
  * @see run, cleanup, sighup, sigterm
  * @anchor spec_quit
  */
 void
 quit(const Arg *arg)
 {
-	if(arg->i) restart = 1;
-	running = 0;
+	if (lifecycle != LIFE_LIVE)
+		return;
+	lifecycle = arg->i ? LIFE_RESTART : LIFE_QUIT;
 }
 
 /**
@@ -2270,13 +2430,13 @@ resizemouse(const Arg *arg)
 	restack(selmon);
 	ocx = c->x;
 	ocy = c->y;
-	if (unlikely(XGrabPointer(dpy, root, False, MOUSEMASK, GrabModeAsync, GrabModeAsync,
-		None, cursor[CurResize]->cursor, CurrentTime) != GrabSuccess))
+	if (!drag_begin(c, cursor[CurResize]->cursor))
 		return;
 	XWarpPointer(dpy, None, c->win, 0, 0, 0, 0, c->w + c->bw - 1, c->h + c->bw - 1);
-	pointergrab = 1; /* reflow immediately inside the grab (togglefloating) */
-	do {
-		XMaskEvent(dpy, MOUSEMASK|ExposureMask|SubstructureRedirectMask, &ev);
+	drag.phase = DRAG_ACTIVE;
+	while (drag.phase == DRAG_ACTIVE && lifecycle == LIFE_LIVE) {
+		if (XMaskEvent(dpy, MOUSEMASK|ExposureMask|SubstructureRedirectMask|StructureNotifyMask, &ev) < 0)
+			break;
 		switch(ev.type) {
 		case ConfigureRequest:
 		case Expose:
@@ -2302,10 +2462,11 @@ resizemouse(const Arg *arg)
 				resize(c, c->x, c->y, nw, nh, 1);
 			break;
 		}
-	} while (ev.type != ButtonRelease);
-	pointergrab = 0;
+		if (ev.type == ButtonRelease || ev.type == DestroyNotify || ev.type == UnmapNotify)
+			drag.phase = DRAG_RELEASING;
+	}
 	XWarpPointer(dpy, None, c->win, 0, 0, 0, 0, c->w + c->bw - 1, c->h + c->bw - 1);
-	XUngrabPointer(dpy, CurrentTime);
+	drag_end();
 	while (XCheckMaskEvent(dpy, EnterWindowMask, &ev));
 	if ((m = recttomon(c->x, c->y, c->w, c->h)) != selmon) {
 		sendmon(c, m);
@@ -2370,7 +2531,9 @@ run(void)
 	XEvent ev;
 	/* main event loop */
 	XSync(dpy, False);
-	while (running && !XNextEvent(dpy, &ev)) {
+	/* sigaction() without SA_RESTART makes XNextEvent return -1/EINTR when
+	 * a handler changes lifecycle, so the loop observes the transition. */
+	while (lifecycle == LIFE_LIVE && !XNextEvent(dpy, &ev)) {
 		dispatching = 1; /* handlers' arrange() calls coalesce to the tail */
 		if (handler[ev.type])
 			handler[ev.type](&ev); /* call handler */
@@ -2442,6 +2605,11 @@ sendmon(Client *c, Monitor *m)
 	detach(c);
 	detachstack(c);
 	c->mon = m;
+	/* The swallow relationship is a 4-way invariant: move both endpoints. */
+	if (c->swallowing)
+		c->swallowing->mon = m;
+	if (c->holder)
+		c->holder->mon = m;
 	c->tags = m->tagset[m->seltags]; /* assign tags of target monitor */
 	attach(c);
 	attachstack(c);
@@ -2610,6 +2778,8 @@ isanyfullscreen(void)
 void
 killatfullscreen_stop(void)
 {
+	procstate = PROC_STOPPED;
+	fs_epoch++; /* invalidate any HUP still pending from a previous session */
 	for (unsigned int i = 0; i < LENGTH(killatfullscreen); i++)
 		killall_impl(killatfullscreen[i], "-STOP");
 }
@@ -2631,6 +2801,10 @@ killatfullscreen_start_body(void)
 	for (unsigned int i = 0; i < LENGTH(killatfullscreen); i++)
 		killall_impl(killatfullscreen[i], "-CONT");
 	sleep(1); /* let targets resume before asking them to terminate */
+	/* A new fullscreen session may have begun during the grace period. */
+	if (start_epoch != fs_epoch)
+		return;
+	procstate = PROC_RUNNING;
 	for (unsigned int i = 0; i < LENGTH(killatfullscreen); i++)
 		killall_impl(killatfullscreen[i], "-HUP");
 }
@@ -2649,6 +2823,8 @@ killatfullscreen_start_body(void)
 void
 killatfullscreen_start(void)
 {
+	procstate = PROC_RESTARTING;
+	start_epoch = fs_epoch; /* HUP is cancelled if a new session bumps fs_epoch */
 #ifdef DWM_TEST
 	/* tests run the body synchronously so invocations are observable;
 	 * mirrors the DWM_TEST drawbar suppression convention */
@@ -2674,6 +2850,8 @@ killatfullscreen_start(void)
 void
 killatfullscreen_resume(void)
 {
+	procstate = PROC_RUNNING;
+	start_epoch = fs_epoch; /* any pending HUP is now obsolete */
 	for (unsigned int i = 0; i < LENGTH(killatfullscreen); i++)
 		killall_impl(killatfullscreen[i], "-CONT");
 }
@@ -2706,6 +2884,7 @@ setfullscreen(Client *c, int fullscreen)
 			PropModeReplace, (unsigned char*)&netatom[NetWMFullscreen], 1);
 		c->isfullscreen = 1;
 		c->oldstate = c->isfloating;
+		c->fs_oldfloating = c->isfloating;
 		c->oldbw = c->bw;
 		c->bw = 0;
 		c->isfloating = 1;
@@ -2717,7 +2896,8 @@ setfullscreen(Client *c, int fullscreen)
 		XChangeProperty(dpy, c->win, netatom[NetWMState], XA_ATOM, 32,
 			PropModeReplace, (unsigned char*)0, 0);
 		c->isfullscreen = 0;
-		c->isfloating = c->oldstate;
+		/* Preserve dialog/fixed state set after a pre-map fullscreen request. */
+		c->isfloating = c->fs_oldfloating || c->transient_floating;
 		c->bw = c->oldbw;
 		c->x = c->oldx;
 		c->y = c->oldy;
@@ -2725,7 +2905,7 @@ setfullscreen(Client *c, int fullscreen)
 		c->h = c->oldh;
 		resizeclient(c, c->x, c->y, c->w, c->h);
 		/* force full redraw of the bar owning this client */
-		c->mon->bar_dirty_segments = DIRTY_STATUS | DIRTY_TAGS | DIRTY_TITLE;
+		bar_mark_dirty(c->mon, DIRTY_ALL);
 		bar_draw_pending = 1;
 		arrange(c->mon);
 		if (!isanyfullscreen())
@@ -2814,7 +2994,7 @@ setlayout(const Arg *arg)
 	stpncpy_len(selmon->ltsymbol, sizeof selmon->ltsymbol, selmon->lt[selmon->sellt]->symbol, strlen(selmon->lt[selmon->sellt]->symbol));
 	/* layout symbol in tag area changed — only dirty if layout actually changed */
 	if (selmon->lt[selmon->sellt] != old)
-		selmon->bar_dirty_segments |= DIRTY_TAGS;
+		bar_mark_dirty(selmon, DIRTY_TAGS);
 	if (selmon->sel)
 		arrange(selmon);
 	else
@@ -2882,8 +3062,13 @@ setup(void)
 	/* clean up any zombies (inherited from .xinitrc etc) immediately */
 	while (waitpid(-1, NULL, WNOHANG) > 0);
 
-	signal(SIGHUP, sighup);
-	signal(SIGTERM, sigterm);
+	/* No SA_RESTART: SIGHUP/SIGTERM must interrupt a blocked XNextEvent(). */
+	sigemptyset(&sa.sa_mask);
+	sa.sa_flags = 0;
+	sa.sa_handler = sighup;
+	sigaction(SIGHUP, &sa, NULL);
+	sa.sa_handler = sigterm;
+	sigaction(SIGTERM, &sa, NULL);
 
 	/* init screen */
 	screen = DefaultScreen(dpy);
@@ -3175,7 +3360,7 @@ togglebar(const Arg *arg)
 	updatebarpos(selmon);
 	XMoveResizeWindow(dpy, selmon->barwin, selmon->wx, selmon->by, selmon->ww, bh);
 	/* bar shown/hidden — all segments stale */
-	selmon->bar_dirty_segments |= DIRTY_STATUS | DIRTY_TAGS | DIRTY_TITLE;
+	bar_mark_dirty(selmon, DIRTY_ALL);
 	arrange(selmon);
 }
 
@@ -3262,7 +3447,7 @@ toggleview(const Arg *arg)
 
 	if (newtagset) {
 		selmon->tagset[selmon->seltags] = newtagset;
-		selmon->bar_dirty_segments |= DIRTY_TAGS;
+		bar_mark_dirty(selmon, DIRTY_TAGS);
 		focus(NULL);
 		arrange(selmon);
 	}
@@ -3338,15 +3523,15 @@ unmanage(Client *c, int destroyed)
 	if (!destroyed) {
 		wc.border_width = c->oldbw;
 		XGrabServer(dpy); /* avoid race conditions */
-		XSetErrorHandler(xerrordummy);
+		error_guard_begin();
 		XSelectInput(dpy, c->win, NoEventMask);
 		XConfigureWindow(dpy, c->win, CWBorderWidth, &wc); /* restore border */
 		XUngrabButton(dpy, AnyButton, AnyModifier, c->win);
 		setclientstate(c, WithdrawnState);
-		XSync(dpy, False);
-		XSetErrorHandler(xerror);
+		error_guard_end();
 		XUngrabServer(dpy);
 	}
+	c->state = CST_FREED;
 	free(c);
 
 	if (!s) {
@@ -3378,8 +3563,10 @@ unmapnotify(XEvent *e)
 	XUnmapEvent *ev = &e->xunmap;
 
 	if ((c = wintoclient(ev->window))) {
-		if (ev->send_event)
+		if (ev->send_event) {
 			setclientstate(c, WithdrawnState);
+			c->state = CST_WITHDRAWN;
+		}
 		else
 			unmanage(c, 0);
 	}
@@ -3481,6 +3668,8 @@ updategeom(void)
 {
 	int dirty = 0;
 
+	lastgeom = (GeomChange){0};
+
 #ifdef XINERAMA
 	if (XineramaIsActive(dpy)) {
 		int i, j, n, nn;
@@ -3503,8 +3692,9 @@ updategeom(void)
 			for (m = mons; m && m->next; m = m->next);
 			if (m)
 				m->next = createmon();
-			else
+				else
 				mons = createmon();
+			lastgeom.added++;
 		}
 		for (i = 0, m = mons; i < nn && m; m = m->next, i++)
 			if (i >= n
@@ -3512,6 +3702,7 @@ updategeom(void)
 			|| unique[i].width != m->mw || unique[i].height != m->mh)
 			{
 				dirty = 1;
+				lastgeom.resized++;
 				m->num = i;
 				m->mx = m->wx = unique[i].x_org;
 				m->my = m->wy = unique[i].y_org;
@@ -3522,6 +3713,8 @@ updategeom(void)
 		/* removed monitors if n > nn */
 		for (i = nn; i < n; i++) {
 			for (m = mons; m && m->next; m = m->next);
+			lastgeom.removed++;
+			lastgeom.removed_mon = m;
 			while ((c = m->clients)) {
 				dirty = 1;
 				m->clients = c->next;
@@ -3530,6 +3723,11 @@ updategeom(void)
 				attach(c);
 				attachstack(c);
 			}
+			/* Swallowed placeholders are off-list: migrate them via the
+			 * hash so no client keeps a dangling monitor pointer. */
+			for (unsigned int hi = 0; hi < WINHASH_SIZE; hi++)
+				if (winhash[hi] && winhash[hi]->mon == m)
+					winhash[hi]->mon = mons;
 			if (m == selmon)
 				selmon = mons;
 			cleanupmon(m);
@@ -3542,6 +3740,7 @@ updategeom(void)
 			mons = createmon();
 		if (mons->mw != sw || mons->mh != sh) {
 			dirty = 1;
+			lastgeom.resized++;
 			mons->mw = mons->ww = sw;
 			mons->mh = mons->wh = sh;
 			updatebarpos(mons);
@@ -3671,7 +3870,7 @@ updatestatus(void)
 	memcpy(stext, buf, len + 1);
 	stext_len = len;
 	/* status changed; title boundary may shift if width differs */
-	selmon->bar_dirty_segments |= DIRTY_STATUS | DIRTY_TITLE;
+	bar_mark_dirty(selmon, DIRTY_STATUS | DIRTY_TITLE);
 	bar_draw_pending = 1;            /* coalesce with other pending draws */
 }
 
@@ -3774,7 +3973,7 @@ view(const Arg *arg)
 	selmon->seltags ^= 1; /* toggle sel tagset */
 	if (arg->ui & TAGMASK)
 		selmon->tagset[selmon->seltags] = arg->ui & TAGMASK;
-	selmon->bar_dirty_segments |= DIRTY_TAGS;
+	bar_mark_dirty(selmon, DIRTY_TAGS);
 	focus(NULL);
 	arrange(selmon);
 }
@@ -4171,6 +4370,45 @@ wintomon(Window w)
 	return selmon;
 }
 
+static int (*saved_error_handler)(Display *, XErrorEvent *);
+static int error_guard_depth;
+
+/**
+ * @brief Enter a scoped window in which all X errors are ignored.
+ *
+ * Saves the previous handler so nested guards restore correctly; XSync before
+ * the swap ensures earlier errors are delivered to the old handler.
+ *
+ * @post error_guard_depth is incremented and xerrordummy is installed.
+ * @note Calls XSync and XSetErrorHandler.
+ * @anchor spec_error_guard_begin
+ */
+static void
+error_guard_begin(void)
+{
+	if (error_guard_depth++ == 0) {
+		XSync(dpy, False);
+		saved_error_handler = XSetErrorHandler(xerrordummy);
+	}
+}
+
+/**
+ * @brief Leave the innermost scoped error-ignore window.
+ *
+ * @pre error_guard_depth > 0.
+ * @post The handler saved by error_guard_begin() is restored.
+ * @note Calls XSync and XSetErrorHandler.
+ * @anchor spec_error_guard_end
+ */
+static void
+error_guard_end(void)
+{
+	if (--error_guard_depth == 0) {
+		XSync(dpy, False);
+		XSetErrorHandler(saved_error_handler);
+	}
+}
+
 /**
  * @brief Non-fatal X error handler for race-prone requests.
  *
@@ -4311,9 +4549,16 @@ main(int argc, char *argv[])
 	if (!isanyfullscreen())
 		killatfullscreen_resume();
 	run();
-	if(restart) execvp(argv[0], argv);
-	cleanup();
-	XCloseDisplay(dpy);
+	{
+		int restarting = (lifecycle == LIFE_RESTART);
+
+		cleanup();
+		XCloseDisplay(dpy);
+		if (restarting) {
+			execvp(argv[0], argv);
+			DIE("execvp():dwm: restart failed");
+		}
+	}
 	return EXIT_SUCCESS;
 }
 #endif /* ndef DWM_TEST */
