@@ -57,8 +57,16 @@ that agents apply when working.
 
 ```sh
 cd tests
-make test        # build and run all unit tests (also `make run`)
+make test        # build and run all unit tests in parallel (also `make run`)
 make coverage    # clean build, run tests with gcov, show dwm.c coverage
+```
+
+`make test` builds with `-j$(JOBS)` and executes suites through
+`tests/parallel-run.sh` with at most `JOBS` in flight. `JOBS` and `SAN_JOBS`
+both default to `nproc` and are overridable (e.g. `JOBS=2 make test`). E2E and
+coverage remain sequential; sanitizer stages use `SAN_JOBS`.
+
+```sh
 make asan-ubsan  # ASan+UBSan, artifacts in tests/build/asan-ubsan/
 make tsan-ubsan  # TSan+UBSan, artifacts in tests/build/tsan-ubsan/
 ```

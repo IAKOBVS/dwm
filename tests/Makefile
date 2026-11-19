@@ -9,6 +9,11 @@ ifneq ($(CCACHE),)
 CC := $(CCACHE) $(CC)
 endif
 
+# Parallelism defaults to the machine's CPU count. SAN_JOBS is a separate cap
+# for memory-heavy sanitizer binaries; both are overridable from the env.
+JOBS     ?= $(shell nproc 2>/dev/null || echo 4)
+SAN_JOBS ?= $(JOBS)
+
 CFLAGS  = -std=c99 -pedantic -Wall -Wextra -Wno-unused-parameter -Wno-unused-function -g -O0
 CFLAGS += -I . -I unit/include -I include -I ..
 CFLAGS += -DDWM_TEST
@@ -141,82 +146,53 @@ $(TSAN_UBSAN_SELF): $(TSAN_UBSAN_DIR)/%: %.c $(DWM_DEPS) | $(TSAN_UBSAN_DIR)
 
 # Run every suite and propagate failures: a non-zero exit from any binary
 # fails the make target.
-test run: $(TEST_BIN)
-	@status=0; \
-	for t in $(TEST_BIN); do \
-		printf "\033[1;34mRUNNING\033[0m $$t\n"; \
-		./$$t || { printf "\033[1;31mFAILED \033[0m$$t\n"; status=1; }; \
-	done; \
-	exit $$status
+test run:
+	@$(MAKE) -s -j$(JOBS) $(TEST_BIN)
+	@sh parallel-run.sh $(JOBS) build/logs/plain $(TEST_BIN)
 
 cov_bins: $(MOCK_OBJ)
-	$(MAKE) $(COV_TARGETS)
+	$(MAKE) -j$(JOBS) $(COV_TARGETS)
 
 coverage: clean
-	$(MAKE) $(MOCK_OBJ)
-	$(MAKE) $(COV_TARGETS)
+	$(MAKE) -j$(JOBS) $(MOCK_OBJ) $(COV_TARGETS)
 	@python3 merge_gcov.py . $(COV_LABELS) $(COV_MIN)
 
 # Fail the build when any tracked source drops below its coverage floor.
 coverage-check:
 	$(MAKE) coverage COV_MIN='--min=dwm.c=95 --min=drw.c=80 --min=util.c=85'
 
-asan: $(MOCK_OBJ)
-	$(MAKE) CFLAGS="$(CFLAGS) $(ASAN_CFLAGS)" LDFLAGS="$(LDFLAGS) $(ASAN_LDFLAGS)" \
-		$(ASAN_TARGETS)
+asan:
+	@$(MAKE) -s -j$(JOBS) CFLAGS="$(CFLAGS) $(ASAN_CFLAGS)" LDFLAGS="$(LDFLAGS) $(ASAN_LDFLAGS)" $(ASAN_TARGETS)
 	@# LeakSanitizer runs on every suite; fixtures are swept per-test and
 	@# dwm-created clients are drained via unmanage() where needed.
-	@status=0; \
-	for t in $(ASAN_TARGETS); do \
-		if [ -x "$$t" ]; then \
-			printf "\033[1;34mRUNNING\033[0m $$t\n"; \
-			./$$t || { printf "\033[1;31mFAILED \033[0m$$t\n"; status=1; }; \
-		fi \
-	done; \
-	exit $$status
+	@sh parallel-run.sh $(SAN_JOBS) build/logs/asan $(ASAN_TARGETS)
 
 # Build and run every suite under ASan+UBSan in build/asan-ubsan/.
-asan-ubsan: $(ASAN_UBSAN_BIN)
-	@status=0; \
-	for t in $(ASAN_UBSAN_BIN); do \
-		printf "\033[1;34mRUNNING\033[0m $$t\n"; \
-		ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 \
-		UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
-		./$$t || { printf "\033[1;31mFAILED \033[0m$$t\n"; status=1; }; \
-	done; \
-	exit $$status
+asan-ubsan:
+	@$(MAKE) -s -j$(JOBS) $(ASAN_UBSAN_BIN)
+	@ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 \
+	 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+	 sh parallel-run.sh $(SAN_JOBS) build/logs/asan-ubsan $(ASAN_UBSAN_BIN)
 
 # Build and run every suite under TSan+UBSan in build/tsan-ubsan/.
-tsan-ubsan: $(TSAN_UBSAN_BIN)
-	@status=0; \
-	for t in $(TSAN_UBSAN_BIN); do \
-		printf "\033[1;34mRUNNING\033[0m $$t\n"; \
-		TSAN_OPTIONS=halt_on_error=1 \
-		UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
-		./$$t || { printf "\033[1;31mFAILED \033[0m$$t\n"; status=1; }; \
-	done; \
-	exit $$status
+tsan-ubsan:
+	@$(MAKE) -s -j$(JOBS) $(TSAN_UBSAN_BIN)
+	@TSAN_OPTIONS=halt_on_error=1 \
+	 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+	 sh parallel-run.sh $(SAN_JOBS) build/logs/tsan-ubsan $(TSAN_UBSAN_BIN)
 
 # Sanitized integration suites only (same artifacts as the full targets).
-asan-ubsan-integration: $(ASAN_UBSAN_INTEGRATION_BIN)
-	@status=0; \
-	for t in $(ASAN_UBSAN_INTEGRATION_BIN); do \
-		printf "\033[1;34mRUNNING\033[0m $$t\n"; \
-		ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 \
-		UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
-		./$$t || { printf "\033[1;31mFAILED \033[0m$$t\n"; status=1; }; \
-	done; \
-	exit $$status
+asan-ubsan-integration:
+	@$(MAKE) -s -j$(JOBS) $(ASAN_UBSAN_INTEGRATION_BIN)
+	@ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 \
+	 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+	 sh parallel-run.sh $(SAN_JOBS) build/logs/asan-ubsan-integration $(ASAN_UBSAN_INTEGRATION_BIN)
 
-tsan-ubsan-integration: $(TSAN_UBSAN_INTEGRATION_BIN)
-	@status=0; \
-	for t in $(TSAN_UBSAN_INTEGRATION_BIN); do \
-		printf "\033[1;34mRUNNING\033[0m $$t\n"; \
-		TSAN_OPTIONS=halt_on_error=1 \
-		UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
-		./$$t || { printf "\033[1;31mFAILED \033[0m$$t\n"; status=1; }; \
-	done; \
-	exit $$status
+tsan-ubsan-integration:
+	@$(MAKE) -s -j$(JOBS) $(TSAN_UBSAN_INTEGRATION_BIN)
+	@TSAN_OPTIONS=halt_on_error=1 \
+	 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+	 sh parallel-run.sh $(SAN_JOBS) build/logs/tsan-ubsan-integration $(TSAN_UBSAN_INTEGRATION_BIN)
 
 # Clang-only integer sanitizer (builds into its own tree; the runner script
 # decides which diagnostics are intentional wraparound in hash/PRNG code).

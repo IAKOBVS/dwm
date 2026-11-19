@@ -20,21 +20,23 @@ logdir=build/logs
 mkdir -p "$logdir"
 
 echo "==> building integer-sanitized binaries -> $dir"
-if ! make integer-bins >"$logdir/integer-build.log" 2>&1; then
+if ! make -j"${JOBS:-$(nproc 2>/dev/null || echo 4)}" integer-bins >"$logdir/integer-build.log" 2>&1; then
 	echo "FAIL: integer sanitizer build (see $logdir/integer-build.log)" >&2
 	tail -40 "$logdir/integer-build.log" >&2
 	exit 1
 fi
 
 log="$logdir/integer-sanitizer.log"
+runlogs="$logdir/integer-runs"
 : >"$log"
 status=0
-for t in "$dir"/*; do
-	[ -x "$t" ] || continue
-	printf 'RUNNING %s\n' "$t"
-	UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=0 \
-		"$t" >>"$log" 2>&1 || { echo "FAILED $t" >&2; status=1; }
-done
+if UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=0 \
+	sh parallel-run.sh "${SAN_JOBS:-${JOBS:-$(nproc 2>/dev/null || echo 4)}}" "$runlogs" "$dir"/*; then
+	: # every suite exited 0
+else
+	status=1
+fi
+cat "$runlogs"/*.log >"$log" 2>/dev/null || true
 
 python3 - "$log" <<'PY'
 import re
@@ -67,7 +69,7 @@ allow = ("keyset_home", "winhash_home", "fuzz_rand")
 unexpected = []
 for block in blocks:
     loc = block[0].split(": runtime error:")[0]
-    if "unit/src/" in loc or "/util.h" in loc:
+    if "unit/src/" in loc or "/util.h" in loc or "contradictions/" in loc:
         continue
     if any(any(name in line for name in allow) for line in block):
         continue

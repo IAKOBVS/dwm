@@ -115,7 +115,7 @@ init_globals(void)
 	sw = 1920; sh = 1080;
 	bh = 22; lrpad = 11;
 	wmcheckwin = 42;
-	running = 1;
+	lifecycle = LIFE_LIVE;
 
 	selmon = make_monitor(0);
 	mons = selmon;

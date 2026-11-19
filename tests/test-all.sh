@@ -8,6 +8,10 @@
 set -uo pipefail
 cd "$(dirname "$0")"
 
+JOBS=${JOBS:-$(nproc 2>/dev/null || echo 4)}
+SAN_JOBS=${SAN_JOBS:-$JOBS}
+export JOBS SAN_JOBS
+
 status=0
 
 run() {
