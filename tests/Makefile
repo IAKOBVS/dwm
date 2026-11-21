@@ -150,11 +150,29 @@ test run:
 	@$(MAKE) -s -j$(JOBS) $(TEST_BIN)
 	@sh parallel-run.sh $(JOBS) build/logs/plain $(TEST_BIN)
 
-cov_bins: $(MOCK_OBJ)
+# Coverage data is per-run; gcov notes and binaries are reused until the
+# coverage flags change, so a coverage run no longer destroys the plain and
+# sanitizer build trees.
+COV_STAMP = build/coverage-flags.stamp
+COV_FLAGS = $(CC) $(CFLAGS) $(COV_CFLAGS) $(LDFLAGS) $(COV_LDFLAGS)
+
+cov_bins: $(MOCK_OBJ) $(COV_STAMP)
 	$(MAKE) -j$(JOBS) $(COV_TARGETS)
 
-coverage: clean
-	$(MAKE) -j$(JOBS) $(MOCK_OBJ) $(COV_TARGETS)
+$(COV_STAMP):
+	@mkdir -p $(dir $@)
+	@printf '%s\n' '$(COV_FLAGS)' > $@.new
+	@if [ ! -f $@ ] || ! cmp -s $@ $@.new; then \
+		mv $@.new $@; \
+		rm -f $(COV_TARGETS); \
+	else \
+		rm -f $@.new; \
+	fi
+
+coverage-reset:
+	rm -f *.gcda *.gcov
+
+coverage: coverage-reset cov_bins
 	@python3 merge_gcov.py . $(COV_LABELS) $(COV_MIN)
 
 # Fail the build when any tracked source drops below its coverage floor.
@@ -223,5 +241,9 @@ clean:
 	rm -rf build/asan-ubsan build/tsan-ubsan build/integer-sanitizer build/e2e
 	rm -f $(BENCH_BIN) cov_test_* asan_test_* *.o *.gcda *.gcno *.gcov
 
-.PHONY: all test run coverage coverage-check cov_bins asan asan-ubsan tsan-ubsan \
-        asan-ubsan-integration tsan-ubsan-integration integer-bins clean
+distclean: clean
+	rm -rf build
+
+.PHONY: all test run coverage coverage-check coverage-reset cov_bins asan \
+        asan-ubsan tsan-ubsan asan-ubsan-integration tsan-ubsan-integration \
+        integer-bins clean distclean
