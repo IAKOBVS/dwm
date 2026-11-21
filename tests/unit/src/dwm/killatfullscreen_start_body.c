@@ -29,6 +29,8 @@ test_start_body_cont_then_hup(void)
 	killatfullscreen_start_body();
 	ASSERT_EQ(body_calls, per * 2,
 		"killatfullscreen_start_body: CONT and HUP per target");
+	ASSERT_EQ(procstate, PROC_RUNNING,
+		"killatfullscreen_start_body: completes the restart transition");
 	if (per == 1) {
 		ASSERT_EQ(body_order[0], 'C',
 			"killatfullscreen_start_body: CONT before HUP");
@@ -50,9 +52,12 @@ test_start_body_cancels_stale_hup(void)
 	body_calls = 0;
 	start_epoch = 0;
 	fs_epoch = 1; /* a new session began during the grace period */
+	procstate = PROC_RESTARTING;
 	killatfullscreen_start_body();
 	ASSERT_EQ(body_calls, per,
 		"killatfullscreen_start_body: stale session sends CONT but no HUP");
+	ASSERT_EQ(procstate, PROC_RESTARTING,
+		"killatfullscreen_start_body: cancelled session stays PROC_RESTARTING");
 
 	start_epoch = 0;
 	fs_epoch = 0;

@@ -47,8 +47,16 @@ test_unmanage_not_destroyed(void)
 	selmon = m;
 	mons = m;
 
-	unmanage(c, 0);
-	ASSERT(m->clients == NULL, "unmanage: client removed when not destroyed");
+	{
+		Window win = c->win;
+
+		unmanage(c, 0);
+		ASSERT(m->clients == NULL, "unmanage: client removed when not destroyed");
+		ASSERT(m->stack == NULL, "unmanage: client removed from the focus stack");
+		ASSERT(m->sel == NULL, "unmanage: selection cleared");
+		ASSERT(wintoclient(win) == NULL,
+			"unmanage: window hash no longer resolves the freed client");
+	}
 
 	restore_selmon();
 	free(m);

@@ -22,6 +22,17 @@ test_quit_stops_and_optional_restart(void)
 	ASSERT(lifecycle != LIFE_LIVE, "quit: stops the loop again");
 	ASSERT_EQ(lifecycle, LIFE_RESTART, "quit: arg.i requests restart");
 
+	/* first request wins: later signals cannot change the terminal state */
+	lifecycle = LIFE_RESTART;
+	quit(&no_restart);
+	ASSERT_EQ(lifecycle, LIFE_RESTART,
+		"quit: SIGTERM cannot cancel a pending restart");
+
+	lifecycle = LIFE_QUIT;
+	quit(&restart_flag);
+	ASSERT_EQ(lifecycle, LIFE_QUIT,
+		"quit: SIGHUP cannot revive an already requested shutdown");
+
 	lifecycle = LIFE_LIVE;
 }
 

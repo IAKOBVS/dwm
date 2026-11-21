@@ -677,6 +677,11 @@ extern unsigned int mock_querytree_nchildren;
 
 /* fork() control for spawn */
 extern int mock_fork_return;  /* 0=child, >0=parent, -1=error (default) */
+extern int mock_fork_calls;   /* number of fork() invocations */
+
+/* XSetErrorHandler / XFreePixmap recording */
+extern int (*mock_error_handler_current)(Display *, XErrorEvent *);
+extern int mock_xfreepixmap_calls;
 
 /* XGrabPointer return control */
 extern int mock_grabpointer_return;  /* 0=GrabSuccess (default), non-zero=failure */

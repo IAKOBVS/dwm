@@ -42,10 +42,17 @@
  * Avoids `strlen` by taking the source length explicitly. The caller must
  * guarantee `dst` has room for `src_len + 1` bytes.
  *
+ * @details Copies exactly @p src_len bytes with memcpy() and writes a trailing
+ *          NUL, avoiding a strlen() pass; see @ref arch_module_dwm (dwm.h).
  * @param[out] dst      Destination buffer.
  * @param[in]  src      Source bytes (need not be NUL-terminated).
  * @param[in]  src_len  Number of bytes to copy.
  * @post `dst[src_len] == '\0'`.
+ * @par Side Effects:
+ *      Direct writes to the caller-supplied destination buffer.
+ * @par Threading and Reentrancy:
+ *      Single-threaded; touches only its arguments and no globals, so safe from
+ *      a signal handler when the buffers are not shared.
  * @warning Unbounded: no destination size is checked.
  * @anchor spec_strcpy_len
  */
@@ -62,10 +69,18 @@ strcpy_len(char *dst, const char *src, size_t src_len)
  * Like @ref spec_strcpy_len but returns a pointer to the NUL byte, enabling
  * callers to append further data without re-scanning.
  *
+ * @details Like @ref spec_strcpy_len, copies @p src_len bytes plus a NUL via
+ *          memcpy(), but returns the address of the written terminator so
+ *          callers can append without rescanning; see @ref arch_module_dwm (dwm.h).
  * @param[out] dst      Destination buffer.
  * @param[in]  src      Source bytes.
  * @param[in]  src_len  Number of bytes to copy.
  * @return Pointer to the written NUL terminator (`dst + src_len`).
+ * @par Side Effects:
+ *      Direct writes to the caller-supplied destination buffer.
+ * @par Threading and Reentrancy:
+ *      Single-threaded; no locks or globals, so safe from a signal handler when
+ *      the buffers are not shared.
  * @warning Unbounded: no destination size is checked.
  * @anchor spec_stpcpy_len
  */
@@ -83,6 +98,11 @@ stpcpy_len(char *dst, const char *src, size_t src_len)
  * Copies at most `dstsize - 1` bytes and always NUL-terminates, unlike
  * `strncpy` it never pads the remainder of the destination.
  *
+ * @details Copies `min(src_len, dstsize - 1)` bytes into @p dst and always
+ *          appends a NUL; unlike strncpy() it never pads the remainder of the
+ *          destination; see @ref arch_module_dwm (dwm.h). The exact return value
+ *          is the address of the written terminator: `dst + src_len` when
+ *          `src_len < dstsize`, otherwise `dst + dstsize - 1` on truncation.
  * @param[out] dst      Destination buffer.
  * @param[in]  dstsize  Capacity of @p dst in bytes.
  * @param[in]  src      Source bytes.
@@ -90,6 +110,11 @@ stpcpy_len(char *dst, const char *src, size_t src_len)
  * @return Pointer to the written NUL terminator.
  * @pre  dstsize > 0.
  * @post The result is truncated to `dstsize - 1` bytes when necessary.
+ * @par Side Effects:
+ *      Direct writes to the caller-supplied destination buffer.
+ * @par Threading and Reentrancy:
+ *      Single-threaded; no locks or globals, so safe from a signal handler when
+ *      the buffers are not shared.
  * @anchor spec_stpncpy_len
  */
 static inline char *
@@ -115,6 +140,14 @@ enum { ClkTagBar, ClkLtSymbol, ClkStatusText, ClkWinTitle,
 
 /**
  * @brief Generic binding argument; one field is valid per consumer.
+ * @details Tagged-by-convention union passed by value to Key and Button
+ *          handlers; see @ref arch_module_dwm (dwm.h). The handler decides which
+ *          single member is meaningful. Holds no dynamic storage and does not
+ *          own the pointee of `v`, whose lifetime stays with the caller.
+ * @par Ownership:
+ *      Values are copied into static binding tables at setup; `v` is borrowed.
+ * @par Threading and Reentrancy:
+ *      Read-only after setup; single-threaded, with no locks or globals.
  */
 typedef union {
 	int i;             /**< Signed integer argument. */
@@ -125,6 +158,14 @@ typedef union {
 
 /**
  * @brief Mouse binding: click region + button + modifier mask → action.
+ * @details One entry of the static buttons[] table; a press matches when its
+ *          click region, button and modifier mask all agree, then func is
+ *          invoked with a pointer to arg; see @ref arch_module_dwm (dwm.h).
+ * @par Ownership:
+ *      The Arg is embedded by value; func is a plain code address with no
+ *      dynamic storage or ownership.
+ * @par Threading and Reentrancy:
+ *      Read-only after cachebuttons(); dispatched on the single X event loop.
  */
 typedef struct {
 	unsigned int click;              /**< Clk* region that must be clicked. */
@@ -139,11 +180,23 @@ typedef struct Client Client;
 
 /**
  * @brief A managed top-level X window.
- *
- * Owned by exactly one monitor while managed; linked into `mon->clients`
- * via `next`, `mon->stack` via `snext`, and the global window hash.
+ * @details Owned by exactly one monitor while managed; linked into `mon->clients`
+ *          via `next`, `mon->stack` via `snext`, and the global window hash.
+ *          Lifecycle is tracked explicitly by `state`; see @ref arch_module_dwm
+ *          (dwm.h).
+ * @par Ownership:
+ *      Allocated by manage() and freed by unmanage(); `mon` is non-owning, and
+ *      `swallowing`/`holder` are non-owning cross-references between clients.
+ * @par Threading and Reentrancy:
+ *      Mutated only by the single-threaded X event loop; no internal locks.
  */
-/** @brief Explicit lifecycle state of a managed client. */
+/**
+ * @brief Explicit lifecycle state of a managed client.
+ * @details Ordered CST_ABSENT -> CST_LISTED -> ... -> CST_FREED, replacing
+ *          implicit boolean pairs so no contradictory state is representable.
+ * @par Threading and Reentrancy:
+ *          Written only from the single event loop and read as a plain integer.
+ */
 typedef enum {
 	CST_ABSENT = 0,      /**< not allocated */
 	CST_LISTED,          /**< linked into monitor lists and winhash */
@@ -187,6 +240,13 @@ struct Client {
 
 /**
  * @brief Keyboard binding: modifier + keysym → action.
+ * @details One entry of the static keys[] table; matched by exact keysym plus
+ *          CLEANMASK(mod) and dispatched with arg; see @ref arch_module_dwm
+ *          (dwm.h).
+ * @par Ownership:
+ *      The Arg is embedded by value; there is no dynamic allocation or ownership.
+ * @par Threading and Reentrancy:
+ *      Read-only after cachekeys(); dispatched on the single X event loop.
  */
 typedef struct {
 	unsigned int mod;                /**< Required modifier mask. */
@@ -210,6 +270,14 @@ static unsigned int button_mask_used;          /**< OR of all bound button masks
 
 /**
  * @brief A layout: arrange function plus the symbol shown in the bar.
+ * @details The arrange callback mutates a Monitor's client geometry, while
+ *          symbol is a short string rendered in the tag bar; see
+ *          @ref arch_module_dwm (dwm.h).
+ * @par Ownership:
+ *      Symbols are static string literals and the layout objects live in
+ *      config arrays; neither is owned by a Monitor.
+ * @par Threading and Reentrancy:
+ *      Read-only after setup; arrange() runs only from the single event loop.
  */
 typedef struct {
 	const char *symbol;              /**< Short layout symbol. */
@@ -218,6 +286,11 @@ typedef struct {
 
 /**
  * @brief Gap state for a monitor (toggled/adjusted by @ref spec_setgaps).
+ * @details Holds the configured pixel gap (gappx), the currently effective gap
+ *          (realgap) and the enable flag; the struct is copied by value into
+ *          each Monitor; see @ref arch_module_dwm (dwm.h).
+ * @par Threading and Reentrancy:
+ *      Plain value struct with no locks; mutated only by the single event loop.
  */
 typedef struct {
 	short realgap;            /**< Effective per-tile gap. */
@@ -227,9 +300,15 @@ typedef struct {
 
 /**
  * @brief A work area (one per Xinerama screen, or one fallback screen).
- *
- * Owned by the global `mons` list. Holds its clients, focus stack, tag view,
- * layouts, geometry, and bar state.
+ * @details Owned by the global `mons` list. Holds its clients, focus stack, tag
+ *          view, layouts, geometry, and bar state; see @ref arch_module_dwm
+ *          (dwm.h). Bar redraws are gated by `bar_dirty_segments` and
+ *          `bar_exposed`.
+ * @par Ownership:
+ *      The monitor owns its Client allocations and its `gap`; it is linked by
+ *      `next` and released by cleanupmon().
+ * @par Threading and Reentrancy:
+ *      Mutated only by the single-threaded X event loop; no internal locks.
  */
 struct Monitor {
 	char ltsymbol[16];                 /**< Current layout symbol. */
@@ -257,6 +336,13 @@ struct Monitor {
 
 /**
  * @brief A tag/geometry rule matched by @ref spec_applyrules.
+ * @details Configured static matchers for WM_CLASS class/instance and title,
+ *          plus the tags and flags applied on a match; see @ref arch_module_dwm
+ *          (dwm.h).
+ * @par Ownership:
+ *      String fields are static literals from config; the array is never mutated.
+ * @par Threading and Reentrancy:
+ *      Read-only after setup and evaluated only from the single event loop.
  */
 typedef struct {
 	const char *class;               /**< Substring to match WM_CLASS class. */
@@ -410,7 +496,14 @@ static void (*handler[LASTEvent]) (XEvent *) = {
 };
 static Atom wmatom[WMLast], netatom[NetLast];
 
-/** @brief Explicit process lifecycle: one atomic state, no contradictory pairs. */
+/**
+ * @brief Explicit process lifecycle: one atomic state, no contradictory pairs.
+ * @details LIFE_LIVE -> LIFE_QUIT (clean exit) or LIFE_RESTART (shutdown followed
+ *          by execvp()); stored in `volatile sig_atomic_t lifecycle` so signal
+ *          handlers may advance it safely.
+ * @par Threading and Reentrancy:
+ *          The only state written from signal handlers; the event loop polls it.
+ */
 typedef enum {
 	LIFE_LIVE = 0,       /**< event loop running */
 	LIFE_QUIT,           /**< clean shutdown requested */
@@ -418,13 +511,30 @@ typedef enum {
 } LifecycleState;
 static volatile sig_atomic_t lifecycle = LIFE_LIVE;
 
-/** @brief Explicit state of the processes suspended for fullscreen. */
+/**
+ * @brief Explicit state of the processes suspended for fullscreen.
+ * @details PROC_RUNNING -> PROC_STOPPED (STOP sent) -> PROC_RESTARTING (CONT
+ *          sent, HUP pending) -> back to PROC_RUNNING; avoids paired boolean
+ *          flags that could disagree.
+ * @par Threading and Reentrancy:
+ *          Plain enum read and written only by the single-threaded event loop.
+ */
 typedef enum {
 	PROC_RUNNING = 0,  /**< targets are running */
 	PROC_STOPPED,      /**< STOP has been sent, no HUP pending */
 	PROC_RESTARTING    /**< CONT sent, HUP may be pending */
 } ProcessState;
-/** @brief Structured result of a monitor geometry reprobe. */
+/**
+ * @brief Structured result of a monitor geometry reprobe.
+ * @details Returned by updategeom() to describe added, removed and resized
+ *          monitors plus the last removed monitor; see @ref arch_module_dwm
+ *          (dwm.h).
+ * @par Ownership:
+ *          `removed_mon` may point at a monitor that has been freed, so treat it
+ *          as a non-owning observation rather than a live handle.
+ * @par Threading and Reentrancy:
+ *          Plain value struct with no locks; produced on the single event loop.
+ */
 typedef struct {
 	unsigned int added;      /**< monitors added */
 	unsigned int removed;    /**< monitors removed */

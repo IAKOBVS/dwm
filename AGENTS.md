@@ -100,9 +100,13 @@ fullscreen enter/exit, and the `XKillClient` fallback. It exits 0 with a
 - Every function definition carries a Doxygen contract with a unique
   `@anchor spec_<function>`; the subsystem contract is
   `docs/ARCHITECTURE.md`, which also maps each subsystem to its tests.
-- `make spec-check` (repo root) fails on duplicate anchors and on a unit test
-  file that names a missing anchor; it warns about anchors with no same-named
-  test.
+  The expanded convention adds `@details` plus the standard `@par Side Effects:`
+  and `@par Threading and Reentrancy:` paragraphs (not custom tags), and each
+  contract references a module contract in `docs/ARCHITECTURE.md` via
+  `@ref arch_module_dwm`, `@ref arch_module_drw`, or `@ref arch_module_util`.
+- `make spec-check` (repo root) fails on duplicate anchors, on a unit test
+  file that names a missing anchor, and on a contract missing any of its four
+  mandatory tags; it warns about anchors with no same-named test.
 - `make docs` regenerates the HTML documentation from the source contracts and
   `docs/ARCHITECTURE.md` into `docs/build/html/`.
 - When behavior changes, update the anchor, the architecture section, and the

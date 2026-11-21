@@ -30,6 +30,8 @@ test_resume_sends_cont_only(void)
 		"killatfullscreen_resume: one call per target");
 	ASSERT(strcmp(resume_signal, "-CONT") == 0,
 		"killatfullscreen_resume: only sends SIGCONT");
+	ASSERT_EQ(procstate, PROC_RUNNING,
+		"killatfullscreen_resume: returns targets to PROC_RUNNING");
 
 	killall_impl = saved;
 }

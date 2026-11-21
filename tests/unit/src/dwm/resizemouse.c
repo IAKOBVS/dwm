@@ -13,6 +13,9 @@ test_resizemouse_noop_no_sel(void)
 {
 	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
 	winhash_count = 0;
+	mock_x11_reset();
+	drag.phase = DRAG_IDLE;
+	pointergrab = 0;
 	save_selmon();
 	selmon = make_monitor(0);
 	mons = selmon;
@@ -20,7 +23,12 @@ test_resizemouse_noop_no_sel(void)
 	Arg arg = {0};
 
 	resizemouse(&arg);
-	ASSERT(1, "resizemouse: noop when no sel");
+	/* No selection: return before restack, grab or any X side effects. */
+	ASSERT_EQ(mock_xgrabpointer_calls, 0, "resizemouse no-sel: no pointer grab");
+	ASSERT_EQ(mock_xungrabpointer_calls, 0, "resizemouse no-sel: no ungrab");
+	ASSERT_EQ(mock_xraise_window.count, 0, "resizemouse no-sel: no restack");
+	ASSERT_EQ(pointergrab, 0, "resizemouse no-sel: pointergrab stays clear");
+	ASSERT_EQ(drag.phase, DRAG_IDLE, "resizemouse no-sel: drag state idle");
 
 {
 		Monitor *tmpm = selmon; /* free the fixture, then restore globals */
@@ -35,6 +43,9 @@ test_resizemouse_basic(void)
 {
 	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
 	winhash_count = 0;
+	mock_x11_reset();
+	drag.phase = DRAG_IDLE;
+	pointergrab = 0;
 	Monitor *m = make_monitor(0);
 	m->wx = 0; m->wy = 0; m->ww = 1920; m->wh = 1080;
 	m->showbar = 0;
@@ -57,7 +68,16 @@ test_resizemouse_basic(void)
 	mock_event_queue[0].type = ButtonRelease;
 
 	resizemouse(&(Arg){0});
-	ASSERT(1, "resizemouse: basic does not crash");
+	/* An immediate release grabs then ungrabs without changing geometry. */
+	ASSERT_EQ(mock_xgrabpointer_calls, 1, "resizemouse basic: pointer grabbed");
+	ASSERT_EQ(mock_xungrabpointer_calls, 1, "resizemouse basic: pointer ungrabbed");
+	ASSERT_EQ(pointergrab, 0, "resizemouse basic: pointergrab cleared");
+	ASSERT_EQ(drag.phase, DRAG_IDLE, "resizemouse basic: drag state idle after release");
+	ASSERT_EQ(c->x, 100, "resizemouse basic: x unchanged");
+	ASSERT_EQ(c->y, 100, "resizemouse basic: y unchanged");
+	ASSERT_EQ(c->w, 200, "resizemouse basic: width unchanged");
+	ASSERT_EQ(c->h, 100, "resizemouse basic: height unchanged");
+	ASSERT_EQ(selmon, m, "resizemouse basic: stays on same monitor");
 
 	mock_event_queue_count = 0;
 	restore_selmon();
@@ -71,6 +91,9 @@ test_resizemouse_fullscreen_early_return(void)
 {
 	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
 	winhash_count = 0;
+	mock_x11_reset();
+	drag.phase = DRAG_IDLE;
+	pointergrab = 0;
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
 	c->isfullscreen = 1;
@@ -81,6 +104,10 @@ test_resizemouse_fullscreen_early_return(void)
 
 	resizemouse(&(Arg){0});
 	ASSERT(c->isfullscreen, "resizemouse: fullscreen returns early, client unchanged");
+	ASSERT_EQ(mock_xgrabpointer_calls, 0, "resizemouse fullscreen: no pointer grab");
+	ASSERT_EQ(mock_xungrabpointer_calls, 0, "resizemouse fullscreen: no ungrab");
+	ASSERT_EQ(mock_xraise_window.count, 0, "resizemouse fullscreen: no restack");
+	ASSERT_EQ(pointergrab, 0, "resizemouse fullscreen: pointergrab stays clear");
 
 	restore_selmon();
 	winclient_remove(c);
@@ -93,6 +120,9 @@ test_resizemouse_motion(void)
 {
 	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
 	winhash_count = 0;
+	mock_x11_reset();
+	drag.phase = DRAG_IDLE;
+	pointergrab = 0;
 	Monitor *m = make_monitor(0);
 	m->wx = 0; m->wy = 0; m->ww = 1920; m->wh = 1080;
 	m->showbar = 0;
@@ -120,8 +150,18 @@ test_resizemouse_motion(void)
 	mock_event_queue[1].type = ButtonRelease;
 
 	resizemouse(&(Arg){0});
-	/* After MotionNotify + resize + ButtonRelease, width/height may have changed */
-	ASSERT(1, "resizemouse: MotionNotify path does not crash");
+	/* nw = 300-100+1 = 201, nh = 200-100+1 = 101, but minh=201 clamps h. */
+	ASSERT_EQ(c->x, 100, "resizemouse motion: x unchanged");
+	ASSERT_EQ(c->y, 100, "resizemouse motion: y unchanged");
+	ASSERT_EQ(c->w, 201, "resizemouse motion: width applied");
+	ASSERT_EQ(c->h, 201, "resizemouse motion: height clamped to minimum");
+	ASSERT_EQ(mock_xconfigure_window.count, 1, "resizemouse motion: one reconfigure");
+	ASSERT_EQ(mock_xconfigure_window.win, (unsigned long)c->win, "resizemouse motion: reconfigured client");
+	ASSERT_EQ(mock_xconfigure_last.width, 201, "resizemouse motion: configured width");
+	ASSERT_EQ(mock_xconfigure_last.height, 201, "resizemouse motion: configured height");
+	ASSERT_EQ(mock_xsend_event.count, 1, "resizemouse motion: synthetic ConfigureNotify sent");
+	ASSERT_EQ(mock_xungrabpointer_calls, 1, "resizemouse motion: pointer ungrabbed");
+	ASSERT_EQ(pointergrab, 0, "resizemouse motion: pointergrab cleared");
 
 	mock_event_queue_count = 0;
 	restore_selmon();
@@ -135,6 +175,9 @@ test_resizemouse_motion_togglefloat(void)
 {
 	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
 	winhash_count = 0;
+	mock_x11_reset();
+	drag.phase = DRAG_IDLE;
+	pointergrab = 0;
 	Monitor *m = make_monitor(0);
 	m->wx = 0; m->wy = 0; m->ww = 1920; m->wh = 1080;
 	m->showbar = 0;
@@ -163,8 +206,12 @@ test_resizemouse_motion_togglefloat(void)
 	mock_event_queue[1].type = ButtonRelease;
 
 	resizemouse(&(Arg){0});
-	/* The large resize triggers togglefloating since nw-c->w > snap */
-	ASSERT(1, "resizemouse: MotionNotify togglefloat path no crash");
+	/* The large resize triggers togglefloating since nw-c->w > snap. */
+	ASSERT_EQ(c->isfloating, 1, "resizemouse togglefloat: tiled client becomes floating");
+	ASSERT_EQ(c->w, 301, "resizemouse togglefloat: width follows motion");
+	ASSERT_EQ(c->h, 201, "resizemouse togglefloat: height follows motion");
+	ASSERT_EQ(mock_xungrabpointer_calls, 1, "resizemouse togglefloat: pointer ungrabbed");
+	ASSERT_EQ(pointergrab, 0, "resizemouse togglefloat: pointergrab cleared");
 
 	mock_event_queue_count = 0;
 	restore_selmon();
@@ -178,6 +225,9 @@ test_resizemouse_grabpointer_fail(void)
 {
 	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
 	winhash_count = 0;
+	mock_x11_reset();
+	drag.phase = DRAG_IDLE;
+	pointergrab = 0;
 	Monitor *m = make_monitor(0);
 	m->wx = 0; m->wy = 0; m->ww = 1920; m->wh = 1080;
 	Client *c = make_client(1, m);
@@ -195,6 +245,11 @@ test_resizemouse_grabpointer_fail(void)
 
 	resizemouse(&(Arg){0});
 	ASSERT(c->w == 200, "resizemouse grabpointer fail: client size unchanged");
+	/* A failed grab must not ungrab someone else's pointer or enter the loop. */
+	ASSERT_EQ(mock_xgrabpointer_calls, 1, "resizemouse grabpointer fail: grab attempted");
+	ASSERT_EQ(mock_xungrabpointer_calls, 0, "resizemouse grabpointer fail: no ungrab");
+	ASSERT_EQ(pointergrab, 0, "resizemouse grabpointer fail: pointergrab stays clear");
+	ASSERT_EQ(drag.phase, DRAG_IDLE, "resizemouse grabpointer fail: drag state idle");
 
 	mock_grabpointer_return = 0;
 	mock_x11_reset();
@@ -209,6 +264,9 @@ test_resizemouse_cross_monitor(void)
 {
 	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
 	winhash_count = 0;
+	mock_x11_reset();
+	drag.phase = DRAG_IDLE;
+	pointergrab = 0;
 	Monitor *m1 = make_monitor(0);
 	m1->wx = 0; m1->wy = 0; m1->ww = 960; m1->wh = 1080;
 	m1->showbar = 0;
@@ -245,6 +303,8 @@ test_resizemouse_cross_monitor(void)
 
 	resizemouse(&(Arg){0});
 	ASSERT(c->mon == m2, "resizemouse cross-monitor: client moved to second monitor");
+	ASSERT_EQ(selmon, m2, "resizemouse cross-monitor: selection follows client");
+	ASSERT_EQ(mock_xungrabpointer_calls, 1, "resizemouse cross-monitor: pointer ungrabbed");
 
 	mock_event_queue_count = 0;
 	m1->next = NULL;
@@ -259,6 +319,9 @@ test_resizemouse_configurerequest(void)
 {
 	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
 	winhash_count = 0;
+	mock_x11_reset();
+	drag.phase = DRAG_IDLE;
+	pointergrab = 0;
 	Monitor *m = make_monitor(0);
 	m->wx = 0; m->wy = 0; m->ww = 1920; m->wh = 1080;
 	m->showbar = 0;
@@ -287,7 +350,14 @@ test_resizemouse_configurerequest(void)
 	mock_event_queue[1].type = ButtonRelease;
 
 	resizemouse(&(Arg){0});
-	ASSERT(1, "resizemouse ConfigureRequest: handler dispatched without crash");
+	/* The nested loop dispatches ConfigureRequest to configurerequest(). */
+	ASSERT_EQ(mock_xconfigure_window.count, 1, "resizemouse ConfigureRequest: XConfigureWindow dispatched");
+	ASSERT_EQ(mock_xconfigure_window.win, (unsigned long)9999, "resizemouse ConfigureRequest: requested window");
+	ASSERT_EQ(mock_xconfigure_window.mask, (unsigned long)(CWX|CWY), "resizemouse ConfigureRequest: value mask");
+	ASSERT_EQ(mock_xconfigure_last.x, 50, "resizemouse ConfigureRequest: x payload");
+	ASSERT_EQ(mock_xconfigure_last.y, 50, "resizemouse ConfigureRequest: y payload");
+	ASSERT_EQ(mock_xsync_calls >= 1, 1, "resizemouse ConfigureRequest: XSync performed");
+	ASSERT_EQ(mock_xungrabpointer_calls, 1, "resizemouse ConfigureRequest: pointer ungrabbed");
 
 	mock_event_queue_count = 0;
 	restore_selmon();
@@ -301,6 +371,9 @@ test_resizemouse_throttle(void)
 {
 	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
 	winhash_count = 0;
+	mock_x11_reset();
+	drag.phase = DRAG_IDLE;
+	pointergrab = 0;
 	Monitor *m = make_monitor(0);
 	m->wx = 0; m->wy = 0; m->ww = 1920; m->wh = 1080;
 	m->showbar = 0;
@@ -333,7 +406,13 @@ test_resizemouse_throttle(void)
 	mock_event_queue[2].type = ButtonRelease;
 
 	resizemouse(&(Arg){0});
-	ASSERT(1, "resizemouse throttle: second event throttled without crash");
+	/* Only the first motion is applied: 201x201, not the second's 301x301. */
+	ASSERT_EQ(c->w, 201, "resizemouse throttle: first motion applied to width");
+	ASSERT_EQ(c->h, 201, "resizemouse throttle: first motion applied to height");
+	ASSERT_EQ(mock_xconfigure_window.count, 1, "resizemouse throttle: exactly one resize");
+	ASSERT_EQ(mock_xconfigure_last.width, 201, "resizemouse throttle: throttled width recorded");
+	ASSERT_EQ(mock_xconfigure_last.height, 201, "resizemouse throttle: throttled height recorded");
+	ASSERT_EQ(mock_xungrabpointer_calls, 1, "resizemouse throttle: pointer ungrabbed");
 
 	mock_event_queue_count = 0;
 	restore_selmon();

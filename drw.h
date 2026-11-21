@@ -16,7 +16,10 @@
  * emoji render cache that avoids repeat PNG-decompress for color emoji.
  *
  * Function contracts live at their definitions in `drw.c` (each carries an
- * `@anchor spec_<function>`); this header is the type/API surface.
+ * `@anchor spec_<function>`); this header is the type/API surface only. Every
+ * declaration group below uses `@see` to point at those implementation
+ * contracts, where pre/post conditions, side effects, threading notes and
+ * ownership rules are documented in full.
  */
 
 #ifndef DRW_H
@@ -27,6 +30,8 @@
 
 /**
  * @brief An X cursor resource.
+ * @see drw_cur_create, drw_cur_free and their spec_drw_cur_create /
+ *      spec_drw_cur_free contracts in drw.c for ownership and lifetime rules.
  */
 typedef struct {
 	Cursor cursor; /* X resource ID of the created cursor */
@@ -37,6 +42,8 @@ typedef struct {
  *
  * The chain is tried in order: the first font that has a glyph wins. Every
  * node owns its `XftFont` and `FcPattern`.
+ * @see spec_drw_fontset_create, spec_drw_fontset_free and spec_drw_text in
+ *      drw.c for chain ownership, invalidation and fallback-mutation rules.
  */
 typedef struct Fnt {
 	Display *dpy;       /* display the XftFont was opened on (needed to close it) */
@@ -61,8 +68,11 @@ typedef XftColor Clr;
 /**
  * @brief One rendered-emoji pixmap cache entry.
  *
- * Key is `(codepoint, fg, bg)`: the background is baked into the pixmap, so a
- * scheme change must miss and re-render.
+ * Key is `(codepoint, fg, bg, generation)`: the background is baked into the
+ * pixmap and the generation guards font changes, so a scheme or font change
+ * must miss and re-render. Entries are invalidated on font change, resize and
+ * free; see spec_emoji_cache_lookup, spec_emoji_cache_insert and
+ * spec_emoji_cache_invalidate in drw.c.
  */
 typedef struct {
 	long codepoint;     /* -1 = empty */
@@ -78,7 +88,8 @@ typedef struct {
  *
  * All `drw_*` operations draw into `drawable`; `drw_map` copies the result to
  * a window. `xftd` is kept alive across draws so Xft's internal glyph cache
- * stays warm.
+ * stays warm. See spec_drw_create, spec_drw_resize and spec_drw_free in drw.c
+ * for construction, resize and ownership/teardown contracts.
  */
 typedef struct {
 	unsigned int w, h;           /* drawable dimensions in pixels */
@@ -94,14 +105,16 @@ typedef struct {
 } Drw;
 
 /* Drawable abstraction — contracts: spec_drw_create, spec_drw_resize,
- * spec_drw_free in drw.c. */
+ * spec_drw_free in drw.c. Full pre/post, side-effect and threading details for
+ * each declaration live at those anchors, not in this header. */
 Drw *drw_create(Display *dpy, int screen, Window win, unsigned int w, unsigned int h);
 void drw_resize(Drw *drw, unsigned int w, unsigned int h);
 void drw_free(Drw *drw);
 
 /* Fnt abstraction — contracts: spec_drw_fontset_create, spec_drw_fontset_free,
  * spec_drw_fontset_getwidth, spec_drw_fontset_getwidth_clamp,
- * spec_drw_fontset_invalidate_cache, spec_drw_font_getexts. */
+ * spec_drw_fontset_invalidate_cache, spec_drw_font_getexts. See those anchors
+ * in drw.c for cache keys, invalidation, ownership and failure policy. */
 Fnt *drw_fontset_create(Drw* drw, const char *fonts[], size_t fontcount);
 void drw_fontset_free(Fnt* set);
 unsigned int drw_fontset_getwidth(Drw *drw, const char *text);
@@ -110,24 +123,27 @@ void drw_fontset_invalidate_cache(void);
 void drw_font_getexts(Fnt *font, const char *text, unsigned int len, unsigned int *w, unsigned int *h);
 
 /* Colorscheme abstraction — contracts: spec_drw_clr_create,
- * spec_drw_scm_create. */
+ * spec_drw_scm_create in drw.c (alpha handling, DIE policy and ownership). */
 void drw_clr_create(Drw *drw, Clr *dest, const char *clrname);
 Clr *drw_scm_create(Drw *drw, const char *clrnames[], size_t clrcount);
 
-/* Cursor abstraction — contracts: spec_drw_cur_create, spec_drw_cur_free. */
+/* Cursor abstraction — contracts: spec_drw_cur_create, spec_drw_cur_free in
+ * drw.c (NULL policy and caller ownership). */
 Cur *drw_cur_create(Drw *drw, int shape);
 void drw_cur_free(Drw *drw, Cur *cursor);
 
 /* Drawing context manipulation — contracts: spec_drw_setfontset,
- * spec_drw_setscheme. */
+ * spec_drw_setscheme in drw.c (no ownership transfer; cache invalidation on
+ * font change). */
 void drw_setfontset(Drw *drw, Fnt *set);
 void drw_setscheme(Drw *drw, Clr *scm);
 
-/* Drawing functions — contracts: spec_drw_rect, spec_drw_text. */
+/* Drawing functions — contracts: spec_drw_rect, spec_drw_text in drw.c. Note
+ * drw_text never blits to a window; that is drw_map's job. */
 void drw_rect(Drw *drw, int x, int y, unsigned int w, unsigned int h, int filled, int invert);
 int drw_text(Drw *drw, int x, int y, unsigned int w, unsigned int h, unsigned int lpad, const char *text, int invert);
 
-/* Map functions — contract: spec_drw_map. */
+/* Map functions — contract: spec_drw_map in drw.c (the only blitter; XSync). */
 void drw_map(Drw *drw, Window win, int x, int y, unsigned int w, unsigned int h);
 
 #endif /* DRW_H */

@@ -30,6 +30,8 @@ test_stop_sends_stop(void)
 		"killatfullscreen_stop: one call per target");
 	ASSERT(strcmp(rec_signal, "-STOP") == 0,
 		"killatfullscreen_stop: sends SIGSTOP");
+	ASSERT_EQ(procstate, PROC_STOPPED,
+		"killatfullscreen_stop: enters PROC_STOPPED");
 
 	killall_impl = saved;
 }

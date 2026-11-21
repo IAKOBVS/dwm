@@ -59,7 +59,19 @@
                                * MAX(0, MIN((y)+(h),(m)->wy+(m)->wh) - MAX((y),(m)->wy)))
 /**
  * @brief True when a client's tags intersect the monitor's current view.
+ *
+ * @details Pure predicate macro: true when a client's tag mask intersects the
+ *          selected tagset of its monitor. C must be a live Client with valid
+ *          mon/tags; see @ref arch_module_dwm. No failure path; NULL is
+ *          undefined.
+ *
  * @param C  Client with a valid `mon`, `tags`, and monitor tag state.
+ * @par Side Effects:
+ *      None. Reads c->tags and c->mon->tagset/seltags; no X calls and no
+ *      globals written.
+ * @par Threading and Reentrancy:
+ *      Expression macro evaluated in the single-threaded event loop; no state
+ *      and no reentrancy hazard.
  * @anchor spec_isvisible
  */
 #define ISVISIBLE(C)            ((C->tags & C->mon->tagset[C->mon->seltags])) /* true if client tagged in current view */
@@ -70,7 +82,19 @@
 #define TAGMASK                 ((1 << LENGTH(tags)) - 1)
 /**
  * @brief Pixel width of a text string including horizontal padding.
+ *
+ * @details Computes the pixel width of a NUL-terminated string as
+ *          drw_fontset_getwidth() plus lrpad. X must be valid and
+ *          NUL-terminated and drw/its fonts initialized; see
+ *          @ref arch_module_dwm.
+ *
  * @param X  NUL-terminated string.
+ * @par Side Effects:
+ *      Reads global drw/lrpad and the fontset; triggers Xft glyph-extent
+ *      measurement but no WM state change.
+ * @par Threading and Reentrancy:
+ *      Evaluated in the single-threaded loop (bar drawing, click
+ *      classification); the font cache is not thread-safe.
  * @anchor spec_textw
  */
 #define TEXTW(X)                (drw_fontset_getwidth(drw, (X)) + lrpad)
@@ -146,10 +170,20 @@ static int bar_clear_on_draw = 1;
 /**
  * @brief Derive the explicit bar phase from a monitor's current flags.
  *
+ * @details Pure derivation of the explicit BarState from a monitor's flags:
+ *          hidden, fullscreen-frozen, dirty, exposed-only, or clean. m must
+ *          be non-NULL and live; see @ref arch_module_dwm.
+ *
  * @param[in] m  Monitor whose bar state is inspected.
  * @return The current BarState.
  * @note Pure read of m->showbar, m->sel, m->bar_dirty_segments and
  *       m->bar_exposed.
+ * @par Side Effects:
+ *      None. Reads m->showbar, m->sel->isfullscreen, bar_dirty_segments and
+ *      bar_exposed; no X calls.
+ * @par Threading and Reentrancy:
+ *      Pure read in the single-threaded loop; BarState is the input to the
+ *      bar-rendering state machine (ARCHITECTURE.md 13a).
  * @anchor spec_bar_state_of
  */
 static BarState
@@ -172,10 +206,22 @@ bar_state_of(Monitor *m)
  * This is the single writer for bar_dirty_segments and bar_draw_pending;
  * direct writes elsewhere are replaced by calls to this helper.
  *
+ * @details Single writer for a monitor's bar_dirty_segments mask and the
+ *          global bar_draw_pending flag; ORs the bits in and requests a
+ *          coalesced redraw at the loop tail. NULL m is ignored; see
+ *          @ref arch_module_dwm.
+ *
  * @param[in,out] m     Monitor whose bar changes; NULL is ignored.
  * @param[in]     bits  DIRTY_* segment mask.
  * @post m->bar_dirty_segments includes @p bits and bar_draw_pending is set.
  * @note Writes per-monitor bar state and the global pending flag.
+ * @par Side Effects:
+ *      Sets m->bar_dirty_segments and bar_draw_pending; no X call itself
+ *      (drawing is deferred to flusheventtail/drawbars).
+ * @par Threading and Reentrancy:
+ *      Called from event handlers and commands in the single-threaded loop;
+ *      bar-rendering state-machine writer (ARCHITECTURE.md 13a). Signal
+ *      handlers never call it.
  * @anchor spec_bar_mark_dirty
  */
 static void
@@ -201,11 +247,22 @@ struct NumTags { char limitexceeded[LENGTH(tags) > 31 ? -1 : 1]; };
  * fields. When no rule supplies tags the client inherits the current view's
  * tags.
  *
+ * @details Matches rules[] against WM_CLASS/title, resets floating/tags and
+ *          applies every matching rule; with no rule-supplied tags the client
+ *          inherits the current view. c, c->win and c->mon must be valid; see
+ *          @ref arch_module_dwm.
+ *
  * @param[in,out]  c  Client whose fields are updated; c->win and c->mon must already be set.
  *
  * @pre c != NULL, c->win is a valid X window and c->mon is a valid monitor.
  * @post c->tags is non-zero and masked to TAGMASK; c->mon points into mons.
  * @note Reads rules[]/broken; writes c->tags, c->isfloating, c->isterminal, c->noswallow and c->mon; calls XGetClassHint() and XFree().
+ * @par Side Effects:
+ *      XGetClassHint()/XFree() on c->win; writes c->tags, isfloating,
+ *      isterminal, noswallow and mon. No list or bar mutation.
+ * @par Threading and Reentrancy:
+ *      Called from manage() during window creation in the single-threaded
+ *      loop; no reentrancy and no signal context.
  * @warning The tag fallback uses c->mon, so c->mon must be initialized even when no rule matches.
  * @see manage, termforwin, applysizehints
  * @anchor spec_applyrules
@@ -257,6 +314,11 @@ applyrules(Client *c)
  * increment hints when hints are honored. Returns whether the clamped geometry
  * differs from the client's current geometry.
  *
+ * @details Clamps proposed x/y/w/h to screen or workarea and to ICCCM
+ *          base/min/max, aspect and increment hints, returning whether
+ *          geometry changed. Pointers must be valid; hints are refreshed via
+ *          XGetWMNormalHints when invalid; see @ref arch_module_dwm.
+ *
  * @param[in]  c  Client whose cached hints are consulted.
  * @param[in,out]  x  Proposed X coordinate, clamped in place.
  * @param[in,out]  y  Proposed Y coordinate, clamped in place.
@@ -269,6 +331,12 @@ applyrules(Client *c)
  * @pre c != NULL, c->mon is valid, and x/y/w/h point to initialized integers.
  * @post The pointed-to values hold the clamped geometry; size-hint fields may have been refreshed via updatesizehints().
  * @note Reads resizehints, sw, sh and bh; may call updatesizehints() (which issues XGetWMNormalHints()) when c->hintsvalid is clear.
+ * @par Side Effects:
+ *      May call updatesizehints() (XGetWMNormalHints) when c->hintsvalid is
+ *      clear; otherwise pure arithmetic with no X writes.
+ * @par Threading and Reentrancy:
+ *      Helper called from resize() and layouts in the single-threaded loop;
+ *      the only global touched is the client's cached hint set.
  * @see updatesizehints, resize, resizeclient, tile
  * @anchor spec_applysizehints
  */
@@ -351,10 +419,21 @@ static void arrangenow(Monitor *m);
  * directly so per-window map/unmap transitions stay visible; calls outside event
  * dispatch (pointer grabs, setup, scan) run immediately.
  *
+ * @details Requests a layout pass: during dispatch without a pointer grab it
+ *          only sets arrange_pending for the loop-tail flush, otherwise it
+ *          runs arrangenow() immediately. NULL arranges every monitor; see
+ *          @ref arch_module_dwm.
+ *
  * @param[in]  m  Monitor to arrange, or NULL to arrange every monitor.
  *
  * @post Either the layout ran immediately or arrange_pending is set for flusheventtail().
  * @note Reads dispatching and pointergrab; writes arrange_pending.
+ * @par Side Effects:
+ *      Writes arrange_pending; may run layout, showhide and restack (X
+ *      geometry) through arrangenow().
+ * @par Threading and Reentrancy:
+ *      Layout-coalescing state machine (ARCHITECTURE.md 13a): handler context
+ *      defers, while creation, grab and setup paths run immediately.
  * @see arrangenow, flusheventtail, run, arrangemon
  * @anchor spec_arrange
  */
@@ -375,11 +454,22 @@ arrange(Monitor *m)
  * each monitor's current layout function and reapplies stacking. This bypasses
  * arrange()'s event-dispatch coalescing.
  *
+ * @details Performs the layout pass unconditionally: showhide() each client,
+ *          run the current layout function and restack. m must belong to mons
+ *          and have an allocated gap; see @ref arch_module_dwm.
+ *
  * @param[in]  m  Monitor to arrange, or NULL to arrange every monitor.
  *
  * @pre The mons list is valid; if m is non-NULL it must belong to mons and have an allocated gap.
  * @post Client visibility, geometry and stacking reflect the current layout.
  * @note Increments arrange_calls under DWM_TEST; restack() sets bar_draw_pending; issues X11 geometry and stacking calls via the layout and restack.
+ * @par Side Effects:
+ *      X11 geometry/stacking via the layout and restack; increments
+ *      arrange_calls (DWM_TEST); restack sets bar_draw_pending.
+ * @par Threading and Reentrancy:
+ *      Single-threaded; deliberately bypasses coalescing. Called by
+ *      arrange(), flusheventtail() and the manage/unmanage
+ *      creation/destruction paths.
  * @see arrange, arrangemon, restack, flusheventtail
  * @anchor spec_arrangenow
  */
@@ -407,7 +497,18 @@ arrangenow(Monitor *m)
  * issues coalesced bar redraws when bar_draw_pending is set. The layout runs
  * first so bars render against post-layout geometry.
  *
+ * @details Event-loop tail hook: runs at most one full layout pass when
+ *          arrange_pending is set, then issues coalesced bar redraws when
+ *          bar_draw_pending is set; layout precedes bars; see
+ *          @ref arch_module_dwm.
+ *
  * @note Clears arrange_pending and bar_draw_pending; calls arrangenow() and drawbars() (Xft/X11 drawing).
+ * @par Side Effects:
+ *      Clears arrange_pending and bar_draw_pending; calls arrangenow(NULL)
+ *      and drawbars() (Xft/X11 drawing).
+ * @par Threading and Reentrancy:
+ *      Coalescing state-machine flush (ARCHITECTURE.md 13a); runs once per
+ *      dispatched event in the single-threaded loop.
  * @see arrange, drawbars, run
  * @anchor spec_flusheventtail
  */
@@ -432,9 +533,18 @@ flusheventtail(void)
  * hook when one exists. Floating layouts have no arrange hook, so placement is
  * left untouched.
  *
+ * @details Copies the current layout's symbol into m->ltsymbol and invokes
+ *          its arrange hook when present; floating layouts leave geometry
+ *          untouched. m must be valid; see @ref arch_module_dwm.
+ *
  * @param[in]  m  Monitor whose current layout is applied.
  *
  * @note Writes m->ltsymbol; may invoke resize() and other X11 operations through the layout function.
+ * @par Side Effects:
+ *      Writes m->ltsymbol; the layout arrange hook may resize clients (X11).
+ * @par Threading and Reentrancy:
+ *      Single-threaded layout callback invoked from arrangenow() through the
+ *      Layout function pointer.
  * @see arrange, setlayout, tile, monocle
  * @anchor spec_arrangemon
  */
@@ -451,9 +561,18 @@ arrangemon(Monitor *m)
  *
  * Newest clients become the list head.
  *
+ * @details Prepends c to its monitor's client list so the newest client is
+ *          the head. c->mon must be valid and c unlinked; see
+ *          @ref arch_module_dwm.
+ *
  * @param[in,out]  c  Client to link; c->mon must be valid.
  *
  * @note Writes c->next and c->mon->clients.
+ * @par Side Effects:
+ *      Writes c->next and c->mon->clients only; no X calls.
+ * @par Threading and Reentrancy:
+ *      Pure list mutation in the single-threaded loop; client-lifecycle
+ *      helper (ARCHITECTURE.md 13a).
  * @warning Does not check whether c is already linked.
  * @see detach, attachstack, manage
  * @anchor spec_attach
@@ -470,9 +589,18 @@ attach(Client *c)
  *
  * The most recently focused client becomes the stack head.
  *
+ * @details Pushes c onto its monitor's focus-history stack as the head.
+ *          c->mon must be valid and c not already present; see
+ *          @ref arch_module_dwm.
+ *
  * @param[in,out]  c  Client to link; c->mon must be valid.
  *
  * @note Writes c->snext and c->mon->stack.
+ * @par Side Effects:
+ *      Writes c->snext and c->mon->stack only.
+ * @par Threading and Reentrancy:
+ *      Pure list mutation in the single-threaded loop; maintains focus-order
+ *      history.
  * @warning Does not check whether c is already on the stack.
  * @see detachstack, focus
  * @anchor spec_attachstack
@@ -492,12 +620,25 @@ attachstack(Client *c)
  * unswallow() reverses the exchange. Both hash entries are re-indexed after the
  * swap and the parent's title is refreshed.
  *
+ * @details Swaps terminal p and spawned c windows so p adopts c's window:
+ *          detaches c, re-indexes the hash, parks c as a placeholder and
+ *          refits p. Client lifecycle is explicit (ARCHITECTURE.md 13a); see
+ *          @ref arch_module_dwm.
+ *
  * @param[in,out]  p  Terminal client that adopts c's window.
  * @param[in,out]  c  Spawned child client whose window is transferred.
  *
  * @pre c is managed and distinct from p; c->mon is valid.
  * @post p->swallowing == c; window ids and hash entries are swapped; p's bar title segment is dirty.
  * @note Reads enableswallow and swallowfloating; detaches c from the client and focus stacks; mutates winhash; calls XUnmapWindow(), XMoveResizeWindow(), arrangenow(), configure(), updatetitle() and updateclientlist().
+ * @par Side Effects:
+ *      XUnmapWindow/XMoveResizeWindow; mutates winhash, p/c state and holder,
+ *      detaches c from lists; arrangenow(), configure(), updateclientlist()
+ *      and a dirty title segment.
+ * @par Threading and Reentrancy:
+ *      Client-lifecycle transition (ARCHITECTURE.md 13a) setting
+ *      CST_HOLDER/CST_PLACEHOLDER; single-threaded, no signal or fork
+ *      context.
  * @warning Removes c from its monitor lists before returning; callers must not reuse the old list links.
  * @see unswallow, swallowingclient, termforwin
  * @anchor spec_swallow
@@ -547,11 +688,22 @@ swallow(Client *p, Client *c)
  * back to c, frees the placeholder, leaves fullscreen, remaps the window and
  * restores NormalState before refocusing.
  *
+ * @details Reverses a swallow: transfers the placeholder window back to c,
+ *          frees the placeholder, leaves fullscreen, remaps and refocuses.
+ *          c->swallowing must be non-NULL; see @ref arch_module_dwm.
+ *
  * @param[in,out]  c  Holder client whose placeholder is being dissolved.
  *
  * @pre c->swallowing != NULL.
  * @post c->swallowing == NULL; c owns its original window id and is mapped in NormalState.
  * @note Calls winclient_remove()/winclient_put(), setfullscreen(), updatetitle(), arrange(), XMapWindow(), XMoveResizeWindow(), setclientstate() and focus().
+ * @par Side Effects:
+ *      winclient_remove/put; frees the placeholder;
+ *      XMapWindow/XMoveResizeWindow; setfullscreen(), arrange(),
+ *      setclientstate() and focus().
+ * @par Threading and Reentrancy:
+ *      Single-threaded client-lifecycle transition (ARCHITECTURE.md 13a);
+ *      frees memory, so the placeholder must not be referenced again.
  * @warning Frees the placeholder client; it must not be referenced afterwards.
  * @see swallow, unmanage
  * @anchor spec_unswallow
@@ -595,10 +747,22 @@ unswallow(Client *c)
  * otherwise it classifies the click as tag label, layout symbol, status text,
  * window title, client window or root and invokes every matching buttons[] entry.
  *
+ * @details Routes a ButtonPress: focuses the clicked monitor/client,
+ *          classifies the click region (tags, layout, status, title, client
+ *          or root) and invokes matching buttons[] bindings, or replays an
+ *          unmatched pointer; see @ref arch_module_dwm.
+ *
  * @param[in]  e  X ButtonPress event.
  *
  * @post The pointer button is either replayed to the client or consumed by a binding; selmon and selmon->sel may have changed.
  * @note May set selmon; calls unfocus(), focus(), restack(), XAllowEvents() and TEXTW (DRW/Xft); reads buttons[] and invokes bound functions.
+ * @par Side Effects:
+ *      May set selmon; unfocus(), focus(), restack() and XAllowEvents replay;
+ *      TEXTW measures fonts; bound functions may change state or spawn
+ *      children.
+ * @par Threading and Reentrancy:
+ *      Event-handler context (handler[ButtonPress]) in the single-threaded
+ *      loop; bound functions may fork children through spawn().
  * @see mousebuttonmatch, cachebuttons, keypress
  * @anchor spec_buttonpress
  */
@@ -663,12 +827,20 @@ buttonpress(XEvent *e)
  * rejection. Buttons beyond the bitmap width always pass the button test; masks
  * outside the union of configured modifiers are rejected immediately.
  *
+ * @details O(1) rejection test using precomputed button/modifier bitmaps:
+ *          buttons wider than the bitmap pass, masks outside configured
+ *          modifiers are rejected; see @ref arch_module_dwm.
+ *
  * @param[in]  button  Button number from the event.
  * @param[in]  mask  Modifier state already passed through CLEANMASK().
  *
  * @return Non-zero when a configured binding could match, zero otherwise.
  *
  * @note Reads button_button_used and button_mask_used built by cachebuttons().
+ * @par Side Effects:
+ *      None. Reads button_button_used/button_mask_used; no X calls.
+ * @par Threading and Reentrancy:
+ *      Pure predicate called from buttonpress() in the single-threaded loop.
  * @see cachebuttons, buttonpress
  * @anchor spec_mousebuttonmatch
  */
@@ -685,7 +857,15 @@ mousebuttonmatch(unsigned int button, unsigned int mask)
  * ORs together every bound button number and every cleaned modifier mask,
  * ignoring entries without a function.
  *
+ * @details Rebuilds the mousebuttonmatch() bitmaps by OR-ing every bound
+ *          button and cleaned modifier from buttons[]; function-less entries
+ *          are skipped; see @ref arch_module_dwm.
+ *
  * @note Writes button_button_used and button_mask_used; reads buttons[].
+ * @par Side Effects:
+ *      Writes button_button_used and button_mask_used only.
+ * @par Threading and Reentrancy:
+ *      Called once from setup() in the single-threaded loop; no reentrancy.
  * @see mousebuttonmatch, setup
  * @anchor spec_cachebuttons
  */
@@ -708,12 +888,21 @@ cachebuttons(void)
 /**
  * @brief Pack a keysym and cleaned modifier into a single 64-bit key.
  *
+ * @details Pure packing of a keysym into the high 32 bits and a cleaned
+ *          modifier into the low 32 bits of a 64-bit key. No globals; see
+ *          @ref arch_module_dwm.
+ *
  * @param[in]  keysym  X keysym.
  * @param[in]  mod  Modifier state, normally after CLEANMASK().
  *
  * @return The keysym shifted into the high 32 bits ORed with the low 32 bits of mod.
  *
  * @note Pure computation; reads no globals.
+ * @par Side Effects:
+ *      None; pure computation.
+ * @par Threading and Reentrancy:
+ *      Pure helper used by keyset_put()/iskeybound() in the single-threaded
+ *      loop.
  * @see keyset_home, keyset_put, iskeybound
  * @anchor spec_keypack
  */
@@ -729,12 +918,20 @@ keypack(KeySym keysym, unsigned int mod)
  * Applies a 64-bit Fibonacci hash and folds the result with
  * (KEYSET_SIZE - 1) so the slot is always in bounds.
  *
+ * @details Fibonacci hash of a packed key folded into [0,KEYSET_SIZE);
+ *          requires KEYSET_SIZE to be a power of two. Pure; see
+ *          @ref arch_module_dwm.
+ *
  * @param[in]  k  Packed (keysym, modifier) key from keypack().
  *
  * @return Home slot index in [0, KEYSET_SIZE).
  *
  * @pre KEYSET_SIZE is a power of two.
  * @note Pure computation; reads KEYSET_SIZE.
+ * @par Side Effects:
+ *      None; reads KEYSET_SIZE.
+ * @par Threading and Reentrancy:
+ *      Pure helper in the keyboard fast path, single-threaded.
  * @see keyset_put, iskeybound, cachekeys
  * @anchor spec_keyset_home
  */
@@ -752,10 +949,20 @@ keyset_home(unsigned long long k)
  * it suppresses the insert and sets keyset_saturated so iskeybound() falls back
  * to the lossy OR-mask test.
  *
+ * @details Inserts a packed key with linear probing, tolerating duplicates;
+ *          when nearly full it suppresses the insert and sets
+ *          keyset_saturated so iskeybound() falls back to the OR-mask test;
+ *          see @ref arch_module_dwm.
+ *
  * @param[in]  k  Packed key from keypack().
  *
  * @post The key may be stored and keyset_count incremented, or keyset_saturated may be set.
  * @note Writes keyset[], keyset_count and keyset_saturated.
+ * @par Side Effects:
+ *      Writes keyset[], keyset_count and keyset_saturated only.
+ * @par Threading and Reentrancy:
+ *      Builds the exact key index from cachekeys() in the single-threaded
+ *      loop.
  * @see keyset_home, iskeybound, cachekeys
  * @anchor spec_keyset_put
  */
@@ -785,12 +992,20 @@ keyset_put(unsigned long long k)
  * Looks up the packed key in the exact keyset. If the set is empty or
  * saturated it falls back to the lossy union-of-masks test.
  *
+ * @details Exact fast-path lookup of a packed key, falling back to the lossy
+ *          union-of-masks test when the set is empty or saturated; nonzero
+ *          means a binding could match; see @ref arch_module_dwm.
+ *
  * @param[in]  keysym  X keysym to test.
  * @param[in]  state  Raw event modifier state.
  *
  * @return Non-zero when any configured binding could match, zero otherwise.
  *
  * @note Reads keyset[], keyset_count, keyset_saturated, key_mod_used and key_keysym_used; cleans state with CLEANMASK().
+ * @par Side Effects:
+ *      None. Reads keyset state and applies CLEANMASK; no X calls.
+ * @par Threading and Reentrancy:
+ *      Pure-ish predicate called from keypress() in the single-threaded loop.
  * @see cachekeys, keypress, keyset_put
  * @anchor spec_iskeybound
  */
@@ -821,7 +1036,17 @@ iskeybound(KeySym keysym, unsigned int state)
  * exact keyset, and inserts each binding's packed (keysym, cleaned modifier) key.
  * Entries without a function are ignored.
  *
+ * @details Rebuilds the keyboard fast-path masks and exact keyset from
+ *          keys[]: clears the set, then inserts each bound packed key and
+ *          ignores function-less entries; see @ref arch_module_dwm.
+ *
  * @note Writes key_keysym_used, key_mod_used, keyset[], keyset_count and keyset_saturated; calls keyset_put().
+ * @par Side Effects:
+ *      Writes key_keysym_used, key_mod_used, keyset[], keyset_count and
+ *      keyset_saturated; no X calls.
+ * @par Threading and Reentrancy:
+ *      Called from setup() and grabkeys() in the single-threaded loop after
+ *      the NumLock refresh.
  * @see iskeybound, grabkeys, keypress
  * @anchor spec_cachekeys
  */
@@ -852,7 +1077,18 @@ cachekeys(void)
  * window manager is already running. A temporary startup error handler turns
  * that error into a fatal message; the regular handler is restored afterwards.
  *
+ * @details Installs a temporary startup error handler, selects
+ *          SubstructureRedirectMask on root and syncs so an existing WM
+ *          raises BadAccess, which DIEs; restores the regular handler; see
+ *          @ref arch_module_dwm.
+ *
  * @note X11 calls XSetErrorHandler(), XSelectInput() and XSync(); mutates the process X error handler state.
+ * @par Side Effects:
+ *      XSetErrorHandler/XSelectInput/XSync; mutates the process X error
+ *      handler and may terminate via DIE.
+ * @par Threading and Reentrancy:
+ *      Single-threaded startup from main(); installs and restores the global
+ *      X error handler synchronously.
  * @warning Calls DIE (via xerrorstart) when another window manager is present.
  * @see xerrorstart, xerror, setup
  * @anchor spec_checkotherwm
@@ -876,8 +1112,19 @@ checkotherwm(void)
  * and monitor, releases grabs, cursors, colors, fonts and drawing state, then
  * resets X input focus and EWMH state.
  *
+ * @details Tears down all dwm state for exit or restart: clears the hash,
+ *          views all tags, frees clients and monitors, releases drawing
+ *          resources and resets focus and EWMH state; see
+ *          @ref arch_module_dwm.
+ *
  * @post mons == NULL, the window hash is empty, and X resources owned by dwm are released.
  * @note Mutates winhash state, selmon/mons, scheme, drw and root properties; issues many X11 calls and frees clients through unmanage().
+ * @par Side Effects:
+ *      Frees clients via unmanage(), monitors, scheme and drw; many X calls
+ *      (ungrab, destroy, focus reset and property deletes).
+ * @par Threading and Reentrancy:
+ *      Single-threaded shutdown from main() after run() has exited; no event
+ *      handler or forked child is active.
  * @warning Must not run while the event loop still uses drw or dpy.
  * @see cleanupmon, unmanage, setup, run
  * @anchor spec_cleanup
@@ -918,11 +1165,21 @@ cleanup(void)
 /**
  * @brief Unlink a monitor, destroy its bar and free it.
  *
+ * @details Unlinks mon from mons, unmaps and destroys its bar window and
+ *          frees the monitor. It does not migrate or free clients; see
+ *          @ref arch_module_dwm.
+ *
  * @param[in]  mon  Monitor to remove from the global list.
  *
  * @pre mon != NULL and mon is linked into mons.
  * @post mon is unlinked, its bar window is unmapped and destroyed, and its memory is freed.
  * @note Writes mons (or the preceding next link); calls XUnmapWindow() and XDestroyWindow().
+ * @par Side Effects:
+ *      Writes mons or the preceding next link; XUnmapWindow/XDestroyWindow;
+ *      frees mon.
+ * @par Threading and Reentrancy:
+ *      Single-threaded teardown helper called from cleanup() and
+ *      updategeom().
  * @warning Does not migrate or free the monitor's clients; the caller must handle them first.
  * @see cleanup, updategeom, createmon
  * @anchor spec_cleanupmon
@@ -949,10 +1206,20 @@ cleanupmon(Monitor *mon)
  * Processes _NET_WM_STATE fullscreen add/remove/toggle requests and
  * _NET_ACTIVE_WINDOW requests, marking unselected non-urgent clients urgent.
  *
+ * @details Handles EWMH _NET_WM_STATE fullscreen add/remove/toggle and
+ *          _NET_ACTIVE_WINDOW urgency for a managed client; unmanaged windows
+ *          are ignored; see @ref arch_module_dwm.
+ *
  * @param[in]  e  X ClientMessage event.
  *
  * @post The requested fullscreen or urgency state is applied when the window is managed.
  * @note Calls wintoclient(), setfullscreen() and seturgent(); reads netatom[] and selmon.
+ * @par Side Effects:
+ *      Calls setfullscreen() and seturgent(); reads netatom[] and selmon; no
+ *      direct X calls here.
+ * @par Threading and Reentrancy:
+ *      Event-handler context in the single-threaded loop; fullscreen entry
+ *      may drive the fullscreen-process machine (ARCHITECTURE.md 13a).
  * @see setfullscreen, seturgent, propertynotify
  * @anchor spec_clientmessage
  */
@@ -981,9 +1248,19 @@ clientmessage(XEvent *e)
  * dwm does not reparent clients, so clients cannot infer their frame from real
  * ConfigureNotify events alone; this reports the geometry dwm assigned.
  *
+ * @details Sends a synthetic ConfigureNotify reporting dwm-assigned geometry
+ *          to a client, since dwm does not reparent windows. c->win must be
+ *          valid; see @ref arch_module_dwm.
+ *
  * @param[in]  c  Client to notify; c->win must be valid.
  *
  * @note Calls XSendEvent() with StructureNotifyMask; reads c->x/y/w/h/bw.
+ * @par Side Effects:
+ *      XSendEvent() with StructureNotifyMask; reads c->x/y/w/h/bw; no state
+ *      writes.
+ * @par Threading and Reentrancy:
+ *      Called synchronously from layout and configure paths in the
+ *      single-threaded loop.
  * @see resizeclient, configurerequest, manage
  * @anchor spec_configure
  */
@@ -1013,10 +1290,22 @@ configure(Client *c)
  * re-probes monitor geometry, resizes the drawing context and bar windows,
  * refits fullscreen clients and finally refocuses and rearranges.
  *
+ * @details On a root resize it records the new screen size, re-probes monitor
+ *          geometry, resizes drw and bars, refits fullscreen clients,
+ *          refocuses and rearranges. Geometry reprobe is explicit
+ *          (ARCHITECTURE.md 13a); see @ref arch_module_dwm.
+ *
  * @param[in]  e  X ConfigureNotify event.
  *
  * @pre dpy and drw are initialized.
  * @note Writes sw and sh; calls updategeom(), drw_resize(), updatebars(), resizeclient(), XMoveResizeWindow(), focus() and arrange().
+ * @par Side Effects:
+ *      Writes sw/sh; calls updategeom(), drw_resize(), updatebars(),
+ *      resizeclient(), XMoveResizeWindow(), focus() and arrange(); marks
+ *      every bar DIRTY_ALL.
+ * @par Threading and Reentrancy:
+ *      Event-handler context; the geometry-reprobe machine (ARCHITECTURE.md
+ *      13a) populates lastgeom via updategeom().
  * @see updategeom, updatebars, arrange
  * @anchor spec_configurenotify
  */
@@ -1058,9 +1347,19 @@ configurenotify(XEvent *e)
  * synthetic configure reporting dwm's answer. Unmanaged windows are configured
  * as requested.
  *
+ * @details Answers a client ConfigureRequest: border width is always honored,
+ *          floating/no-arrange clients may change clamped/centered geometry,
+ *          tiled clients get a synthetic configure and unmanaged windows are
+ *          configured as requested; see @ref arch_module_dwm.
+ *
  * @param[in]  e  X ConfigureRequest event.
  *
  * @note Reads selmon; writes c->bw, c->x/y/w/h and their old values; calls configure(), XMoveResizeWindow(), XConfigureWindow() and XSync().
+ * @par Side Effects:
+ *      Writes c->bw and geometry plus old values; configure(),
+ *      XMoveResizeWindow/XConfigureWindow and XSync.
+ * @par Threading and Reentrancy:
+ *      Event-handler context in the single-threaded loop.
  * @see configure, resize, manage
  * @anchor spec_configurerequest
  */
@@ -1124,10 +1423,21 @@ configurerequest(XEvent *e)
  * configs) and marks every bar segment dirty so the first draw renders
  * everything.
  *
+ * @details Allocates a Monitor from config defaults: tagsets, mfact/nmaster,
+ *          bar flags, a cloned gap, the first two layouts and a fully dirty
+ *          bar. It is not linked into mons and has no bar window; see
+ *          @ref arch_module_dwm.
+ *
  * @return Newly allocated monitor with an embedded initialized gap.
  *
  * @post The caller owns the monitor; it is not yet linked into mons and has no bar window.
  * @note Uses ecalloc(); reads mfact, nmaster, showbar, topbar, default_gap and layouts[]; sets bar_dirty_segments and bar_exposed.
+ * @par Side Effects:
+ *      Uses ecalloc() and gap_copy(); bar_mark_dirty() sets the bar flags; no
+ *      X calls.
+ * @par Threading and Reentrancy:
+ *      Single-threaded creation helper for setup()/updategeom(); returns
+ *      caller-owned memory.
  * @see cleanupmon, updategeom, setup
  * @anchor spec_createmon
  */
@@ -1159,9 +1469,19 @@ createmon(void)
  * terminal placeholder parked by swallow(), the holder client is unmanaged
  * instead.
  *
+ * @details Handles DestroyWindow by unmanaging the owning client, or its
+ *          holder when the destroyed window is a swallowed placeholder; see
+ *          @ref arch_module_dwm.
+ *
  * @param[in]  e  X DestroyWindow event.
  *
  * @note Calls wintoclient(), swallowingclient() and unmanage().
+ * @par Side Effects:
+ *      Calls wintoclient(), swallowingclient() and unmanage() (which frees
+ *      the client and updates lists, hash and X state).
+ * @par Threading and Reentrancy:
+ *      Event-handler context; the destruction path uses immediate layout via
+ *      unmanage().
  * @see unmanage, unmapnotify, swallow
  * @anchor spec_destroynotify
  */
@@ -1181,11 +1501,19 @@ destroynotify(XEvent *e)
 /**
  * @brief Remove a client from its monitor's client list.
  *
+ * @details Unlinks c from its monitor's client list; a no-op when absent and
+ *          leaves c->next unchanged; see @ref arch_module_dwm.
+ *
  * @param[in]  c  Client to unlink.
  *
  * @pre c->mon is a valid monitor.
  * @post c is no longer linked from c->mon->clients; c->next is left unchanged.
  * @note No-op when c is not in the list; writes the list links.
+ * @par Side Effects:
+ *      Writes client list links only.
+ * @par Threading and Reentrancy:
+ *      Pure list mutation in the single-threaded loop; client-lifecycle
+ *      helper (ARCHITECTURE.md 13a).
  * @warning Does not clear c->next and does not update selection or the stack.
  * @see attach, detachstack, unmanage
  * @anchor spec_detach
@@ -1205,10 +1533,18 @@ detach(Client *c)
  * If the removed client was the monitor's selection, the most recent visible
  * entry remaining on the stack is promoted to sel.
  *
+ * @details Unlinks c from the focus stack and, when it was the selection,
+ *          promotes the newest visible stack entry to sel; c->snext is
+ *          unchanged; see @ref arch_module_dwm.
+ *
  * @param[in]  c  Client to unlink from the stack.
  *
  * @post c->mon->sel may point at a different client; c->snext is unchanged.
  * @note Writes the monitor stack and sel; reads ISVISIBLE().
+ * @par Side Effects:
+ *      Writes the monitor stack and possibly sel.
+ * @par Threading and Reentrancy:
+ *      Pure list/selection mutation in the single-threaded loop.
  * @see attachstack, focus, unmanage
  * @anchor spec_detachstack
  */
@@ -1233,12 +1569,20 @@ detachstack(Client *c)
  * Positive directions advance and wrap to the list head; non-positive
  * directions walk to the predecessor and wrap from the head to the tail.
  *
+ * @details Returns the monitor adjacent to selmon with wraparound: positive
+ *          directions advance to the head, non-positive ones walk to the
+ *          predecessor; see @ref arch_module_dwm.
+ *
  * @param[in]  dir  Positive for next, otherwise previous.
  *
  * @return Adjacent monitor in the mons list.
  *
  * @pre selmon belongs to mons and mons is non-NULL.
  * @note Reads selmon and mons.
+ * @par Side Effects:
+ *      None. Reads selmon and mons.
+ * @par Threading and Reentrancy:
+ *      Pure read in the single-threaded loop.
  * @see focusmon, tagmon, recttomon
  * @anchor spec_dirtomon
  */
@@ -1266,11 +1610,22 @@ dirtomon(int dir)
  * drawing to the status, tag and title areas that changed. Status is drawn first
  * so tags can overdraw it.
  *
+ * @details Renders dirty bar segments (status, tags, title) into the retained
+ *          pixmap and blits on expose; hidden bars and optimized fullscreen
+ *          skip all work and clean segments only re-copy. Bar rendering is
+ *          explicit (ARCHITECTURE.md 13a); see @ref arch_module_dwm.
+ *
  * @param[in]  m  Monitor whose bar is drawn.
  *
  * @pre m->barwin exists, drw and drw->fonts are valid, and bh is initialized.
  * @post The bar pixmap matches the window; dirty segments are cleared except under DWM_TEST, and bar_exposed is cleared.
  * @note Reads stext, tags[], scheme[], selmon and m->clients; calls drw_setscheme(), drw_text(), drw_rect() and drw_map() (Xft/X11); mutates bar_dirty_segments and bar_exposed.
+ * @par Side Effects:
+ *      drw_setscheme()/drw_text()/drw_rect()/drw_map() (Xft/X11); clears
+ *      bar_dirty_segments (except under DWM_TEST) and bar_exposed.
+ * @par Threading and Reentrancy:
+ *      Bar-rendering phase machine (ARCHITECTURE.md 13a); single-threaded;
+ *      drw->fonts->h is read before the early returns.
  * @warning Accesses drw->fonts->h before the showbar/fullscreen early returns, so drw->fonts must be valid even for callers that end up drawing nothing.
  * @see drawbars, updatestatus, focus, setlayout
  * @anchor spec_drawbar
@@ -1354,7 +1709,14 @@ drawbar(Monitor *m)
 /**
  * @brief Draw every monitor's bar.
  *
+ * @details Draws every monitor's bar by iterating mons and calling drawbar();
+ *          see @ref arch_module_dwm.
+ *
  * @note Iterates mons and calls drawbar(), which performs Xft/X11 rendering.
+ * @par Side Effects:
+ *      Through drawbar(): Xft/X11 drawing on each monitor.
+ * @par Threading and Reentrancy:
+ *      Single-threaded; called from flusheventtail() and setup().
  * @see drawbar, flusheventtail
  * @anchor spec_drawbars
  */
@@ -1374,9 +1736,19 @@ drawbars(void)
  * on the root window. Resolves the client and its monitor, switches the selected
  * monitor when needed, and focuses the entered client.
  *
+ * @details Implements focus-follows-mouse: ignores grab/inferior crossings
+ *          except on root, resolves the client and monitor and switches
+ *          selmon and focus; see @ref arch_module_dwm.
+ *
  * @param[in]  e  X EnterNotify event.
  *
  * @note May mutate selmon via unfocus()/focus(); reads root and mons; calls wintoclient() and wintomon().
+ * @par Side Effects:
+ *      May set selmon; unfocus()/focus() with their X border/focus calls;
+ *      reads root and mons.
+ * @par Threading and Reentrancy:
+ *      Event-handler context in the single-threaded loop; no cross-monitor
+ *      dead-code guard is needed.
  * @see focus, motionnotify, wintomon
  * @anchor spec_enternotify
  */
@@ -1407,9 +1779,18 @@ enternotify(XEvent *e)
  * On the last Expose of a batch it marks the monitor's bar as exposed and
  * redraws immediately rather than deferring.
  *
+ * @details On the last Expose of a batch it marks the monitor's bar as
+ *          exposed and redraws it immediately rather than deferring; see
+ *          @ref arch_module_dwm.
+ *
  * @param[in]  e  X Expose event.
  *
  * @note Writes m->bar_exposed; calls drawbar() (Xft/X11).
+ * @par Side Effects:
+ *      Writes m->bar_exposed; calls drawbar() (Xft/X11).
+ * @par Threading and Reentrancy:
+ *      Event-handler context; an immediate bar draw, not the coalesced
+ *      loop-tail path.
  * @see drawbar, drawbars
  * @anchor spec_expose
  */
@@ -1435,10 +1816,23 @@ expose(XEvent *e)
  * and _NET_ACTIVE_WINDOW. The bar is dirtied only when the selection actually
  * changed.
  *
+ * @details Makes c the selection, falling back to the newest visible client
+ *          for NULL/invisible input; clears urgency, reorders the stack,
+ *          reasserts focus, grabs and border, and dirties the bar only when
+ *          the selection changed. Focus is explicit (ARCHITECTURE.md 13a);
+ *          see @ref arch_module_dwm.
+ *
  * @param[in]  c  Desired client, or NULL to clear focus.
  *
  * @post selmon may change; selmon->sel is the resolved client (possibly NULL); bar_draw_pending is set.
  * @note Mutates selmon, selmon->sel, the focus stack, bar_dirty_segments and bar_draw_pending; calls seturgent(), grabbuttons(), XSetWindowBorder(), setfocus() and setfocus(NULL) X11 calls.
+ * @par Side Effects:
+ *      Mutates selmon/sel, the focus stack, urgency and bar mask/pending;
+ *      XSetWindowBorder(), XSetInputFocus() and a _NET_ACTIVE_WINDOW delete
+ *      on NULL.
+ * @par Threading and Reentrancy:
+ *      Focus state machine (ARCHITECTURE.md 13a); single-threaded; always
+ *      reasserts X focus even when c == sel because input focus may be stale.
  * @warning selmon must point to a valid monitor.
  * @see unfocus, setfocus, seturgent, restack
  * @anchor spec_focus
@@ -1479,9 +1873,17 @@ focus(Client *c)
 /**
  * @brief Reassert dwm's focus when a broken client steals it.
  *
+ * @details Reasserts dwm's focus via setfocus(selmon->sel) when a broken
+ *          client steals X input focus away from the selection; see
+ *          @ref arch_module_dwm.
+ *
  * @param[in]  e  X FocusIn event.
  *
  * @note Calls setfocus(); reads selmon.
+ * @par Side Effects:
+ *      Calls setfocus() (XSetInputFocus/XChangeProperty/sendevent).
+ * @par Threading and Reentrancy:
+ *      Event-handler context in the single-threaded loop.
  * @see focus, setfocus
  * @anchor spec_focusin
  */
@@ -1497,9 +1899,18 @@ focusin(XEvent *e)
 /**
  * @brief Select the monitor adjacent to selmon and carry focus along.
  *
+ * @details Selects the monitor adjacent to selmon and carries focus along; a
+ *          no-op on a single monitor or when the target is already selected;
+ *          see @ref arch_module_dwm.
+ *
  * @param[in]  arg  arg->i selects the direction.
  *
  * @note Mutates selmon; calls unfocus() and focus(); no-op for a single monitor or when the target is already selected.
+ * @par Side Effects:
+ *      Mutates selmon; unfocus()/focus() with their X focus/border calls.
+ * @par Threading and Reentrancy:
+ *      Command context (Arg binding) dispatched from keypress/buttonpress in
+ *      the single-threaded loop.
  * @see dirtomon, focus
  * @anchor spec_focusmon
  */
@@ -1520,9 +1931,18 @@ focusmon(const Arg *arg)
 /**
  * @brief Focus the next or previous visible client, wrapping around.
  *
+ * @details Focuses the next or previous visible client with wraparound; a
+ *          no-op without a selection or when a locked fullscreen client
+ *          blocks focus changes; see @ref arch_module_dwm.
+ *
  * @param[in]  arg  arg->i > 0 selects next, otherwise previous.
  *
  * @note Calls focus() and restack(); skips work when nothing is selected or a locked fullscreen client blocks focus changes.
+ * @par Side Effects:
+ *      Calls focus() and restack() (X focus and stacking).
+ * @par Threading and Reentrancy:
+ *      Command context in the single-threaded loop; honors the lockfullscreen
+ *      focus policy.
  * @see focus, nexttiled, pop
  * @anchor spec_focusstack
  */
@@ -1555,12 +1975,20 @@ focusstack(const Arg *arg)
 /**
  * @brief Read an Atom-typed property from a client window.
  *
+ * @details Reads an Atom-typed window property, returning None when it is
+ *          absent or not an Atom. c->win must be valid; see
+ *          @ref arch_module_dwm.
+ *
  * @param[in]  c  Client whose window is queried; c->win must be valid.
  * @param[in]  prop  Property atom.
  *
  * @return The Atom value, or None when the property is absent or not an Atom.
  *
  * @note Calls XGetWindowProperty() and XFree().
+ * @par Side Effects:
+ *      XGetWindowProperty()/XFree(); no state writes.
+ * @par Threading and Reentrancy:
+ *      Pure query called from updatewindowtype() in the single-threaded loop.
  * @see getstate, gettextprop, updatewindowtype
  * @anchor spec_getatomprop
  */
@@ -1583,12 +2011,21 @@ getatomprop(Client *c, Atom prop)
 /**
  * @brief Query the root-relative pointer position.
  *
+ * @details Queries the root-relative pointer position via XQueryPointer(),
+ *          returning True on success. x and y must be valid; see
+ *          @ref arch_module_dwm.
+ *
  * @param[out]  x  Receives the pointer X coordinate on success.
  * @param[out]  y  Receives the pointer Y coordinate on success.
  *
  * @return True on success, False on failure.
  *
  * @note Calls XQueryPointer().
+ * @par Side Effects:
+ *      XQueryPointer() only.
+ * @par Threading and Reentrancy:
+ *      Called from wintomon() and motion/mouse helpers in the single-threaded
+ *      loop.
  * @see wintomon, motionnotify, movemouse
  * @anchor spec_getrootptr
  */
@@ -1605,11 +2042,18 @@ getrootptr(int *x, int *y)
 /**
  * @brief Read a window's WM_STATE property.
  *
+ * @details Reads a window's WM_STATE long, returning -1 on error or absence;
+ *          see @ref arch_module_dwm.
+ *
  * @param[in]  w  Window to query.
  *
  * @return The state value (for example NormalState or IconicState), or -1 on error or absent property.
  *
  * @note Calls XGetWindowProperty() and XFree().
+ * @par Side Effects:
+ *      XGetWindowProperty()/XFree().
+ * @par Threading and Reentrancy:
+ *      Pure query in the single-threaded loop from the scan()/unmap paths.
  * @see setclientstate, scan, unmapnotify
  * @anchor spec_getstate
  */
@@ -1637,6 +2081,11 @@ getstate(Window w)
  * Handles XA_STRING directly and compound-text through XmbTextPropertyToTextList,
  * always NUL-terminating and truncating to the supplied capacity.
  *
+ * @details Fetches a text property into a caller buffer, handling XA_STRING
+ *          and compound text, always NUL-terminating and truncating; returns
+ *          the length or 0 on failure. text must be non-NULL and size > 0;
+ *          see @ref arch_module_dwm.
+ *
  * @param[in]  w  Window to query.
  * @param[in]  atom  Text property atom.
  * @param[out]  text  Destination buffer.
@@ -1647,6 +2096,12 @@ getstate(Window w)
  * @pre text != NULL and size > 0; otherwise the function returns 0 immediately.
  * @post text is NUL-terminated; on failure text[0] is set to NUL.
  * @note Calls XGetTextProperty(), XmbTextPropertyToTextList(), XFree() and XFreeStringList(); uses stpncpy_len().
+ * @par Side Effects:
+ *      XGetTextProperty(), XmbTextPropertyToTextList(), XFree() and
+ *      XFreeStringList(); writes the caller-owned buffer.
+ * @par Threading and Reentrancy:
+ *      Called from updatetitle()/updatestatus() in the single-threaded loop;
+ *      the buffer stays owned by the caller.
  * @warning The returned length excludes the terminator; the buffer remains owned by the caller.
  * @see updatetitle, updatestatus
  * @anchor spec_gettextprop
@@ -1689,10 +2144,20 @@ gettextprop(Window w, Atom atom, char *text, unsigned int size)
  * normal lock-modifier combinations. With focused=0 it grabs AnyButton in
  * synchronous mode so buttonpress() can classify and replay the click.
  *
+ * @details Grabs or replays buttons on a client: focused=1 grabs the
+ *          ClkClientWin bindings across lock modifiers, focused=0 grabs
+ *          AnyButton synchronously so buttonpress() can replay; see
+ *          @ref arch_module_dwm.
+ *
  * @param[in]  c  Client whose window is grabbed.
  * @param[in]  focused  Non-zero for normal bindings, zero for replay grabs.
  *
  * @note Calls updatenumlockmask(), XUngrabButton() and XGrabButton(); reads buttons[], numlockmask and LockMask.
+ * @par Side Effects:
+ *      updatenumlockmask(); XUngrabButton()/XGrabButton(); reads buttons[],
+ *      numlockmask and LockMask.
+ * @par Threading and Reentrancy:
+ *      Single-threaded helper called from focus(), unfocus() and manage().
  * @see buttonpress, manage, unfocus, updatenumlockmask
  * @anchor spec_grabbuttons
  */
@@ -1724,8 +2189,18 @@ grabbuttons(Client *c, int focused)
  * keys, obtains the keycode-to-keysym map and grabs each matching keycode for
  * every lock-modifier variant.
  *
+ * @details Refreshes NumLock, rebuilds the key index, then ungrabs and
+ *          re-grabs all configured keycodes for each lock-modifier variant.
+ *          dpy/root must be initialized; see @ref arch_module_dwm.
+ *
  * @pre dpy and root are initialized.
  * @note Calls updatenumlockmask(), cachekeys(), XUngrabKey(), XDisplayKeycodes(), XGetKeyboardMapping(), XGrabKey() and XFree(); reads keys[].
+ * @par Side Effects:
+ *      updatenumlockmask() and cachekeys(); XUngrabKey(), XDisplayKeycodes(),
+ *      XGetKeyboardMapping(), XGrabKey() and XFree().
+ * @par Threading and Reentrancy:
+ *      Single-threaded setup/mapping handler; mutates global X grabs and the
+ *      keyboard fast path.
  * @see keypress, mappingnotify, updatenumlockmask
  * @anchor spec_grabkeys
  */
@@ -1764,9 +2239,16 @@ grabkeys(void)
 /**
  * @brief Adjust the selected monitor's master-window count.
  *
+ * @details Adjusts selmon->nmaster by a signed delta clamped to at least zero
+ *          and rearranges; see @ref arch_module_dwm.
+ *
  * @param[in]  arg  arg->i is the signed delta.
  *
  * @note Writes selmon->nmaster clamped to at least zero; calls arrange().
+ * @par Side Effects:
+ *      Writes nmaster; arrange() issues X geometry calls.
+ * @par Threading and Reentrancy:
+ *      Command context in the single-threaded loop.
  * @see tile, setmfact
  * @anchor spec_incnmaster
  */
@@ -1781,6 +2263,10 @@ incnmaster(const Arg *arg)
 /**
  * @brief Test whether an Xinerama geometry has not been seen yet.
  *
+ * @details Returns 1 when a candidate Xinerama geometry is not already
+ *          present in unique[]; XINERAMA-only and pure; see
+ *          @ref arch_module_dwm.
+ *
  * @param[in]  unique  Array of already-accepted geometries.
  * @param[in]  n  Number of entries in unique.
  * @param[in]  info  Candidate geometry.
@@ -1788,6 +2274,11 @@ incnmaster(const Arg *arg)
  * @return 1 when the geometry is new, 0 when it duplicates an existing entry.
  *
  * @note Compiled only when XINERAMA is defined; reads no globals.
+ * @par Side Effects:
+ *      None; pure read of the arrays.
+ * @par Threading and Reentrancy:
+ *      Pure helper called from updategeom() under XINERAMA in the
+ *      single-threaded loop.
  * @see updategeom
  * @anchor spec_isuniquegeom
  */
@@ -1811,9 +2302,19 @@ isuniquegeom(XineramaScreenInfo *unique, size_t n, XineramaScreenInfo *info)
  * keysym and modifier before walking the binding table; a full exact match then
  * invokes the binding function.
  *
+ * @details Dispatches a KeyPress to a matching keys[] binding after the
+ *          iskeybound() fast path rejects impossible keysym/modifier pairs;
+ *          see @ref arch_module_dwm.
+ *
  * @param[in]  e  X KeyPress event.
  *
  * @note Calls XKeycodeToKeysym() and iskeybound(); reads keys[] and invokes the bound function.
+ * @par Side Effects:
+ *      XKeycodeToKeysym(); invokes the bound function, which may change state
+ *      or spawn children.
+ * @par Threading and Reentrancy:
+ *      Event-handler context; bound functions may fork children through
+ *      spawn() that never re-enter dwm state.
  * @see iskeybound, grabkeys, cachekeys
  * @anchor spec_keypress
  */
@@ -1842,9 +2343,19 @@ keypress(XEvent *e)
  * the X connection is grabbed, errors are suppressed, and the client is killed
  * with XKillClient().
  *
+ * @details Asks the selected client to close via WM_DELETE_WINDOW; when
+ *          unsupported it grabs the server, suppresses errors and kills the
+ *          client with XKillClient; see @ref arch_module_dwm.
+ *
  * @param[in]  arg  Unused.
  *
  * @note Reads selmon->sel; calls sendevent(), XGrabServer(), XSetErrorHandler(), XSetCloseDownMode(), XKillClient(), XSync() and XUngrabServer().
+ * @par Side Effects:
+ *      sendevent(); XGrabServer(), the scoped error guard,
+ *      XSetCloseDownMode(), XKillClient() and XUngrabServer().
+ * @par Threading and Reentrancy:
+ *      Command context in the single-threaded loop; errors are contained by
+ *      the scoped guard (ARCHITECTURE.md 13a).
  * @see sendevent, unmanage
  * @anchor spec_killclient
  */
@@ -1873,12 +2384,25 @@ killclient(const Arg *arg)
  * client into the monitor lists, appends to _NET_CLIENT_LIST, maps it, swallows
  * it into a matching terminal when possible, and focuses it.
  *
+ * @details Adopts a new window as a managed client: allocates it, inherits
+ *          transient or rule tags, clamps geometry, sets hints and grabs,
+ *          indexes the hash, links lists, maps, optionally swallows and
+ *          focuses. Client lifecycle is explicit (ARCHITECTURE.md 13a); see
+ *          @ref arch_module_dwm.
+ *
  * @param[in]  w  X window id to adopt.
  * @param[in]  wa  Attributes from XGetWindowAttributes() for w.
  *
  * @pre w is not already managed and wa describes a valid window.
  * @post The client is in its monitor's lists and the window hash, mapped, selected and focused; _NET_CLIENT_LIST includes w.
  * @note Allocates memory; mutates winhash, selmon and monitor lists/tags/bar state; almost every X11 setup call; may call swallow().
+ * @par Side Effects:
+ *      Allocates the Client; mutates winhash, lists and selmon; nearly every
+ *      X setup call; appends _NET_CLIENT_LIST; immediate layout; may
+ *      swallow().
+ * @par Threading and Reentrancy:
+ *      Client-lifecycle transition (ARCHITECTURE.md 13a) into CST_LISTED;
+ *      single-threaded creation path using arrangenow(), not coalescing.
  * @warning The client is owned by dwm and must be released through unmanage(); wa must remain valid for the duration of the call.
  * @see unmanage, applyrules, swallow, winclient_put
  * @anchor spec_manage
@@ -1956,9 +2480,17 @@ manage(Window w, XWindowAttributes *wa)
 /**
  * @brief Refresh keyboard mapping and re-grab keys after a layout change.
  *
+ * @details Refreshes the X keyboard mapping and re-grabs keys when a keyboard
+ *          mapping change is reported; see @ref arch_module_dwm.
+ *
  * @param[in]  e  X MappingNotify event.
  *
  * @note Calls XRefreshKeyboardMapping(); calls grabkeys() when a keyboard mapping change is reported.
+ * @par Side Effects:
+ *      XRefreshKeyboardMapping(); grabkeys() rebuilds the key index and X
+ *      grabs.
+ * @par Threading and Reentrancy:
+ *      Event-handler context in the single-threaded loop.
  * @see grabkeys, keypress
  * @anchor spec_mappingnotify
  */
@@ -1978,9 +2510,18 @@ mappingnotify(XEvent *e)
  * Windows with override_redirect set and windows already managed are ignored;
  * everything else is passed to manage().
  *
+ * @details Adopts a newly mapped window unless it has override_redirect set
+ *          or is already managed, delegating to manage(); see
+ *          @ref arch_module_dwm.
+ *
  * @param[in]  e  X MapRequest event.
  *
  * @note Calls XGetWindowAttributes(), wintoclient() and manage().
+ * @par Side Effects:
+ *      XGetWindowAttributes() and manage() with its full creation side
+ *      effects.
+ * @par Threading and Reentrancy:
+ *      Event-handler context in the single-threaded loop.
  * @see manage, scan
  * @anchor spec_maprequest
  */
@@ -2004,9 +2545,18 @@ maprequest(XEvent *e)
  * Counts visible clients, updates the layout symbol with that count, and
  * resizes each tiled client to the full workarea.
  *
+ * @details Monocle layout: resizes every visible tiled client to the full
+ *          workarea and writes the visible count into the layout symbol; see
+ *          @ref arch_module_dwm.
+ *
  * @param[in]  m  Monitor to lay out.
  *
  * @note Writes m->ltsymbol; calls resize() (X11); skips floating and invisible clients.
+ * @par Side Effects:
+ *      Writes m->ltsymbol; resize() issues X geometry calls;
+ *      floating/invisible clients are skipped.
+ * @par Threading and Reentrancy:
+ *      Layout callback invoked from arrangemon() in the single-threaded loop.
  * @see tile, arrangemon
  * @anchor spec_monocle
  */
@@ -2032,9 +2582,17 @@ monocle(Monitor *m)
  * focuses that monitor when it changes. Single-monitor setups return
  * immediately.
  *
+ * @details Cross-monitor focus-follows-pointer from root motion: maps the
+ *          pointer to a monitor and switches focus on change; single-monitor
+ *          setups return immediately; see @ref arch_module_dwm.
+ *
  * @param[in]  e  X MotionNotify event.
  *
  * @note Mutates selmon; calls unfocus(), focus() and recttomon(); reads mons.
+ * @par Side Effects:
+ *      Mutates selmon; unfocus()/focus(); recttomon().
+ * @par Threading and Reentrancy:
+ *      Event-handler context using static pointer tracking, single-threaded.
  * @see enternotify, recttomon
  * @anchor spec_motionnotify
  */
@@ -2063,6 +2621,11 @@ motionnotify(XEvent *e)
  * On failure the state remains DRAG_IDLE, so every later path can call
  * drag_end() unconditionally without releasing someone else's grab.
  *
+ * @details Acquires the pointer grab and enters the drag state machine at
+ *          DRAG_GRABBED; on failure the state stays DRAG_IDLE so every later
+ *          path can clean up safely. Mouse drag is explicit (ARCHITECTURE.md
+ *          13a); see @ref arch_module_dwm.
+ *
  * @param[in] c      Client to drag; must be non-NULL and live.
  * @param[in] shape  Cursor shape to display during the drag.
  * @return 1 on success, 0 when the grab failed or shutdown was requested.
@@ -2070,6 +2633,11 @@ motionnotify(XEvent *e)
  * @pre  drag.phase == DRAG_IDLE.
  * @post On success drag.phase == DRAG_GRABBED and pointergrab == 1.
  * @note Calls XGrabPointer; writes the drag state and pointergrab.
+ * @par Side Effects:
+ *      XGrabPointer(); writes the drag state and pointergrab.
+ * @par Threading and Reentrancy:
+ *      Mouse-drag machine (ARCHITECTURE.md 13a); single-threaded interactive
+ *      command that checks the lifecycle flag.
  * @anchor spec_drag_begin
  */
 static int
@@ -2094,8 +2662,18 @@ drag_begin(Client *c, Cursor shape)
  * Idempotent: calling it with no active drag is a no-op, so all early-return
  * and failure paths share the same cleanup.
  *
+ * @details Leaves the drag state machine and always releases the pointer
+ *          grab; idempotent when idle so every early-return and failure path
+ *          shares cleanup. Mouse drag is explicit (ARCHITECTURE.md 13a); see
+ *          @ref arch_module_dwm.
+ *
  * @post drag.phase == DRAG_IDLE and pointergrab == 0.
  * @note Calls XUngrabPointer; writes the drag state and pointergrab.
+ * @par Side Effects:
+ *      XUngrabPointer(); resets the drag state and pointergrab.
+ * @par Threading and Reentrancy:
+ *      Mouse-drag machine (ARCHITECTURE.md 13a); single-threaded; serves all
+ *      early-return paths.
  * @anchor spec_drag_end
  */
 static void
@@ -2119,9 +2697,22 @@ drag_end(void)
  * Dragging a tiled client past the snap threshold floats it. On release the
  * client is handed off to the monitor under it.
  *
+ * @details Interactively moves the selected client: grabs the pointer,
+ *          throttles motion, snaps to workarea edges, floats tiled clients
+ *          past the threshold and hands the client to the monitor under it on
+ *          release. Mouse drag is explicit (ARCHITECTURE.md 13a); see
+ *          @ref arch_module_dwm.
+ *
  * @param[in]  arg  Unused.
  *
  * @note Calls XGrabPointer(), XMaskEvent(), XUngrabPointer(), getrootptr(), togglefloating(), resize() and sendmon(); sets pointergrab; may mutate selmon and the client's geometry/floating state.
+ * @par Side Effects:
+ *      drag_begin()/drag_end() with XGrabPointer/XUngrabPointer,
+ *      XMaskEvent(); togglefloating(), resize() and sendmon(); may set
+ *      selmon.
+ * @par Threading and Reentrancy:
+ *      Mouse-drag machine (ARCHITECTURE.md 13a)
+ *      DRAG_GRABBED->ACTIVE->RELEASING; single-threaded nested event loop.
  * @warning Returns early when nothing is selected, the client is fullscreen, or the pointer grab fails.
  * @see resizemouse, togglefloating, sendmon, recttomon
  * @anchor spec_movemouse
@@ -2197,11 +2788,18 @@ movemouse(const Arg *arg)
  *
  * Skips floating and invisible clients in the client list.
  *
+ * @details Returns the first non-floating visible client at or after c, or
+ *          NULL. Pure; see @ref arch_module_dwm.
+ *
  * @param[in]  c  Starting point, possibly NULL.
  *
  * @return First non-floating visible client at or after c, or NULL.
  *
  * @note Reads ISVISIBLE().
+ * @par Side Effects:
+ *      None; reads ISVISIBLE().
+ * @par Threading and Reentrancy:
+ *      Pure helper used by layouts and zoom() in the single-threaded loop.
  * @see tile, monocle, zoom
  * @anchor spec_nexttiled
  */
@@ -2215,9 +2813,16 @@ nexttiled(Client *c)
 /**
  * @brief Move a client to the front of its monitor's client list and focus it.
  *
+ * @details Moves c to the head of its monitor's client list, focuses it and
+ *          rearranges; see @ref arch_module_dwm.
+ *
  * @param[in]  c  Client to promote.
  *
  * @note Calls detach(), attach(), focus() and arrange(); mutates list order and selection.
+ * @par Side Effects:
+ *      Reorders the list; focus() and arrange() with X geometry.
+ * @par Threading and Reentrancy:
+ *      Command/zoom helper in the single-threaded loop.
  * @see zoom, focus, attach
  * @anchor spec_pop
  */
@@ -2238,9 +2843,20 @@ pop(Client *c)
  * type changes update client state and mark the relevant bar segments dirty,
  * deferring bar redraws to the event-loop tail.
  *
+ * @details Handles relevant X property changes after a cheap atom filter:
+ *          root WM_NAME updates status while client hints, name and type
+ *          refresh state and dirty the proper bar segment, deferred to the
+ *          loop tail; see @ref arch_module_dwm.
+ *
  * @param[in]  e  X PropertyNotify event.
  *
  * @note Reads selmon and stext; writes client fields plus bar_dirty_segments and bar_draw_pending; may call arrange(); uses updatestatus(), updatetitle(), updatewmhints() and updatewindowtype().
+ * @par Side Effects:
+ *      Writes client fields, bar mask and pending flag; updatestatus(),
+ *      updatetitle(), updatewmhints() and updatewindowtype(); may arrange.
+ * @par Threading and Reentrancy:
+ *      Event-handler context; uses bar-dirty coalescing and the fullscreen
+ *      bar-freeze policy (ARCHITECTURE.md 13a).
  * @see updatestatus, updatetitle, updatewmhints, updatewindowtype
  * @anchor spec_propertynotify
  */
@@ -2305,11 +2921,21 @@ propertynotify(XEvent *e)
  * and a SIGTERM after QUIT is ignored. This keeps the state machine free of
  * contradictory (running=0, restart=1-then-cleared) combinations.
  *
+ * @details Transitions the process lifecycle from LIVE to QUIT or RESTART;
+ *          the first request wins so a later SIGTERM cannot cancel a pending
+ *          restart. Process lifecycle is explicit (ARCHITECTURE.md 13a); see
+ *          @ref arch_module_dwm.
+ *
  * @param[in]  arg  arg->i non-zero requests an exec restart.
  *
  * @pre  Called from the main loop or from a signal handler.
  * @post `lifecycle` is LIFE_QUIT or LIFE_RESTART.
  * @note Writes the single `volatile sig_atomic_t lifecycle` global.
+ * @par Side Effects:
+ *      Writes only the volatile sig_atomic_t lifecycle flag.
+ * @par Threading and Reentrancy:
+ *      Lifecycle machine (ARCHITECTURE.md 13a); callable from the main loop
+ *      or a signal handler; only stores the atomic flag.
  * @see run, cleanup, sighup, sigterm
  * @anchor spec_quit
  */
@@ -2324,6 +2950,9 @@ quit(const Arg *arg)
 /**
  * @brief Return the monitor with the largest overlap with a rectangle.
  *
+ * @details Returns the monitor with the largest INTERSECT overlap with a
+ *          rectangle, or selmon when none overlaps; see @ref arch_module_dwm.
+ *
  * @param[in]  x  Rectangle X coordinate.
  * @param[in]  y  Rectangle Y coordinate.
  * @param[in]  w  Rectangle width.
@@ -2332,6 +2961,10 @@ quit(const Arg *arg)
  * @return Best-overlapping monitor, or selmon when no monitor overlaps.
  *
  * @note Reads mons and selmon; uses the INTERSECT macro.
+ * @par Side Effects:
+ *      None; reads mons and selmon.
+ * @par Threading and Reentrancy:
+ *      Pure read in the single-threaded loop.
  * @see wintomon, motionnotify, movemouse
  * @anchor spec_recttomon
  */
@@ -2352,6 +2985,10 @@ recttomon(int x, int y, int w, int h)
 /**
  * @brief Move or resize a client after clamping to its size hints.
  *
+ * @details Clamps requested geometry with applysizehints() and calls
+ *          resizeclient() only when it actually changed; see
+ *          @ref arch_module_dwm.
+ *
  * @param[in]  c  Client to resize.
  * @param[in]  x  Requested X coordinate.
  * @param[in]  y  Requested Y coordinate.
@@ -2360,6 +2997,10 @@ recttomon(int x, int y, int w, int h)
  * @param[in]  interact  Non-zero for mouse-driven geometry.
  *
  * @note Calls applysizehints() and, only when the geometry changed, resizeclient() (XConfigureWindow/XSendEvent/XSync).
+ * @par Side Effects:
+ *      Through resizeclient(): XConfigureWindow(), XSendEvent() and XSync().
+ * @par Threading and Reentrancy:
+ *      Single-threaded geometry helper used by layouts and mouse drags.
  * @see applysizehints, resizeclient
  * @anchor spec_resize
  */
@@ -2373,6 +3014,10 @@ resize(Client *c, int x, int y, int w, int h, int interact)
 /**
  * @brief Apply geometry unconditionally and notify the client.
  *
+ * @details Applies geometry unconditionally, bypassing size hints, records
+ *          the old values, reconfigures the X window and sends a synthetic
+ *          ConfigureNotify; see @ref arch_module_dwm.
+ *
  * @param[in]  c  Client to configure.
  * @param[in]  x  New X coordinate.
  * @param[in]  y  New Y coordinate.
@@ -2380,6 +3025,12 @@ resize(Client *c, int x, int y, int w, int h, int interact)
  * @param[in]  h  New height.
  *
  * @note Writes c->oldx/oldy/oldw/oldh and c->x/y/w/h; calls XConfigureWindow(), configure() and XSync().
+ * @par Side Effects:
+ *      Writes c->old* and c->x/y/w/h; XConfigureWindow(), configure() and
+ *      XSync().
+ * @par Threading and Reentrancy:
+ *      Single-threaded; callers that must honor hints should use resize()
+ *      instead.
  * @warning Bypasses size hints; use resize() when hints must be honored.
  * @see resize, configure, setfullscreen
  * @anchor spec_resizeclient
@@ -2407,9 +3058,22 @@ resizeclient(Client *c, int x, int y, int w, int h)
  * past the snap threshold floats it. On release the client is handed off to the
  * monitor under it and pending enter events are drained.
  *
+ * @details Interactively resizes the selected client from the bottom-right:
+ *          grabs and warps the pointer, throttles motion, applies size hints,
+ *          floats tiled clients past the threshold, hands off monitors and
+ *          drains enter events. Mouse drag is explicit (ARCHITECTURE.md 13a);
+ *          see @ref arch_module_dwm.
+ *
  * @param[in]  arg  Unused.
  *
  * @note Calls XGrabPointer(), XWarpPointer(), XMaskEvent(), XCheckMaskEvent(), XUngrabPointer(), togglefloating(), resize() and sendmon(); sets pointergrab; may mutate selmon.
+ * @par Side Effects:
+ *      drag_begin()/drag_end(), XWarpPointer(),
+ *      XMaskEvent()/XCheckMaskEvent(); togglefloating(), resize() and
+ *      sendmon(); may set selmon.
+ * @par Threading and Reentrancy:
+ *      Mouse-drag machine (ARCHITECTURE.md 13a); single-threaded nested event
+ *      loop.
  * @warning Returns early when nothing is selected, the client is fullscreen, or the pointer grab fails.
  * @see movemouse, resize, togglefloating
  * @anchor spec_resizemouse
@@ -2482,9 +3146,20 @@ resizemouse(const Arg *arg)
  * clients directly below one another with the bar beneath them. Reordering
  * generates EnterNotify storms, which are drained before returning.
  *
+ * @details Fixes stacking on a monitor: raises the selected
+ *          floating/non-tiled client, chains visible tiled clients below the
+ *          bar, drains the resulting EnterNotify storm and sets
+ *          bar_draw_pending; see @ref arch_module_dwm.
+ *
  * @param[in]  m  Monitor whose stack is fixed.
  *
  * @note Writes bar_draw_pending; calls XRaiseWindow(), XConfigureWindow(), XSync() and XCheckMaskEvent().
+ * @par Side Effects:
+ *      XRaiseWindow(), XConfigureWindow(), XSync() and XCheckMaskEvent();
+ *      writes bar_draw_pending.
+ * @par Threading and Reentrancy:
+ *      Single-threaded layout/stacking step that defers the bar redraw to the
+ *      loop tail.
  * @see drawbar, focus, arrange
  * @anchor spec_restack
  */
@@ -2521,7 +3196,19 @@ restack(Monitor *m)
  * after each dispatch, flusheventtail() performs at most one layout pass and one
  * bar redraw.
  *
+ * @details Main event loop: syncs, dispatches each X event with dispatching
+ *          set and runs flusheventtail() after every handler so layout and
+ *          bar work coalesce into one pass. Event loop/coalescing is explicit
+ *          (ARCHITECTURE.md 13a); see @ref arch_module_dwm.
+ *
  * @note Writes dispatching; reads running; flusheventtail() clears arrange_pending/bar_draw_pending and redraws bars.
+ * @par Side Effects:
+ *      Writes dispatching; handlers mutate full WM state; flusheventtail()
+ *      clears the pending flags and draws bars.
+ * @par Threading and Reentrancy:
+ *      Coalescing machine (ARCHITECTURE.md 13a); single-threaded; exits when
+ *      the signal-updated lifecycle leaves LIVE, with EINTR breaking
+ *      XNextEvent().
  * @see flusheventtail, handler, quit
  * @anchor spec_run
  */
@@ -2548,7 +3235,18 @@ run(void)
  * Queries the root tree and manages normal visible or iconic windows first,
  * then transients, so transient parents are already managed.
  *
+ * @details Adopts pre-existing windows at startup: queries the root tree,
+ *          manages normal viewable or iconic windows first while skipping
+ *          transients and override-redirect windows, then manages transients;
+ *          see @ref arch_module_dwm.
+ *
  * @note Calls XQueryTree(), XGetWindowAttributes(), XGetTransientForHint(), getstate(), manage() and XFree().
+ * @par Side Effects:
+ *      XQueryTree(), XGetWindowAttributes(), getstate(), manage() and
+ *      XFree().
+ * @par Threading and Reentrancy:
+ *      Single-threaded startup from main(); the creation path uses immediate
+ *      layout.
  * @see manage, setup
  * @anchor spec_scan
  */
@@ -2587,12 +3285,23 @@ scan(void)
  * target monitor's current tags, relinks it there, then refocuses and
  * rearranges.
  *
+ * @details Moves c to another monitor: detaches it from old lists, reassigns
+ *          tags and both swallow endpoints to the target, relinks, refocuses
+ *          and rearranges; a no-op when already on m; see
+ *          @ref arch_module_dwm.
+ *
  * @param[in,out]  c  Client being moved.
  * @param[in]  m  Destination monitor.
  *
  * @pre c and m are non-NULL; a no-op when c is already on m.
  * @post c belongs to m's client and focus stacks with m's current tags; focus and layout are refreshed.
  * @note Calls unfocus(), detach(), detachstack(), attach(), attachstack(), focus() and arrange(); X11 work happens through the layout.
+ * @par Side Effects:
+ *      Mutates c->mon, c->tags and swallow endpoints plus lists; unfocus(),
+ *      focus() and arrange() with X geometry.
+ * @par Threading and Reentrancy:
+ *      Single-threaded command/mouse-handoff path; preserves the four-way
+ *      swallow invariant.
  * @see tagmon, movemouse, resizemouse
  * @anchor spec_sendmon
  */
@@ -2620,10 +3329,18 @@ sendmon(Client *c, Monitor *m)
 /**
  * @brief Write a client's ICCCM WM_STATE property.
  *
+ * @details Writes a client's ICCCM WM_STATE property (NormalState,
+ *          IconicState or WithdrawnState); see @ref arch_module_dwm.
+ *
  * @param[in]  c  Client whose window is updated.
  * @param[in]  state  NormalState, IconicState or WithdrawnState.
  *
  * @note Calls XChangeProperty() with the WM_STATE atom.
+ * @par Side Effects:
+ *      XChangeProperty() on c->win.
+ * @par Threading and Reentrancy:
+ *      Single-threaded helper called from manage(), unmanage() and swallow()
+ *      paths.
  * @see getstate, unmanage, swallow
  * @anchor spec_setclientstate
  */
@@ -2639,12 +3356,19 @@ setclientstate(Client *c, long state)
 /**
  * @brief Send a WM protocol ClientMessage when the client supports it.
  *
+ * @details Sends a WM protocol ClientMessage when the client advertises the
+ *          protocol, returning nonzero on success; see @ref arch_module_dwm.
+ *
  * @param[in]  c  Client to notify.
  * @param[in]  proto  Protocol atom to send.
  *
  * @return Non-zero when the protocol is supported and the message was sent, zero otherwise.
  *
  * @note Calls XGetWMProtocols(), XFree() and XSendEvent(); uses CurrentTime.
+ * @par Side Effects:
+ *      XGetWMProtocols(), XFree() and XSendEvent(); no WM state writes.
+ * @par Threading and Reentrancy:
+ *      Single-threaded helper used by killclient() and setfocus().
  * @see killclient, setfocus
  * @anchor spec_sendevent
  */
@@ -2680,9 +3404,17 @@ sendevent(Client *c, Atom proto)
  * becomes _NET_ACTIVE_WINDOW. WM_TAKE_FOCUS is always delivered so input-less
  * clients still learn about the focus change.
  *
+ * @details Asserts X input focus on c unless it requested neverfocus,
+ *          publishes _NET_ACTIVE_WINDOW and always delivers WM_TAKE_FOCUS;
+ *          see @ref arch_module_dwm.
+ *
  * @param[in]  c  Client to focus.
  *
  * @note Calls XSetInputFocus(), XChangeProperty() and sendevent(); reads c->neverfocus, netatom[] and wmatom[].
+ * @par Side Effects:
+ *      XSetInputFocus(), XChangeProperty() and sendevent().
+ * @par Threading and Reentrancy:
+ *      Event-handler/focus helper in the single-threaded loop.
  * @see focus, focusin, sendevent
  * @anchor spec_setfocus
  */
@@ -2705,10 +3437,22 @@ setfocus(Client *c)
  * killall. The parent waits for pipe EOF, which proves the child exited and the
  * signal was delivered; this orders a STOP before a later CONT.
  *
+ * @details Runs killall(1) through a forked child that closes the X
+ *          connection and starts a new session; the parent waits for pipe EOF
+ *          so a STOP is ordered before a later CONT; see
+ *          @ref arch_module_dwm.
+ *
  * @param[in]  name  Process name passed to killall.
  * @param[in]  signal  Signal argument passed to killall, e.g. -STOP.
  *
  * @note Calls pipe(), fork(), close(), setsid(), execlp() and read(); may close the X connection file descriptor in the child; ignores EINTR while waiting.
+ * @par Side Effects:
+ *      pipe(), fork(), setsid(), execlp() and read(); the child closes the X
+ *      fd; no WM state writes; the parent blocks until the child exits.
+ * @par Threading and Reentrancy:
+ *      Fork boundary of the fullscreen-process machine (ARCHITECTURE.md 13a):
+ *      the child never re-enters dwm state, and fork/pipe failure returns
+ *      silently.
  * @warning Fork/pipe failure silently returns; name and signal must be valid strings.
  * @see killatfullscreen_stop, killatfullscreen_start_body
  * @anchor spec_killall
@@ -2752,9 +3496,17 @@ static void (*killall_impl)(const char *, const char *) = killall;
 /**
  * @brief Return whether any managed client is fullscreen.
  *
+ * @details Returns nonzero when any managed client has isfullscreen set; a
+ *          read-only scan; see @ref arch_module_dwm.
+ *
  * @return Non-zero when at least one client has isfullscreen set, zero otherwise.
  *
  * @note Walks every monitor's client list.
+ * @par Side Effects:
+ *      None; walks every monitor's client list.
+ * @par Threading and Reentrancy:
+ *      Pure scan in the single-threaded loop from setfullscreen(), unmanage()
+ *      and main().
  * @see setfullscreen, unmanage, main
  * @anchor spec_isanyfullscreen
  */
@@ -2771,7 +3523,18 @@ isanyfullscreen(void)
 /**
  * @brief Suspend every configured fullscreen-blocked process.
  *
+ * @details Suspends every configured process with SIGSTOP and bumps fs_epoch
+ *          to invalidate a pending restart HUP, entering PROC_STOPPED.
+ *          Fullscreen processes are explicit (ARCHITECTURE.md 13a); see
+ *          @ref arch_module_dwm.
+ *
  * @note Calls killall_impl() with -STOP for each entry in killatfullscreen[].
+ * @par Side Effects:
+ *      killall_impl() with -STOP for each target; sets procstate and
+ *      fs_epoch.
+ * @par Threading and Reentrancy:
+ *      Fullscreen-process machine (ARCHITECTURE.md 13a); single-threaded and
+ *      forks through killall().
  * @see killatfullscreen_resume, killatfullscreen_start_body
  * @anchor spec_killatfullscreen_stop
  */
@@ -2791,7 +3554,18 @@ killatfullscreen_stop(void)
  * then sends SIGHUP to ask them to terminate. Split from the fork wrapper so
  * tests can execute it synchronously.
  *
+ * @details Sends CONT to each target, sleeps a one-second grace period, then
+ *          sends HUP unless a new fullscreen session began (fs_epoch); sets
+ *          PROC_RUNNING. Fullscreen processes are explicit (ARCHITECTURE.md
+ *          13a); see @ref arch_module_dwm.
+ *
  * @note Calls killall_impl() in order and sleep(1).
+ * @par Side Effects:
+ *      killall_impl() with -CONT then -HUP; sleep(1); writes procstate;
+ *      compares start_epoch with fs_epoch.
+ * @par Threading and Reentrancy:
+ *      Fullscreen-process machine (ARCHITECTURE.md 13a); runs in the forked
+ *      restart child, or synchronously under DWM_TEST.
  * @see killatfullscreen_start, killatfullscreen_stop
  * @anchor spec_killatfullscreen_start_body
  */
@@ -2816,7 +3590,18 @@ killatfullscreen_start_body(void)
  * in production it is forked so the grace-period sleep does not stall the event
  * loop.
  *
+ * @details Begins resuming suspended processes: sets PROC_RESTARTING and
+ *          start_epoch, then runs the CONT/HUP body forked in production or
+ *          synchronously under DWM_TEST. Fullscreen processes are explicit
+ *          (ARCHITECTURE.md 13a); see @ref arch_module_dwm.
+ *
  * @note Depends on DWM_TEST behavior; calls fork() in the non-test build.
+ * @par Side Effects:
+ *      Writes procstate and start_epoch; fork() in production; killall_impl()
+ *      via the body.
+ * @par Threading and Reentrancy:
+ *      Fullscreen-process machine (ARCHITECTURE.md 13a); the forked child
+ *      never re-enters dwm state; DWM_TEST changes execution to synchronous.
  * @see killatfullscreen_start_body, setfullscreen
  * @anchor spec_killatfullscreen_start
  */
@@ -2843,7 +3628,18 @@ killatfullscreen_start(void)
  * Used after a crash or restart when no fullscreen client remains. CONT on an
  * already-running process is a no-op, so the repair is unconditional.
  *
+ * @details Repairs stale STOPs by sending CONT to each target and marking
+ *          PROC_RUNNING; sets start_epoch so any pending HUP is obsolete.
+ *          Fullscreen processes are explicit (ARCHITECTURE.md 13a); see
+ *          @ref arch_module_dwm.
+ *
  * @note Calls killall_impl() with -CONT for each configured process.
+ * @par Side Effects:
+ *      killall_impl() with -CONT for each target; writes procstate and
+ *      start_epoch.
+ * @par Threading and Reentrancy:
+ *      Fullscreen-process machine (ARCHITECTURE.md 13a); single-threaded
+ *      startup repair in main() that forks via killall().
  * @see killatfullscreen_stop, main
  * @anchor spec_killatfullscreen_resume
  */
@@ -2866,11 +3662,24 @@ killatfullscreen_resume(void)
  * STOPs (destroyed while fullscreen, multiple fullscreen clients) stay
  * balanced.
  *
+ * @details Enters or leaves EWMH fullscreen: updates _NET_WM_STATE,
+ *          saves/restores floating, border and geometry, resizes/raises,
+ *          suspends/resumes processes on first enter and last exit, forces a
+ *          bar redraw on exit and rearranges. Fullscreen and process machines
+ *          are explicit (ARCHITECTURE.md 13a); see @ref arch_module_dwm.
+ *
  * @param[in,out]  c  Managed client whose fullscreen state changes.
  * @param[in]  fullscreen  Non-zero to enter, zero to leave fullscreen.
  *
  * @post c->isfullscreen reflects the requested state; on exit the saved geometry, border and floating state are restored.
  * @note Calls isanyfullscreen(), XChangeProperty(), resizeclient(), XRaiseWindow(), killatfullscreen_stop/start() and arrange(); writes c->oldstate/oldbw/isfullscreen/isfloating/bw, bar_dirty_segments and bar_draw_pending.
+ * @par Side Effects:
+ *      XChangeProperty(), resizeclient(), XRaiseWindow();
+ *      killatfullscreen_stop()/start(); writes client state, bar DIRTY_ALL
+ *      and arrange().
+ * @par Threading and Reentrancy:
+ *      Fullscreen-process machine (ARCHITECTURE.md 13a); single-threaded,
+ *      idempotent enter/exit and may fork through killatfullscreen_start().
  * @warning Enter and exit are idempotent; c must remain managed while the call runs.
  * @see clientmessage, updatewindowtype, togglefullscr, isanyfullscreen
  * @anchor spec_setfullscreen
@@ -2916,10 +3725,18 @@ setfullscreen(Client *c, int fullscreen)
 /**
  * @brief Copy a Gap struct field by field.
  *
+ * @details Copies a Gap field by field; both pointers must be non-NULL. Pure;
+ *          see @ref arch_module_dwm.
+ *
  * @param[out]  to  Destination gap.
  * @param[in]  from  Source gap.
  *
  * @note Pure copy; reads no globals. Both pointers must be non-NULL.
+ * @par Side Effects:
+ *      None; writes to->isgap, realgap and gappx.
+ * @par Threading and Reentrancy:
+ *      Pure helper used by createmon() and setgaps() in the single-threaded
+ *      loop.
  * @see setgaps, createmon
  * @anchor spec_gap_copy
  */
@@ -2939,9 +3756,18 @@ gap_copy(Gap *to, const Gap *from)
  * The effective gappx is realgap multiplied by isgap so layouts need no extra
  * checks.
  *
+ * @details Toggles, resets or adjusts selmon->gap and recomputes gappx =
+ *          realgap * isgap: GAP_TOGGLE flips the flag, GAP_RESET restores
+ *          defaults and any other value clamps to >= 0 and enables gaps; see
+ *          @ref arch_module_dwm.
+ *
  * @param[in]  arg  arg->i is GAP_TOGGLE, GAP_RESET or a signed delta.
  *
  * @note Writes selmon->gap; calls arrange().
+ * @par Side Effects:
+ *      Writes selmon->gap; arrange() issues X geometry calls.
+ * @par Threading and Reentrancy:
+ *      Command context in the single-threaded loop.
  * @see gap_copy, tile, setmfact
  * @anchor spec_setgaps
  */
@@ -2976,9 +3802,20 @@ setgaps(const Arg *arg)
  * segment is dirtied only when the effective layout changed. Clients are
  * rearranged when one is selected; otherwise only a bar redraw is scheduled.
  *
+ * @details Selects or toggles the selected monitor's layout, refreshes its
+ *          symbol, dirties the tag segment only when the effective layout
+ *          changed and then rearranges or schedules a bar draw; see
+ *          @ref arch_module_dwm.
+ *
  * @param[in]  arg  Optional layout pointer in arg->v; NULL toggles slots.
  *
  * @note Writes selmon->sellt, selmon->lt and selmon->ltsymbol, plus bar_dirty_segments; calls arrange() or sets bar_draw_pending.
+ * @par Side Effects:
+ *      Writes sellt, lt, ltsymbol and the bar mask; arrange() or
+ *      bar_draw_pending.
+ * @par Threading and Reentrancy:
+ *      Command context; bar-dirty coalescing (ARCHITECTURE.md 13a);
+ *      single-threaded.
  * @see arrangemon, setmfact, tile
  * @anchor spec_setlayout
  */
@@ -3008,9 +3845,18 @@ setlayout(const Arg *arg)
  * or more set the fraction absolutely as arg->f - 1.0, matching the historical
  * binding convention.
  *
+ * @details Sets or adjusts the master-area fraction: values below 1.0 are
+ *          relative, others absolute as arg->f - 1.0, and results outside
+ *          [0.05, 0.95] are rejected; see @ref arch_module_dwm.
+ *
  * @param[in]  arg  Fraction delta or absolute value.
  *
  * @note Writes selmon->mfact; calls arrange(); requires an active layout with an arrange hook.
+ * @par Side Effects:
+ *      Writes selmon->mfact; arrange() issues X geometry calls.
+ * @par Threading and Reentrancy:
+ *      Command context in the single-threaded loop; requires an active
+ *      arrange hook.
  * @warning Results outside [0.05, 0.95] are rejected, so some absolute values silently do nothing.
  * @see incnmaster, tile
  * @anchor spec_setmfact
@@ -3038,9 +3884,21 @@ setmfact(const Arg *arg)
  * selects root events, grabs keys/buttons and performs the first draw and
  * focus.
  *
+ * @details One-time initialization: installs child/signal handlers and the
+ *          screen, drawing context and fonts, interns atoms, creates cursors
+ *          and colors, builds key/button caches, creates bars, publishes EWMH
+ *          state, grabs input and performs the first draw/focus; see
+ *          @ref arch_module_dwm.
+ *
  * @pre main() has already opened dpy and xcon.
  * @post Event-handling state is ready; callers proceed to scan() and run().
  * @note Allocates and initializes dpy-derived globals including root, sw, sh, drw, scheme, atoms, cursors, wmcheckwin, lrpad and bh; issues many X11 calls.
+ * @par Side Effects:
+ *      Installs SIGCHLD/SIGHUP/SIGTERM handlers; allocates dpy-derived
+ *      globals; many X calls; DIE() when no font loads.
+ * @par Threading and Reentrancy:
+ *      Single-threaded startup from main(); signal handlers are installed
+ *      here but only set atomic flags when they fire.
  * @warning Calls DIE when no font can be loaded.
  * @see main, run, cleanup, updategeom
  * @anchor spec_setup
@@ -3136,10 +3994,18 @@ setup(void)
 /**
  * @brief Set or clear a client's urgency flag and mirror it in WM_HINTS.
  *
+ * @details Sets or clears c->isurgent and mirrors XUrgencyHint in WM_HINTS;
+ *          it does not itself dirty the bar; see @ref arch_module_dwm.
+ *
  * @param[in,out]  c  Client to update.
  * @param[in]  urg  Non-zero to mark urgent, zero to clear.
  *
  * @note Writes c->isurgent; calls XGetWMHints(), XSetWMHints() and XFree(). Does not itself dirty the bar.
+ * @par Side Effects:
+ *      XGetWMHints(), XSetWMHints() and XFree(); writes c->isurgent.
+ * @par Threading and Reentrancy:
+ *      Single-threaded helper from focus()/clientmessage(); callers dirty the
+ *      bar as needed.
  * @see updatewmhints, clientmessage, focus
  * @anchor spec_seturgent
  */
@@ -3164,9 +4030,19 @@ seturgent(Client *c, int urg)
  * even their borders stay off-screen. Unmapping is avoided to prevent
  * UnmapNotify/withdraw churn on tag switches.
  *
+ * @details Places visible clients at their current coordinates and parks
+ *          invisible ones off-screen, top-down and bottom-up respectively,
+ *          avoiding unmap churn; list membership is unchanged; see
+ *          @ref arch_module_dwm.
+ *
  * @param[in]  c  Start of the monitor's focus stack, possibly NULL.
  *
  * @note Calls XMoveWindow() and resize() (X11); reads ISVISIBLE/monitor layout; does not modify list membership.
+ * @par Side Effects:
+ *      XMoveWindow() and resize() (X geometry); reads ISVISIBLE and the
+ *      monitor layout.
+ * @par Threading and Reentrancy:
+ *      Called from arrangenow() in the single-threaded loop.
  * @see arrange, arrangenow
  * @anchor spec_showhide
  */
@@ -3192,9 +4068,17 @@ showhide(Client *c)
 /**
  * @brief SIGHUP handler requesting a restart.
  *
+ * @details SIGHUP handler that requests an exec restart by calling quit()
+ *          with the restart flag; see @ref arch_module_dwm.
+ *
  * @param[in]  unused  Signal number, ignored.
  *
  * @note Calls quit() with the restart flag; runs in signal-handler context.
+ * @par Side Effects:
+ *      Indirectly writes the volatile sig_atomic_t lifecycle flag via quit().
+ * @par Threading and Reentrancy:
+ *      Signal-handler context; only sets the atomic lifecycle flag and
+ *      performs no X calls or locking.
  * @see sigterm, quit, setup
  * @anchor spec_sighup
  */
@@ -3208,9 +4092,16 @@ sighup(int unused)
 /**
  * @brief SIGTERM handler requesting a clean shutdown.
  *
+ * @details SIGTERM handler that requests a clean shutdown by calling quit()
+ *          without the restart flag; see @ref arch_module_dwm.
+ *
  * @param[in]  unused  Signal number, ignored.
  *
  * @note Calls quit() without requesting a restart; runs in signal-handler context.
+ * @par Side Effects:
+ *      Indirectly writes the volatile sig_atomic_t lifecycle flag via quit().
+ * @par Threading and Reentrancy:
+ *      Signal-handler context; only sets the atomic lifecycle flag.
  * @see sighup, quit
  * @anchor spec_sigterm
  */
@@ -3228,9 +4119,19 @@ sigterm(int unused)
  * starts a new session and closes the X connection so the program outlives
  * dwm.
  *
+ * @details Forks and execs a configured command, retargeting dmenu to selmon;
+ *          the child starts a session and closes the X connection so it
+ *          outlives dwm; see @ref arch_module_dwm.
+ *
  * @param[in]  arg  arg->v is the NULL-terminated command vector.
  *
  * @note May write dmenumon; calls fork(), setsid(), close() and execvp().
+ * @par Side Effects:
+ *      May write dmenumon; fork(), setsid(), close() and execvp(); the child
+ *      DIE()s on failure.
+ * @par Threading and Reentrancy:
+ *      Fork boundary (ARCHITECTURE.md 13a): the forked child never re-enters
+ *      dwm state; called from binding dispatch in the single-threaded loop.
  * @warning The child calls DIE if execvp fails; arg->v must be NULL-terminated.
  * @see main, setup
  * @anchor spec_spawn
@@ -3252,9 +4153,17 @@ spawn(const Arg *arg)
 /**
  * @brief Replace the selected client's tags.
  *
+ * @details Replaces the selected client's tags with a valid TAGMASK subset
+ *          and refocuses/rearranges; a no-op without a selection or valid
+ *          bits; see @ref arch_module_dwm.
+ *
  * @param[in]  arg  arg->ui is the new tag mask.
  *
  * @note Writes c->tags; calls focus() and arrange(); no-op without a selection or when the mask has no valid tags.
+ * @par Side Effects:
+ *      Writes c->tags; focus() and arrange() with X/geometry calls.
+ * @par Threading and Reentrancy:
+ *      Command context in the single-threaded loop.
  * @see toggletag, tagmon, toggleview
  * @anchor spec_tag
  */
@@ -3271,9 +4180,16 @@ tag(const Arg *arg)
 /**
  * @brief Send the selected client to the adjacent monitor.
  *
+ * @details Sends the selected client to the adjacent monitor; a no-op without
+ *          a selection or on a single monitor; see @ref arch_module_dwm.
+ *
  * @param[in]  arg  arg->i selects the direction.
  *
  * @note Calls dirtomon() and sendmon(); no-op for a single monitor or without a selection.
+ * @par Side Effects:
+ *      dirtomon() and sendmon() with their list and layout changes.
+ * @par Threading and Reentrancy:
+ *      Command context in the single-threaded loop.
  * @see sendmon, focusmon
  * @anchor spec_tagmon
  */
@@ -3293,9 +4209,18 @@ tagmon(const Arg *arg)
  * mfact of the workarea when it holds clients; remaining clients fill the slave
  * column. Gaps are carved around and between windows.
  *
+ * @details Default master/stack tiling: snapshots visible tiled clients once
+ *          for linear placement and arranges them in master/slave columns
+ *          with gaps. m->gap must be initialized; see @ref arch_module_dwm.
+ *
  * @param[in]  m  Monitor to lay out.
  *
  * @note Allocates and frees a temporary client array; calls resize() (X11); reads m->nmaster, m->mfact and m->gap.
+ * @par Side Effects:
+ *      ecalloc()/free() of a temporary array; resize() issues X geometry
+ *      calls; reads nmaster, mfact and gap.
+ * @par Threading and Reentrancy:
+ *      Layout callback invoked from arrangemon() in the single-threaded loop.
  * @warning The monitor's gap must be initialized; ecalloc() may terminate on allocation failure.
  * @see monocle, arrangemon, setmfact, incnmaster
  * @anchor spec_tile
@@ -3347,9 +4272,19 @@ tile(Monitor *m)
 /**
  * @brief Show or hide the selected monitor's bar.
  *
+ * @details Shows or hides the selected monitor's bar: flips showbar,
+ *          recomputes bar position, moves the window, dirties all segments
+ *          and rearranges; see @ref arch_module_dwm.
+ *
  * @param[in]  arg  Unused.
  *
  * @note Writes selmon->showbar; calls updatebarpos(), XMoveResizeWindow(); marks all bar segments dirty and arranges.
+ * @par Side Effects:
+ *      Writes showbar; XMoveResizeWindow(); marks the bar DIRTY_ALL;
+ *      arrange().
+ * @par Threading and Reentrancy:
+ *      Command context; bar-dirty coalescing (ARCHITECTURE.md 13a);
+ *      single-threaded.
  * @see updatebarpos, drawbar
  * @anchor spec_togglebar
  */
@@ -3370,9 +4305,18 @@ togglebar(const Arg *arg)
  * Fixed-size clients always remain floating. Switching to floating preserves
  * the current geometry.
  *
+ * @details Toggles the selected client between floating and tiled, with
+ *          fixed-size clients always floating and current geometry preserved
+ *          when switching to floating; a no-op for fullscreen or no
+ *          selection; see @ref arch_module_dwm.
+ *
  * @param[in]  arg  Unused.
  *
  * @note Writes c->isfloating; calls resize() and arrange(); no-op without a selection or for fullscreen clients.
+ * @par Side Effects:
+ *      Writes c->isfloating; resize() and arrange() with X geometry.
+ * @par Threading and Reentrancy:
+ *      Command/mouse-drag helper in the single-threaded loop.
  * @see movemouse, resizemouse, tile
  * @anchor spec_togglefloating
  */
@@ -3394,9 +4338,19 @@ togglefloating(const Arg *arg)
 /**
  * @brief Toggle the selected client's EWMH fullscreen state.
  *
+ * @details Toggles the selected client's EWMH fullscreen state through
+ *          setfullscreen(); a no-op without a selection; see
+ *          @ref arch_module_dwm.
+ *
  * @param[in]  arg  Unused.
  *
  * @note Calls setfullscreen(); no-op without a selected client.
+ * @par Side Effects:
+ *      Delegates to setfullscreen() with its property, process and layout
+ *      effects.
+ * @par Threading and Reentrancy:
+ *      Command context; fullscreen-process machine (ARCHITECTURE.md 13a) via
+ *      setfullscreen().
  * @see setfullscreen, clientmessage
  * @anchor spec_togglefullscr
  */
@@ -3410,9 +4364,16 @@ togglefullscr(const Arg *arg)
 /**
  * @brief XOR tags on the selected client, refusing an empty result.
  *
+ * @details XORs a tag mask onto the selected client, refusing an empty
+ *          result, then refocuses and rearranges; see @ref arch_module_dwm.
+ *
  * @param[in]  arg  arg->ui is the tag mask to toggle.
  *
  * @note Writes c->tags; calls focus() and arrange(); no-op when the result would tag the client nowhere.
+ * @par Side Effects:
+ *      Writes c->tags; focus() and arrange().
+ * @par Threading and Reentrancy:
+ *      Command context in the single-threaded loop.
  * @see tag, toggleview
  * @anchor spec_toggletag
  */
@@ -3434,9 +4395,18 @@ toggletag(const Arg *arg)
 /**
  * @brief XOR tags in the selected monitor's current view.
  *
+ * @details XORs a tag mask into the selected monitor's current view, dirties
+ *          the tag segment and refocuses/rearranges, refusing an empty view;
+ *          see @ref arch_module_dwm.
+ *
  * @param[in]  arg  arg->ui is the tag mask to toggle.
  *
  * @note Writes selmon->tagset and bar_dirty_segments; calls focus() and arrange(); no-op when the result would be an empty view.
+ * @par Side Effects:
+ *      Writes tagset and the bar mask; focus() and arrange().
+ * @par Threading and Reentrancy:
+ *      Command context; bar-dirty coalescing (ARCHITECTURE.md 13a);
+ *      single-threaded.
  * @see view, tag
  * @anchor spec_toggleview
  */
@@ -3456,10 +4426,20 @@ toggleview(const Arg *arg)
 /**
  * @brief Deselect a client visually and optionally clear X input focus.
  *
+ * @details Visually deselects c by grabbing its buttons in replay mode and
+ *          resetting its border, optionally returning X focus to root and
+ *          deleting _NET_ACTIVE_WINDOW; sel is unchanged; see
+ *          @ref arch_module_dwm.
+ *
  * @param[in]  c  Client to unfocus, possibly NULL.
  * @param[in]  setfocus  Non-zero to return input focus to the root window.
  *
  * @note Calls grabbuttons() and XSetWindowBorder(); with setfocus also calls XSetInputFocus() and deletes _NET_ACTIVE_WINDOW. Does not modify selmon->sel.
+ * @par Side Effects:
+ *      grabbuttons(); XSetWindowBorder(); optionally XSetInputFocus() and a
+ *      property delete.
+ * @par Threading and Reentrancy:
+ *      Called from focus() and monitor switches in the single-threaded loop.
  * @see focus, grabbuttons
  * @anchor spec_unfocus
  */
@@ -3485,12 +4465,26 @@ unfocus(Client *c, int setfocus)
  * rebuilds _NET_CLIENT_LIST, and resumes fullscreen-blocked processes when the
  * last fullscreen client disappeared.
  *
+ * @details Stops managing c: unwinds a swallow first, otherwise detaches from
+ *          lists and hash, restores the border and withdraws unless X
+ *          destroyed it, frees it, reflows, rebuilds the client list and
+ *          resumes processes when the last fullscreen window leaves. Client
+ *          lifecycle is explicit (ARCHITECTURE.md 13a); see
+ *          @ref arch_module_dwm.
+ *
  * @param[in]  c  Managed client to release.
  * @param[in]  destroyed  Non-zero when X already destroyed the window.
  *
  * @pre c is managed by dwm.
  * @post c is freed, lists and hash are updated, the monitor is rearranged and focused.
  * @note Frees c or its parked placeholder; mutates winhash and monitor lists; calls detach/detachstack/arrangenow/focus/updateclientlist and X11 border/withdraw calls.
+ * @par Side Effects:
+ *      Frees the client or placeholder; winhash/list changes; error-guarded X
+ *      withdraw; arrangenow(), focus(), updateclientlist() and
+ *      killatfullscreen_start().
+ * @par Threading and Reentrancy:
+ *      Client-lifecycle transition (ARCHITECTURE.md 13a); single-threaded
+ *      destruction path with immediate layout and a scoped error guard.
  * @warning Do not use c after this returns; swallow-related paths return early after freeing only the placeholder.
  * @see manage, destroynotify, unmapnotify, unswallow
  * @anchor spec_unmanage
@@ -3550,9 +4544,18 @@ unmanage(Client *c, int destroyed)
  * only WM_STATE is updated. An unsynthesized event means the window vanished and
  * the client is unmanaged.
  *
+ * @details Handles UnmapNotify: a synthetic event only sets WithdrawnState
+ *          and CST_WITHDRAWN, while a real event unmanages the client; see
+ *          @ref arch_module_dwm.
+ *
  * @param[in]  e  X UnmapNotify event.
  *
  * @note Calls wintoclient(), setclientstate() or unmanage().
+ * @par Side Effects:
+ *      setclientstate() or unmanage() with its full teardown.
+ * @par Threading and Reentrancy:
+ *      Event-handler context; the destruction path uses immediate layout via
+ *      unmanage().
  * @see manage, unmanage, destroynotify
  * @anchor spec_unmapnotify
  */
@@ -3575,7 +4578,15 @@ unmapnotify(XEvent *e)
 /**
  * @brief Create a bar window for every monitor that lacks one.
  *
+ * @details Creates an override-redirect bar window for every monitor that
+ *          lacks one; safe to call repeatedly; see @ref arch_module_dwm.
+ *
  * @note Allocates m->barwin and calls XCreateWindow(), XDefineCursor(), XMapRaised() and XSetClassHint(); reads cursor[], bh and screen. Safe to call repeatedly.
+ * @par Side Effects:
+ *      Allocates m->barwin; XCreateWindow(), XDefineCursor(), XMapRaised()
+ *      and XSetClassHint().
+ * @par Threading and Reentrancy:
+ *      Single-threaded setup/resize helper.
  * @see updatebarpos, drawbar, setup
  * @anchor spec_updatebars
  */
@@ -3608,9 +4619,17 @@ updatebars(void)
  * from the workarea and places the bar at the top or bottom according to
  * topbar; a hidden bar is parked at -bh, off-screen.
  *
+ * @details Recomputes a monitor's workarea (wy/wh) and bar position (by):
+ *          subtracts bh for a visible bar at top or bottom per topbar, or
+ *          parks it at -bh; see @ref arch_module_dwm.
+ *
  * @param[in,out]  m  Monitor whose wy/wh/by are recomputed.
  *
  * @note Writes m->wy, m->wh and m->by; reads m->my/m->mh/m->showbar/m->topbar and bh.
+ * @par Side Effects:
+ *      Writes m->wy, m->wh and m->by only.
+ * @par Threading and Reentrancy:
+ *      Pure geometry helper in the single-threaded loop.
  * @see togglebar, updategeom, createmon
  * @anchor spec_updatebarpos
  */
@@ -3630,7 +4649,14 @@ updatebarpos(Monitor *m)
 /**
  * @brief Rebuild the EWMH _NET_CLIENT_LIST root property.
  *
+ * @details Rebuilds the EWMH _NET_CLIENT_LIST root property from every
+ *          monitor's client list; see @ref arch_module_dwm.
+ *
  * @note Calls XDeleteProperty() and XChangeProperty(); walks every monitor's client list.
+ * @par Side Effects:
+ *      XDeleteProperty() and XChangeProperty() on root.
+ * @par Threading and Reentrancy:
+ *      Single-threaded helper called after manage() and unmanage().
  * @see manage, unmanage
  * @anchor spec_updateclientlist
  */
@@ -3656,9 +4682,21 @@ updateclientlist()
  * no Xinerama it maintains a single full-screen monitor. The return value tells
  * the caller whether geometry changed or clients moved.
  *
+ * @details Synchronizes mons with X: Xinerama deduplicates geometries and
+ *          adds or removes monitors, migrating clients off removed ones, or
+ *          maintains one full-screen monitor; returns whether geometry
+ *          changed. Geometry reprobe is explicit (ARCHITECTURE.md 13a); see
+ *          @ref arch_module_dwm.
+ *
  * @return Non-zero when monitor geometry changed or clients were migrated, zero otherwise.
  *
  * @note Allocates monitors and a temporary unique-geometry array; calls XineramaIsActive/XineramaQueryScreens or uses sw/sh; may reassign selmon; calls createmon(), cleanupmon(), updatebarpos() and XFree().
+ * @par Side Effects:
+ *      Allocates/frees monitors and populates lastgeom; may reassign selmon;
+ *      createmon(), cleanupmon(), updatebarpos() and XFree().
+ * @par Threading and Reentrancy:
+ *      Geometry-reprobe machine (ARCHITECTURE.md 13a); single-threaded with
+ *      an XINERAMA compile-time divergence.
  * @warning Removed monitors' clients are migrated to the mons head; callers must refresh bars and the drawing context.
  * @see configurenotify, setup, createmon, cleanupmon
  * @anchor spec_updategeom
@@ -3760,7 +4798,16 @@ updategeom(void)
  * the corresponding modifier mask so lock variants of grabs can be
  * generated.
  *
+ * @details Scans the X modifier map for the keycode bound to NumLock and
+ *          records its mask so lock-variant grabs can be generated; see
+ *          @ref arch_module_dwm.
+ *
  * @note Writes numlockmask; calls XGetModifierMapping(), XKeysymToKeycode() and XFreeModifiermap().
+ * @par Side Effects:
+ *      Writes numlockmask; XGetModifierMapping(), XKeysymToKeycode() and
+ *      XFreeModifiermap().
+ * @par Threading and Reentrancy:
+ *      Single-threaded helper called by grabbuttons() and grabkeys().
  * @see grabbuttons, grabkeys
  * @anchor spec_updatenumlockmask
  */
@@ -3787,9 +4834,18 @@ updatenumlockmask(void)
  * as zero. An equal non-zero min and max size sets isfixed. The cache is marked
  * valid until the property changes.
  *
+ * @details Caches ICCCM WM_NORMAL_HINTS (base/min/max, increment and aspect)
+ *          into the client and marks them valid, deriving isfixed from equal
+ *          nonzero min/max; see @ref arch_module_dwm.
+ *
  * @param[in,out]  c  Client whose hint fields are refreshed.
  *
  * @note Calls XGetWMNormalHints(); writes c->basew/baseh, minw/minh, maxw/maxh, incw/inch, mina/maxa, isfixed and hintsvalid.
+ * @par Side Effects:
+ *      XGetWMNormalHints(); writes the client's hint fields, hintsvalid and
+ *      isfixed.
+ * @par Threading and Reentrancy:
+ *      Single-threaded helper called from manage() and applysizehints().
  * @see applysizehints, propertynotify
  * @anchor spec_updatesizehints
  */
@@ -3845,7 +4901,19 @@ updatesizehints(Client *c)
  * text is byte-for-byte unchanged. A changed status dirties the status and title
  * segments because the title boundary may shift.
  *
+ * @details Refreshes stext from the root WM_NAME, falling back to the version
+ *          string, skips a redraw for byte-identical text and otherwise
+ *          dirties the status and title segments because the title boundary
+ *          may shift. Fullscreen freeze applies (ARCHITECTURE.md 13a); see
+ *          @ref arch_module_dwm.
+ *
  * @note Writes stext, stext_len, selmon->bar_dirty_segments and bar_draw_pending; calls gettextprop() (X11).
+ * @par Side Effects:
+ *      gettextprop() (X11); writes stext, stext_len, the bar mask and pending
+ *      flag; it does not draw itself.
+ * @par Threading and Reentrancy:
+ *      Bar-dirty coalescing and fullscreen freeze (ARCHITECTURE.md 13a);
+ *      single-threaded propertynotify/setup path.
  * @see drawbar, propertynotify, updatetitle
  * @anchor spec_updatestatus
  */
@@ -3880,9 +4948,18 @@ updatestatus(void)
  * Prefers the UTF-8 _NET_WM_NAME property, falling back to WM_NAME. An empty
  * result is replaced with the "broken" marker.
  *
+ * @details Refreshes c->name from _NET_WM_NAME or, failing that, WM_NAME,
+ *          substituting the 'broken' marker for an empty result; see
+ *          @ref arch_module_dwm.
+ *
  * @param[in,out]  c  Client whose name buffer is refreshed.
  *
  * @note Writes c->name; calls gettextprop() (X11) and stpcpy_len().
+ * @par Side Effects:
+ *      gettextprop() (X11); writes c->name.
+ * @par Threading and Reentrancy:
+ *      Single-threaded helper called from manage(), swallow() and
+ *      propertynotify().
  * @see gettextprop, propertynotify, manage
  * @anchor spec_updatetitle
  */
@@ -3901,9 +4978,18 @@ updatetitle(Client *c)
  * A pre-map fullscreen state request enters fullscreen; a dialog window type
  * makes the client floating.
  *
+ * @details Applies EWMH state and type hints: a pre-map fullscreen request
+ *          enters fullscreen and a dialog window type makes the client
+ *          floating; see @ref arch_module_dwm.
+ *
  * @param[in,out]  c  Client whose EWMH properties are applied.
  *
  * @note Calls getatomprop() and setfullscreen(); writes c->isfloating.
+ * @par Side Effects:
+ *      getatomprop() and setfullscreen(); writes c->isfloating.
+ * @par Threading and Reentrancy:
+ *      Single-threaded manage()/propertynotify() path; may drive the
+ *      fullscreen-process machine through setfullscreen().
  * @see getatomprop, setfullscreen, manage
  * @anchor spec_updatewindowtype
  */
@@ -3926,9 +5012,18 @@ updatewindowtype(Client *c)
  * the XUrgencyHint into c->isurgent. An InputHint with input unset makes the
  * client neverfocus.
  *
+ * @details Tracks WM_HINTS urgency, clearing the hint at the source for the
+ *          selected client, and mirrors the neverfocus input mode; see
+ *          @ref arch_module_dwm.
+ *
  * @param[in,out]  c  Client whose WM_HINTS are read.
  *
  * @note Calls XGetWMHints(), XSetWMHints() and XFree(); reads selmon; writes c->isurgent and c->neverfocus.
+ * @par Side Effects:
+ *      XGetWMHints(), XSetWMHints() and XFree(); writes c->isurgent and
+ *      c->neverfocus.
+ * @par Threading and Reentrancy:
+ *      Single-threaded manage()/propertynotify() path.
  * @see seturgent, manage, propertynotify
  * @anchor spec_updatewmhints
  */
@@ -3959,9 +5054,18 @@ updatewmhints(Client *c)
  * reverting to the previously viewed tags. Requests for the already-current view
  * are ignored.
  *
+ * @details Views arg->ui tags, or falls back to the alternate tagset on an
+ *          empty mask, dirties the tag segment and refocuses/rearranges;
+ *          already-current views are ignored; see @ref arch_module_dwm.
+ *
  * @param[in]  arg  arg->ui is the desired tag mask.
  *
  * @note Writes selmon->seltags/tagset and bar_dirty_segments; calls focus() and arrange().
+ * @par Side Effects:
+ *      Writes seltags, tagset and the bar mask; focus() and arrange().
+ * @par Threading and Reentrancy:
+ *      Command context; bar-dirty coalescing (ARCHITECTURE.md 13a);
+ *      single-threaded.
  * @see toggleview, tag, focus
  * @anchor spec_view
  */
@@ -3985,11 +5089,21 @@ view(const Arg *arg)
  * _NET_WM_PID property. Zero is returned when the owner cannot be
  * determined.
  *
+ * @details Determines a window's owning PID through X-Res on Linux or
+ *          _NET_WM_PID on OpenBSD, returning 0 when unavailable; see
+ *          @ref arch_module_dwm.
+ *
  * @param[in]  w  Client window id.
  *
  * @return Owning process id, or 0 when unavailable.
  *
  * @note Linux uses xcb_res_query_client_ids() and frees the reply/error; OpenBSD uses XGetWindowProperty() and XFree().
+ * @par Side Effects:
+ *      Linux: xcb_res_query_client_ids()/reply and free; OpenBSD:
+ *      XGetWindowProperty()/XFree. No WM state writes.
+ * @par Threading and Reentrancy:
+ *      Single-threaded query from manage(); OS compile-time divergence
+ *      (__linux__/__OpenBSD__).
  * @see getparentprocess, manage, termforwin
  * @anchor spec_winpid
  */
@@ -4055,11 +5169,20 @@ winpid(Window w)
  * containing spaces or parentheses are handled. On OpenBSD it uses kvm. Returns
  * zero for invalid PIDs or unreadable data.
  *
+ * @details Returns a process's parent PID by parsing /proc/&lt;pid&gt;/stat after
+ *          the last ')' on Linux or via kvm on OpenBSD, or 0 for an invalid
+ *          PID or unreadable data; see @ref arch_module_dwm.
+ *
  * @param[in]  p  Process id to inspect.
  *
  * @return Parent process id, or 0 when it cannot be determined or p <= 0.
  *
  * @note Opens/reads /proc or kvm structures; performs no X11 calls.
+ * @par Side Effects:
+ *      Opens/reads /proc or kvm structures; performs no X calls.
+ * @par Threading and Reentrancy:
+ *      Single-threaded helper used by isdescprocess()/termforwin(); OS
+ *      compile-time divergence.
  * @see isdescprocess, termforwin, winpid
  * @anchor spec_getparentprocess
  */
@@ -4127,12 +5250,20 @@ getparentprocess(pid_t p)
 /**
  * @brief Test whether one process is an ancestor of another.
  *
+ * @details Returns nonzero when p is an ancestor of c by walking
+ *          getparentprocess(), rejecting non-positive PIDs; see
+ *          @ref arch_module_dwm.
+ *
  * @param[in]  p  Candidate ancestor PID.
  * @param[in]  c  Candidate descendant PID; the walk uses a local copy.
  *
  * @return Non-zero when p is an ancestor of c, zero otherwise or when the relationship cannot be determined.
  *
  * @note Repeatedly calls getparentprocess(); rejects non-positive PIDs.
+ * @par Side Effects:
+ *      Calls getparentprocess() (which reads /proc or kvm).
+ * @par Threading and Reentrancy:
+ *      Single-threaded query from termforwin().
  * @see getparentprocess, termforwin
  * @anchor spec_isdescprocess
  */
@@ -4155,11 +5286,19 @@ isdescprocess(pid_t p, pid_t c)
  * every monitor for a terminal whose process is an ancestor of w's process and
  * which is not already hosting a swallowed window.
  *
+ * @details Finds a non-swallowing terminal whose process is an ancestor of
+ *          the new client's process; windows without a PID and terminal
+ *          windows themselves never qualify; see @ref arch_module_dwm.
+ *
  * @param[in]  w  Newly managed client to match.
  *
  * @return Candidate terminal client, or NULL when none qualifies.
  *
  * @note Reads mons and client lists; calls isdescprocess().
+ * @par Side Effects:
+ *      Reads mons and client lists; calls isdescprocess(). No X calls.
+ * @par Threading and Reentrancy:
+ *      Single-threaded query from manage()'s swallow path.
  * @see swallow, isdescprocess, winpid
  * @anchor spec_termforwin
  */
@@ -4185,11 +5324,18 @@ termforwin(const Client *w)
 /**
  * @brief Find the client holding a swallowed placeholder for a window.
  *
+ * @details Finds the holder client whose swallowed placeholder has window id
+ *          w, or NULL; see @ref arch_module_dwm.
+ *
  * @param[in]  w  Placeholder window id.
  *
  * @return Holder client whose c->swallowing->win == w, or NULL.
  *
  * @note Walks every monitor's client list; reads no X properties.
+ * @par Side Effects:
+ *      Walks every monitor's client list; no X calls.
+ * @par Threading and Reentrancy:
+ *      Single-threaded lookup used by destroynotify() and unmanage().
  * @see swallow, unswallow, destroynotify
  * @anchor spec_swallowingclient
  */
@@ -4214,11 +5360,19 @@ swallowingclient(Window w)
  *
  * Uses a multiplicative Fibonacci-style hash to spread structured XID bit patterns evenly.
  *
+ * @details Fibonacci-style multiplicative hash of a window id folded into
+ *          [0,WINHASH_SIZE), relying on a power-of-two table size. Pure; see
+ *          @ref arch_module_dwm.
+ *
  * @param[in]  w  Window id to hash.
  *
  * @return Home slot index in [0, WINHASH_SIZE).
  *
  * @note Pure computation; relies on WINHASH_SIZE being a power of two.
+ * @par Side Effects:
+ *      None.
+ * @par Threading and Reentrancy:
+ *      Pure helper used by the window hash in the single-threaded loop.
  * @see winclient_put, winclient_remove, wintoclient
  * @anchor spec_winhash_home
  */
@@ -4235,9 +5389,19 @@ winhash_home(Window w)
  * winhash_overflowed is set permanently, because the suppressed client lives
  * only in the authoritative monitor lists.
  *
+ * @details Indexes c in the window hash with linear probing; on a full table
+ *          it suppresses the insert and permanently sets winhash_overflowed
+ *          so lookups fall back to the authoritative lists; see
+ *          @ref arch_module_dwm.
+ *
  * @param[in]  c  Client to index under its current c->win.
  *
  * @note Writes winhash[], winhash_count and winhash_overflowed.
+ * @par Side Effects:
+ *      Writes winhash[], winhash_count and winhash_overflowed only.
+ * @par Threading and Reentrancy:
+ *      Single-threaded manage()/swallow() path; overflow degrades gracefully
+ *      to list walks.
  * @warning Suppressed clients are list-only; lookups must keep the overflow fallback enabled.
  * @see winclient_remove, wintoclient
  * @anchor spec_winclient_put
@@ -4268,9 +5432,18 @@ winclient_put(Client *c)
  * Clears the probed slot, then rehashes the following collision cluster until
  * the next empty slot so probe chains stay valid.
  *
+ * @details Removes c from the window hash and rehashes the following
+ *          collision cluster so probe chains stay valid; absent or suppressed
+ *          entries are ignored; see @ref arch_module_dwm.
+ *
  * @param[in]  c  Client to remove, keyed by its current c->win.
  *
  * @note Writes winhash[] and winhash_count; calls winclient_put() while rehashing.
+ * @par Side Effects:
+ *      Writes winhash[] and winhash_count; calls winclient_put() while
+ *      rehashing.
+ * @par Threading and Reentrancy:
+ *      Single-threaded unmanage()/unswallow() path.
  * @warning Absent or previously suppressed entries are silently ignored.
  * @see winclient_put, wintoclient
  * @anchor spec_winclient_remove
@@ -4305,11 +5478,20 @@ winclient_remove(Client *c)
  * an insert was ever suppressed; then the monitor client lists are walked as the
  * fallback.
  *
+ * @details Maps a window id to its Client through the hash: an empty-slot
+ *          miss is authoritative unless an insert was ever suppressed, in
+ *          which case the monitor lists are walked; see @ref arch_module_dwm.
+ *
  * @param[in]  w  Window id to resolve.
  *
  * @return Matching client, or NULL when the window is not managed.
  *
  * @note Reads winhash[], winhash_overflowed, mons and client lists.
+ * @par Side Effects:
+ *      Reads winhash[], winhash_overflowed, mons and client lists.
+ * @par Threading and Reentrancy:
+ *      Pure-ish lookup used by every event handler in the single-threaded
+ *      loop.
  * @see wintomon, winclient_put, winclient_remove
  * @anchor spec_wintoclient
  */
@@ -4345,11 +5527,20 @@ wintoclient(Window w)
  * windows map to their owner monitor; client windows map to c->mon; anything
  * else defaults to selmon.
  *
+ * @details Resolves a window to its monitor: root follows the pointer, bar
+ *          windows map to their owner, clients to c->mon and anything else to
+ *          selmon. Never NULL while selmon is valid; see
+ *          @ref arch_module_dwm.
+ *
  * @param[in]  w  Window id to resolve.
  *
  * @return Owning or best-matching monitor; never NULL while selmon is valid.
  *
  * @note Calls getrootptr() (XQueryPointer), wintoclient() and recttomon(); reads mons, root and selmon.
+ * @par Side Effects:
+ *      getrootptr() (XQueryPointer), wintoclient() and recttomon().
+ * @par Threading and Reentrancy:
+ *      Single-threaded lookup used by event handlers.
  * @see wintoclient, recttomon
  * @anchor spec_wintomon
  */
@@ -4379,8 +5570,19 @@ static int error_guard_depth;
  * Saves the previous handler so nested guards restore correctly; XSync before
  * the swap ensures earlier errors are delivered to the old handler.
  *
+ * @details Enters a scoped X-error-ignore window: on the first nesting level
+ *          an XSync flushes earlier errors to the old handler before it is
+ *          saved; nested calls only bump the depth. Error guards are explicit
+ *          (ARCHITECTURE.md 13a); see @ref arch_module_dwm.
+ *
  * @post error_guard_depth is incremented and xerrordummy is installed.
  * @note Calls XSync and XSetErrorHandler.
+ * @par Side Effects:
+ *      XSync() and XSetErrorHandler(); writes saved_error_handler and
+ *      error_guard_depth.
+ * @par Threading and Reentrancy:
+ *      Scoped error-guard machine (ARCHITECTURE.md 13a); single-threaded and
+ *      must be paired with error_guard_end().
  * @anchor spec_error_guard_begin
  */
 static void
@@ -4395,9 +5597,19 @@ error_guard_begin(void)
 /**
  * @brief Leave the innermost scoped error-ignore window.
  *
+ * @details Leaves the innermost error-ignore window, restoring the saved
+ *          handler at depth zero after an XSync. error_guard_depth must be
+ *          positive. Error guards are explicit (ARCHITECTURE.md 13a); see
+ *          @ref arch_module_dwm.
+ *
  * @pre error_guard_depth > 0.
  * @post The handler saved by error_guard_begin() is restored.
  * @note Calls XSync and XSetErrorHandler.
+ * @par Side Effects:
+ *      XSync() and XSetErrorHandler(); decrements error_guard_depth.
+ * @par Threading and Reentrancy:
+ *      Scoped error-guard machine (ARCHITECTURE.md 13a); single-threaded and
+ *      pairs with error_guard_begin().
  * @anchor spec_error_guard_end
  */
 static void
@@ -4416,12 +5628,22 @@ error_guard_end(void)
  * (BadWindow, certain BadMatch/BadDrawable cases, and duplicate grabs). Other
  * errors are printed and delegated to the previously installed handler.
  *
+ * @details Non-fatal X error handler: ignores benign races such as BadWindow
+ *          and duplicate grabs, prints and delegates other errors through
+ *          xerrorxlib, which may exit; see @ref arch_module_dwm.
+ *
  * @param[in]  dpy  Display connection (unused).
  * @param[in]  ee  X error event.
  *
  * @return 0 for ignored errors, otherwise the delegate handler's result, which may exit the process.
  *
  * @note Reads xerrorxlib; delegates through it, possibly calling exit().
+ * @par Side Effects:
+ *      Writes stderr for fatal errors and delegates through xerrorxlib, which
+ *      may terminate the process.
+ * @par Threading and Reentrancy:
+ *      X error-handler context invoked synchronously by Xlib on the single X
+ *      connection; it does not mutate WM state.
  * @see xerrordummy, xerrorstart
  * @anchor spec_xerror
  */
@@ -4446,11 +5668,19 @@ xerror(Display *dpy, XErrorEvent *ee)
 /**
  * @brief Ignore-all X error handler for deliberate race sections.
  *
+ * @details Ignore-all X error handler for deliberate race sections; always
+ *          returns 0; see @ref arch_module_dwm.
+ *
  * @param[in]  dpy  Display connection (unused).
  * @param[in]  ee  X error event (unused).
  *
  * @return Always 0.
  *
+ * @par Side Effects:
+ *      None.
+ * @par Threading and Reentrancy:
+ *      Installed only inside error_guard scopes (ARCHITECTURE.md 13a);
+ *      single-threaded.
  * @see xerror, killclient, unmanage
  * @anchor spec_xerrordummy
  */
@@ -4463,12 +5693,21 @@ xerrordummy(Display *dpy, XErrorEvent *ee)
 /**
  * @brief Startup X error handler that aborts on a conflicting window manager.
  *
+ * @details Startup X error handler that DIE()s when a conflicting window
+ *          manager is detected; its return value is unreachable; see
+ *          @ref arch_module_dwm.
+ *
  * @param[in]  dpy  Display connection (unused).
  * @param[in]  ee  X error event (unused).
  *
  * @return -1; unreachable because DIE terminates the process.
  *
  * @note Calls DIE() with a fatal message.
+ * @par Side Effects:
+ *      DIE() writes a fatal message and terminates the process.
+ * @par Threading and Reentrancy:
+ *      Installed temporarily by checkotherwm() at startup; terminates the
+ *      process on error.
  * @see checkotherwm, xerror
  * @anchor spec_xerrorstart
  */
@@ -4485,9 +5724,18 @@ xerrorstart(Display *dpy, XErrorEvent *ee)
  * When the selected client is already master, the next tiled client is
  * promoted instead.
  *
+ * @details Promotes the selected tiled client to master, or the next tiled
+ *          client when it is already master, via pop(); a no-op without an
+ *          arrange hook or a tiled selection; see @ref arch_module_dwm.
+ *
  * @param[in]  arg  Unused.
  *
  * @note Calls nexttiled() and pop(); X11 work happens through the resulting arrange.
+ * @par Side Effects:
+ *      nexttiled() and pop() with list reorder, focus and arrange (X
+ *      geometry).
+ * @par Threading and Reentrancy:
+ *      Command context in the single-threaded loop.
  * @see pop, nexttiled, tile
  * @anchor spec_zoom
  */
@@ -4513,12 +5761,24 @@ zoom(const Arg *arg)
  * windows, repairs a stale fullscreen STOP, runs the event loop, optionally
  * re-execs itself for a restart, then cleans up.
  *
+ * @details Program entry: parses -v/usage, opens X and XCB, checks for
+ *          another WM, sets up, scans, repairs a stale fullscreen STOP, runs
+ *          the event loop, cleans up and optionally re-execs for a restart;
+ *          see @ref arch_module_dwm.
+ *
  * @param[in]  argc  Argument count.
  * @param[in]  argv  Argument vector; argv[0] is reused for a restart.
  *
  * @return EXIT_SUCCESS after a clean shutdown.
  *
  * @note Compiled only when DWM_TEST is not defined; writes dpy, xcon and restart; calls checkotherwm(), setup(), scan(), run(), cleanup(), XCloseDisplay() and execvp() on restart.
+ * @par Side Effects:
+ *      Opens/closes the display, installs handlers through setup(),
+ *      XCloseDisplay(), execvp() on restart and DIE() on usage/display
+ *      errors.
+ * @par Threading and Reentrancy:
+ *      Single-threaded main; process lifecycle machine (ARCHITECTURE.md 13a);
+ *      the whole function is omitted under DWM_TEST.
  * @warning Calls DIE on invalid usage or when the display cannot be opened.
  * @see setup, scan, run, cleanup
  * @anchor spec_main

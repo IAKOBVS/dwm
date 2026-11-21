@@ -23,9 +23,34 @@ test_drw_resize_zero(void)
 	ASSERT(drw.h == 1, "drw_resize(0x0): h clamped to 1");
 }
 
+/* --- resizing invalidates emoji pixmaps captured at the old height --- */
+static void
+test_drw_resize_invalidates_emoji_cache(void)
+{
+	Drw drw;
+
+	memset(&drw, 0, sizeof drw);
+	mock_x11_reset();
+	for (int i = 0; i < EMOJI_CACHE_SIZE; i++)
+		drw.emoji_cache[i].codepoint = -1;
+	drw.emoji_cache[0].codepoint = 0x1F600;
+	drw.emoji_cache[0].pixmap = 123;
+	drw.emoji_cache[0].w = 10;
+
+	drw_resize(&drw, 100, 40);
+
+	ASSERT_EQ(drw.emoji_cache[0].codepoint, -1,
+		"drw_resize: emoji cache slot cleared");
+	ASSERT_EQ(drw.emoji_cache[0].pixmap, 0,
+		"drw_resize: cached pixmap reference cleared");
+	ASSERT_EQ(mock_xfreepixmap_calls, 1,
+		"drw_resize: stale cached pixmap is freed");
+}
+
 static void
 run_tests(void)
 {
 	test_drw_resize_null();
 	test_drw_resize_zero();
+	test_drw_resize_invalidates_emoji_cache();
 }

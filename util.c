@@ -28,6 +28,12 @@
  * `__func__`. Output format:
  * `file:line: func(): <formatted message> errno (N): <strerror>`.
  *
+ * @details Formats `file:line: func(): <message> errno (N): <strerror>` to stderr
+ *          and terminates the process; see @ref arch_module_util (util.c/.h).
+ *          Invoked via the DIE() macro, which injects `__FILE__`, `__LINE__` and
+ *          `__func__`. Variadic arguments are consumed with va_start(),
+ *          vfprintf() and va_end(). Failure is never reported as a typed error
+ *          code: the only outcome is termination via exit(EXIT_FAILURE).
  * @param[in] file  Source file name.
  * @param[in] line  Source line number.
  * @param[in] func  Enclosing function name.
@@ -35,6 +41,13 @@
  * @param[in] ...   Arguments for @p fmt.
  *
  * @note Reads the global `errno` and writes to stderr.
+ * @par Side Effects:
+ *      Writes a diagnostic to stderr and terminates the entire process with
+ *      exit(EXIT_FAILURE); atexit() handlers and stdio flushing run, but no
+ *      typed error code is ever returned to the caller.
+ * @par Threading and Reentrancy:
+ *      Single-threaded; no locks. Not async-signal-safe: fprintf(), vfprintf(),
+ *      strerror(), exit() and stdio locking are undefined in a signal handler.
  * @warning Never returns; terminates with `EXIT_FAILURE`.
  * @see ecalloc, DIE
  * @anchor spec_die
@@ -60,11 +73,23 @@ die(const char *file, int line, const char *func, const char *fmt, ...)
  * Checked `calloc` wrapper: the return value is always non-NULL, so callers
  * never need a NULL check.
  *
+ * @details Checked calloc() wrapper for the util module; see @ref arch_module_util
+ *          (util.c/.h). The return value is always non-NULL, so callers never need
+ *          a NULL check. Allocation failure is not reported as a typed error code:
+ *          DIE() invokes die(), which terminates via exit(EXIT_FAILURE). The block
+ *          is zero-filled, owned by the caller, and released with free().
  * @param[in] nmemb  Number of elements.
  * @param[in] size   Size of each element in bytes.
  * @return Zeroed pointer to `nmemb * size` bytes.
  *
  * @note On failure calls `DIE("calloc():calloc:")`, which terminates.
+ * @par Side Effects:
+ *      On success, allocates heap state owned by the caller; on failure, writes
+ *      a diagnostic to stderr and terminates the process with exit(EXIT_FAILURE).
+ *      No X11/Xft calls on any path.
+ * @par Threading and Reentrancy:
+ *      Single-threaded; no locks. Not async-signal-safe: calloc() and the
+ *      die()/exit() failure path are undefined from a signal handler.
  * @warning The multiplication is not overflow-checked by this wrapper.
  * @see die
  * @anchor spec_ecalloc

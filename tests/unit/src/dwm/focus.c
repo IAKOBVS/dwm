@@ -58,8 +58,23 @@ test_focus_change_client(void)
 	m->stack = c2; c2->snext = c1; c1->snext = NULL;
 	m->sel = c1;
 
+	mock_x11_reset();
+
 	focus(c2);
 	ASSERT(selmon->sel == c2, "focus change client: sel changed to c2");
+	ASSERT_EQ(mock_xset_input_focus.count, 1,
+		"focus: reasserts X input focus");
+	ASSERT_EQ(mock_xset_input_focus.win, c2->win,
+		"focus: X input focus targets the new client");
+	ASSERT_EQ(mock_xchange_property.count, 1,
+		"focus: publishes _NET_ACTIVE_WINDOW");
+	ASSERT_EQ(mock_xchange_property.mask, netatom[NetActiveWindow],
+		"focus: property is _NET_ACTIVE_WINDOW");
+	ASSERT_EQ(mock_xset_window_border.count, 2,
+		"focus: resets the old border and selects the new one");
+	ASSERT_EQ(mock_xset_window_border.win, c2->win,
+		"focus: last border update targets the new selection");
+	ASSERT_EQ(m->stack, c2, "focus: new client promoted to stack head");
 
 	restore_selmon();
 	winclient_remove(c1);
@@ -79,8 +94,15 @@ test_focus_null_selmon_ok(void)
 	selmon = m;
 	mons = m;
 
+	mock_x11_reset();
 	focus(NULL);
 	ASSERT(selmon->sel == NULL, "focus(NULL): sel stays NULL");
+	ASSERT_EQ(mock_xset_input_focus.count, 1,
+		"focus(NULL): reverts X input focus to root");
+	ASSERT_EQ(mock_xset_input_focus.win, root,
+		"focus(NULL): input focus is the root window");
+	ASSERT_EQ(mock_xdelete_property.count, 1,
+		"focus(NULL): deletes _NET_ACTIVE_WINDOW");
 	ASSERT(!(selmon->bar_dirty_segments & DIRTY_TITLE), "focus(NULL) when already NULL: no dirty (idempotent)");
 
 	/* restore globals BEFORE freeing m */

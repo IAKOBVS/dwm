@@ -36,11 +36,12 @@ Function contracts use Doxygen tags, not prose-only comments:
 ```c
 /**
  * @brief Imperative one-line summary of the observable effect.
- *
- * Algorithm or invariant that is not obvious from the signature.
+ * @details Algorithm or invariant that is not obvious from the signature.
+ *          Use this for the "why" when the signature only shows the "what".
  *
  * @param[in]     c  Client; must be linked into c->mon->clients.
- * @param[in,out] x  Rectangle; clamped in place.
+ * @param[out]    r  Rectangle receiving the clamped geometry.
+ * @param[in,out] x  Value read on entry and adjusted in place on exit.
  *
  * @return Non-zero when the geometry changed.
  * @retval 0  No change or ignored input.
@@ -48,24 +49,46 @@ Function contracts use Doxygen tags, not prose-only comments:
  *
  * @pre  selmon != NULL and points at a live Monitor.
  * @post On success, *w >= c->minw and *h >= c->minh.
- * @note Reads/writes selmon, mons and bar_draw_pending; no X calls.
- * @warning Does not take ownership of c.
- * @see arrange, updategeom
+ *
+ * @note Reads/writes selmon, mons and bar_draw_pending; no X calls here.
+ *
+ * @par Side Effects:
+ *   X server: reconfigures c->win and restacks bar windows.
+ *   Xft/pixmaps: none. stderr: none on success; die() writes on fatal error.
+ *   See @ref arch_module_dwm for the module-wide side-effect boundary.
+ *
+ * @par Threading and Reentrancy:
+ *   Called only from the single-threaded XNextEvent loop. Signal handlers
+ *   set atomic flags and fork children never re-enter WM state.
+ *   See @ref arch_module_dwm for the full module contract.
+ *
+ * @warning Does not take ownership of c; the caller keeps the allocation.
+ * @see arrange, updategeom, @ref arch_module_dwm
  * @anchor spec_focus
  */
 ```
 
 Rules:
 
-- `@brief`, every parameter, and (for non-void functions) `@return` are
-  mandatory. `@anchor spec_<function>` is mandatory and unique.
+- `@brief`, `@details`, every parameter with an explicit direction
+   (`@param[in]`, `@param[out]`, `@param[in,out]`), and (for non-void functions)
+   `@return` are mandatory. `@anchor spec_<function>` is mandatory and unique.
 - `@pre`/`@post` describe guarantees the code actually enforces, not wishes.
-- `@note` names global state and X11/Xft side effects.
-- `@warning` names ownership, lifetime, and NULL hazards.
+- `@note` names global state read or written, kept separate from X11 details.
+- Use the standard `@par Side Effects:` and `@par Threading and Reentrancy:`
+   paragraphs for the side-effect and concurrency boundaries. The nonstandard
+   custom tags `sideeffects` and `thread` are deliberately avoided: `@par` is
+   Doxygen's standard way to express named blocks and needs no ALIASES entry
+   in `docs/Doxyfile`.
+- `@warning` names ownership, lifetime, and NULL hazards; `@see` names related
+   contracts and should point at the relevant `@ref arch_module_*` contract.
 - Stable IDs are anchors, **not line numbers**. Test comments must not cite
   `dwm.c:<line>`; cite `@ref spec_<function>` instead.
+- `make spec-check` enforces the four contract tags on every anchored block
+  (`@brief`, `@details`, `@par Side Effects:`, `@par Threading and Reentrancy:`),
+  so removing one is a build failure.
 - Entities that are not C functions (macros, structs, files) use `@defgroup`
-  or `@anchor spec_<name>` on the declaration.
+   or `@anchor spec_<name>` on the declaration.
 
 ## 3. System overview
 
@@ -94,6 +117,28 @@ Key modules:
 | `dwm.c` | Event loop, client/monitor/tag/layout state, bar | `spec_run`, `spec_manage`, `spec_unmanage`, `spec_arrange`, `spec_drawbar` |
 | `drw.c` | Xft drawing, glyph/emoji caches, UTF-8 | `spec_drw_create`, `spec_drw_text`, `spec_glyph_getwidth` |
 | `util.c`/`util.h` | Allocation, death, number/string helpers | `spec_ecalloc`, `spec_die`, `spec_numpcpy_unsafe` |
+
+### 3.1 dwm.c module contract
+
+@anchor arch_module_dwm
+
+- **Ownership:** the global `mons` list owns every `Monitor`; each monitor owns
+   its `Client` allocations, its `gap` state, and its bar `Drw` context.
+   Managed clients are reachable from both `mon->clients` and `winhash` until
+   `unmanage` removes them.
+- **Failure policy:** unrecoverable setup/X errors call `die()`; recoverable
+   misses return `NULL` or `0` and never leave a half-linked client or monitor.
+   See @ref arch_module_util for the allocator/death primitives.
+- **Side-effect boundary:** X server state (map/configure/focus, grabs,
+   properties, client list) changes only from event handlers and
+   `arrange`/`drawbar`; stderr is written only by diagnostics and `die()`.
+   Font, Xft, and pixmap work is delegated to @ref arch_module_drw.
+- **Threading and reentrancy:** a single-threaded `XNextEvent` loop is the only
+   state mutator. Signal handlers set `volatile sig_atomic_t` flags (`running`,
+   `restart`); `fork` children `exec`/`_exit` and never re-enter WM state.
+- **Compile-time divergences:** `DWM_TEST` guards `main()`, leaves bar dirty
+   bits observable, and makes process-control seams synchronous; `XINERAMA`
+   changes monitor discovery and geometry in `updategeom`.
 
 ## 4. Data model
 
@@ -157,6 +202,26 @@ returns a wrong client. See `spec_winclient_put`, `spec_winclient_remove`,
 cache. The `Fnt` chain provides fallback fonts. The emoji cache key is
 `(codepoint, fg, bg)`; entries are invalidated on font change, `drw_resize`,
 and `drw_free`.
+
+### 4.5 util.c module contract
+
+@anchor arch_module_util
+
+- **Ownership:** `ecalloc`/`erealloc` hand caller-owned allocations to the data
+   model objects above; truncation-safe string helpers borrow caller buffers
+   and never allocate. No module keeps a registry of handed-out pointers.
+- **Failure policy:** allocation failure and unrecoverable errors call `die()`;
+   pure number/string helpers signal failure with `NULL` or `0` and never
+   return a partially converted value.
+- **Side-effect boundary:** no X server, Xft, or pixmap access; the only
+   externally visible effect is stderr output from `die()`. Helpers do not
+   mutate globals, so callers own all state changes.
+- **Threading and reentrancy:** stateless and reentrant; safe from the single
+   `XNextEvent` loop, from signal handlers, and from `fork` children because
+   no shared mutable state is involved.
+- **Compile-time divergences:** none of its own — it builds unchanged under
+   `DWM_TEST` and `XINERAMA`; test builds replace `die()`/`ecalloc()` with
+   `tests/mock_x11.c` stubs.
 
 ## 5. Event loop and dispatch
 
@@ -411,6 +476,28 @@ Anchors: `spec_drw_create`, `spec_drw_resize`, `spec_drw_free`,
 
 Tests: `tests/unit/src/drw/*.c`, `tests/unit/src/integration/integration_drw_safety.c`.
 
+### 12.1 drw.c module contract
+
+@anchor arch_module_drw
+
+- **Ownership:** a `Drw` owns its drawable, GC, XftDraw, scheme, font chain,
+   and the glyph/emoji caches; `drw_free` releases all of them. Callers never
+   free cached pixmaps or font structs directly.
+- **Failure policy:** font/pattern and measurement failures return `NULL` or
+   `0` rather than a partial drawable; fatal out-of-memory goes through
+   @ref arch_module_util and `die()`.
+- **Side-effect boundary:** Xft/FreeType glyph and emoji PNG decoding,
+   `XCopyArea` blits of the off-screen pixmap to bar windows, and cached
+   pixmap allocation live here. No WM state or root-window properties are
+   touched, and normal paths write nothing to stderr.
+- **Threading and reentrancy:** called only from the single-threaded
+   `drawbar` path; caches are unsynchronized and must not be shared across
+   threads. `fork` children never draw; reentrant calls serialize on the
+   event loop.
+- **Compile-time divergences:** `XINERAMA` changes how many bars/pixmaps dwm
+   creates but not `Drw` itself; under `DWM_TEST` Xft is a deterministic fake
+   and `mock_drw_*` recorders capture the calls.
+
 ## 13. Test architecture and known blind spots
 
 Most correctness tests are white-box unit tests: they include
@@ -436,8 +523,13 @@ document must not hide:
   the window argument (one global control value for all windows), so
   per-window and cross-window behavior is not faithfully modeled.
 - `fork` is mocked, so `spawn`/`killall` child behavior is simulated.
-- Tests compile with `-DDWM_TEST`, which changes `drawbar` dirty-bit clearing
-  and makes `killatfullscreen_start` synchronous.
+- Tests compile with `-DDWM_TEST`, which removes `main()`, keeps bar dirty
+  bits set after a draw, makes `killatfullscreen_start` synchronous, and changes
+  `config.h`: `enableswallow = 1` (test) vs `0` (production), an extra
+  `TestClass` rule, kill target `test-target` vs `dwmblocks-fast`, and extra
+  NULL key/button sentinel entries. **Tests of swallowing therefore exercise
+  a configuration that does not ship**; that behavior is not a production
+  guarantee.
 - Only `tests/unit/src/dwm/isuniquegeom.c` defines `XINERAMA`, while production
   builds with `-DXINERAMA`.
 

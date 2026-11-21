@@ -111,6 +111,8 @@ test_updategeom_xinerama_add_update_remove(void)
 		"updategeom: a monitor per unique screen");
 	ASSERT_EQ(mons->next->mx, 1920, "updategeom: second screen x_org");
 	ASSERT_EQ(mons->next->next->mh, 600, "updategeom: third screen height");
+	ASSERT_EQ(lastgeom.added, 2u,
+		"GeomChange: two monitors added for the new unique screens");
 
 	/* Pin a client to the last monitor so the removal loop has work. */
 	for (m = mons; m->next; m = m->next);
@@ -125,6 +127,10 @@ test_updategeom_xinerama_add_update_remove(void)
 	ASSERT_EQ(mons->next, (Monitor *)0, "updategeom: surplus monitors freed");
 	ASSERT(c->mon == mons, "updategeom: client migrated to first monitor");
 	ASSERT(selmon == mons, "updategeom: selection follows the first monitor");
+	ASSERT_EQ(lastgeom.removed, 2u,
+		"GeomChange: two surplus monitors removed");
+	ASSERT(lastgeom.removed_mon != NULL,
+		"GeomChange: records the removed monitor");
 
 	drain_clients();
 }
@@ -145,6 +151,8 @@ test_updategeom_xinerama_from_empty(void)
 		"updategeom: exactly one monitor for one unique screen");
 	ASSERT_EQ(mons->mw, 1024, "updategeom: created monitor width");
 	ASSERT_EQ(mons->mh, 768, "updategeom: created monitor height");
+	ASSERT_EQ(lastgeom.added, 1u,
+		"GeomChange: empty probe records the created monitor");
 }
 
 static void

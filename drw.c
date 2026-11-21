@@ -79,6 +79,15 @@ static unsigned int ellipsis_width;
  * When a full-table probe finds no empty slot, the measured width is
  * returned but not stored, so a live entry is never silently evicted.
  *
+ * @details Measures a non-ASCII codepoint's advance width, caching the result.
+ *          Algorithm: hash (codepoint, font_generation) into a slot in the
+ *          global 64-entry glyph_cache, linear-probe for a generation-matching
+ *          hit, and on miss walk drw->fonts calling XftCharExists +
+ *          drw_font_getexts. Invariant: a full-table probe never evicts a live
+ *          entry — the width is returned uncached. See @ref arch_module_drw.
+ *          drw/drw->fonts must be non-NULL; utf8str/utf8len are read only on a
+ *          miss. The cache is process-global static state, not per-Dr.
+ *
  * @param[in] drw       Drawing context whose font chain is probed.
  * @param[in] codepoint Unicode codepoint to measure.
  * @param[in] utf8str   Encoded bytes of the codepoint (cache-miss measuring only).
@@ -90,6 +99,14 @@ static unsigned int ellipsis_width;
  *       codepoint is not already cached.
  * @post On a cacheable miss the codepoint/width pair is stored in glyph_cache.
  * @note ASCII codepoints bypass this helper; it is only used for > 0x7F.
+ * @par Side Effects:
+ *      Writes glyph_cache (global) on a cacheable miss; calls XftCharExists
+ *      and drw_font_getexts (XftTextExtentsUtf8). No X window/property changes
+ *      and no pixmap pixels touched (drw_map is the only blitter).
+ * @par Threading and Reentrancy:
+ *      Single-threaded; reached from text layout/drawbar during dispatch and
+ *      tail flush. glyph_cache and font_generation are unsynchronized globals.
+ *      Under DWM_TEST Xft is a stateful fake with no real rasterization.
  * @warning The cache is global static state and is not thread-safe.
  * @see drw_fontset_getwidth, drw_fontset_invalidate_cache
  * @anchor spec_glyph_getwidth
@@ -139,6 +156,13 @@ glyph_getwidth(Drw *drw, long codepoint, const char *utf8str, unsigned int utf8l
  * over, so reusing it under a different fg/bg would draw stale colors.
  * The cache key is therefore (codepoint, fg, bg).
  *
+ * @details Pure lookup in drw->emoji_cache. Hashes the codepoint to a slot and
+ *          linear-probes the 32-entry table; a hit requires the full key
+ *          (codepoint, fg, bg, generation) to match, because the cached pixmap
+ *          bakes in the scheme background and belongs to one font generation.
+ *          See @ref arch_module_drw. drw must be non-NULL with an initialized
+ *          cache; nothing is mutated and the caller owns no entries.
+ *
  * @param[in] drw       Drawing context owning the cache.
  * @param[in] codepoint Emoji codepoint to find.
  * @param[in] fg        Foreground pixel of the current draw.
@@ -149,6 +173,12 @@ glyph_getwidth(Drw *drw, long codepoint, const char *utf8str, unsigned int utf8l
  * @pre  drw != NULL and the cache slots are initialized (codepoint -1 empty).
  * @post No cache state is modified.
  * @note Pure lookup; never renders or frees anything.
+ * @par Side Effects:
+ *      None: no X calls, no cache mutation, no pixmap or window changes.
+ * @par Threading and Reentrancy:
+ *      Single-threaded; called from drw_text during bar rendering. The cache
+ *      is unsynchronized; generation guards entries across font changes. Under
+ *      DWM_TEST Xft is a stateful fake with no real PNG decode.
  * @see emoji_cache_insert, emoji_cache_invalidate
  * @anchor spec_emoji_cache_lookup
  */
@@ -180,6 +210,14 @@ emoji_cache_lookup(Drw *drw, long codepoint, unsigned long fg, unsigned long bg)
  * fg/bg are stored with the entry so lookups can reject entries that
  * were captured under a different color scheme.
  *
+ * @details Stores a freshly rendered emoji pixmap keyed by
+ *          (codepoint, fg, bg, generation). Linear-probes drw->emoji_cache to
+ *          an empty slot or a same-codepoint slot, frees any pixmap already
+ *          there, and records the entry stamped with the current
+ *          font_generation. See @ref arch_module_drw. drw must be non-NULL;
+ *          pixmap ownership transfers to the cache and must have been created
+ *          at the drawable's depth and width w.
+ *
  * @param[in] drw       Drawing context owning the cache.
  * @param[in] codepoint Emoji codepoint being cached.
  * @param[in] pixmap    Rendered pixmap to store; ownership transfers to the cache.
@@ -191,6 +229,14 @@ emoji_cache_lookup(Drw *drw, long codepoint, unsigned long fg, unsigned long bg)
  * @post The slot holds the new entry; a previously stored pixmap at that
  *       slot, if any, has been freed with XFreePixmap.
  * @note Calls XFreePixmap on eviction.
+ * @par Side Effects:
+ *      Mutates drw->emoji_cache and may XFreePixmap an evicted entry. The
+ *      stored pixels are blitted later by XCopyArea in drw_text; no X
+ *      window/property changes and no font/chain mutation.
+ * @par Threading and Reentrancy:
+ *      Single-threaded; called only from drw_text. cache and font_generation
+ *      are unsynchronized. Under DWM_TEST there is no real rasterization or
+ *      PNG decode and XFreePixmap is a mock.
  * @warning The cache takes ownership of pixmap; callers must not free it.
  * @see emoji_cache_lookup, emoji_cache_invalidate
  * @anchor spec_emoji_cache_insert
@@ -225,11 +271,24 @@ emoji_cache_insert(Drw *drw, long codepoint, Pixmap pixmap, int w,
  * Called from drw_fontset_create (font change invalidates all cached
  * glyphs), drw_resize (pixmap height changed) and drw_free (teardown).
  *
+ * @details Empties drw->emoji_cache by freeing every cached pixmap and
+ *          resetting each slot (codepoint -1, pixmap 0, w 0, generation 0).
+ *          This is the invalidation point for the (codepoint, fg, bg,
+ *          generation) key on font change, resize and free. See
+ *          @ref arch_module_drw. drw must be non-NULL with an initialized
+ *          cache; no ownership is retained after return.
+ *
  * @param[in] drw Drawing context whose cache is cleared.
  *
  * @pre  drw != NULL; its cache was initialized in drw_create.
  * @post Every slot is reset to codepoint -1, pixmap 0 and w 0.
  * @note Frees each non-empty cached pixmap via XFreePixmap.
+ * @par Side Effects:
+ *      Calls XFreePixmap per non-empty slot and clears all cache fields; no
+ *      pixels are drawn and no X window/property changes occur.
+ * @par Threading and Reentrancy:
+ *      Single-threaded; invoked from setup/teardown paths. Not synchronized
+ *      with lookups or inserts. Under DWM_TEST XFreePixmap is a no-op mock.
  * @see emoji_cache_lookup, emoji_cache_insert
  * @anchor spec_emoji_cache_invalidate
  */
@@ -266,6 +325,11 @@ static const long utfmax[UTF_SIZ + 1] = { 0x10FFFF, 0x7F, 0x7FF, 0xFFFF, 0x10FFF
  * the sequence length (1–4) for a leading byte, or 0 for a continuation
  * byte, and returns the payload bits (low 6/5/4/3 bits depending on type).
  *
+ * @details Pure classifier: scans the static utfbyte/utfmask tables to find the
+ *          byte type, writes the sequence length (or 0) to *i and returns the
+ *          masked payload bits. See @ref arch_module_drw. i must be non-NULL;
+ *          *i is written on every path, including the no-match case (0).
+ *
  * @param[in]  c Leading or continuation UTF-8 byte.
  * @param[out] i Sequence length for a leading byte; 0 for a continuation byte.
  *
@@ -275,6 +339,12 @@ static const long utfmax[UTF_SIZ + 1] = { 0x10FFFF, 0x7F, 0x7FF, 0xFFFF, 0x10FFF
  * @pre  i != NULL.
  * @post *i is written on every path.
  * @note Pure helper; reads only the static utfbyte/utfmask tables.
+ * @par Side Effects:
+ *      Writes only the caller-provided *i; reads static tables. No X calls,
+ *      no cache/pixmap/window changes.
+ * @par Threading and Reentrancy:
+ *      Pure and reentrant: stateless, no globals written. Safe under the
+ *      single-threaded dispatch model; DWM_TEST has no effect here.
  * @see utf8decode, utf8validate
  * @anchor spec_utf8decodebyte
  */
@@ -294,6 +364,12 @@ utf8decodebyte(const char c, size_t *i)
  * them with UTF_INVALID.  Then returns the minimal byte-sequence length
  * that can represent the (possibly corrected) codepoint.
  *
+ * @details Pure validator: replaces surrogates (U+D800–U+DFFF) and values
+ *          outside utfmin[i]/utfmax[i] with UTF_INVALID, then returns the
+ *          minimal sequence length able to represent the corrected *u. See
+ *          @ref arch_module_drw. u must be non-NULL and i in [0, UTF_SIZ];
+ *          *u is either preserved or corrected on every path.
+ *
  * @param[in,out] u Decoded codepoint; overwritten with UTF_INVALID when invalid.
  * @param[in]     i Nominal sequence length of the decoded codepoint.
  *
@@ -302,6 +378,12 @@ utf8decodebyte(const char c, size_t *i)
  * @pre  u != NULL; i in [0, UTF_SIZ].
  * @post *u is either unchanged or set to UTF_INVALID.
  * @note Pure helper; reads only the static utfmin/utfmax tables.
+ * @par Side Effects:
+ *      Writes only the caller-provided *u on invalid input; reads static
+ *      utfmin/utfmax tables. No X calls or cache/pixmap/window changes.
+ * @par Threading and Reentrancy:
+ *      Pure aside from its output; stateless, no globals. Safe in the
+ *      single-threaded text-layout path.
  * @see utf8decode, utf8decodebyte
  * @anchor spec_utf8validate
  */
@@ -322,6 +404,12 @@ utf8validate(long *u, size_t i)
  * bytes until the sequence is complete or a non-continuation byte is seen,
  * then validates the result with utf8validate.
  *
+ * @details Decodes one UTF-8 sequence: classify the lead byte, accumulate
+ *          continuation payload bits, stop at the first non-continuation byte,
+ *          then validate via utf8validate. See @ref arch_module_drw. c and u
+ *          must be non-NULL; *u is always written (UTF_INVALID on entry or
+ *          failure), and clen may be 0 for an immediate 0 return.
+ *
  * @param[in]  c    Pointer to the first byte of the sequence.
  * @param[out] u    Decoded UTF-32 codepoint (UTF_INVALID on failure).
  * @param[in]  clen Number of bytes available at c (at most UTF_SIZ).
@@ -332,6 +420,11 @@ utf8validate(long *u, size_t i)
  * @pre  c != NULL; u != NULL; clen may be 0.
  * @post *u is always written (UTF_INVALID on entry/failure).
  * @note If clen == 0 it returns 0 immediately without reading c.
+ * @par Side Effects:
+ *      Writes only the caller-provided *u. No X calls, no caches, no drawing.
+ * @par Threading and Reentrancy:
+ *      Pure aside from *u; no global state. Safe in the single-threaded
+ *      text-layout path.
  * @see utf8decodebyte, utf8validate
  * @anchor spec_utf8decode
  */
@@ -369,6 +462,13 @@ utf8decode(const char *c, long *u, size_t clen)
  * width/height are clamped to 1 so XCreatePixmap never sees a zero size.
  * All emoji cache slots are initialized to -1 (empty).
  *
+ * @details Allocates and initializes a Drw: clamps w/h to >= 1, creates the
+ *          backing pixmap, GC and a long-lived XftDraw (so Xft's per-drawable
+ *          glyph cache survives redraws), sets line attributes and marks every
+ *          emoji cache slot empty. See @ref arch_module_drw. dpy must be
+ *          non-NULL and root valid; the caller owns the result and must call
+ *          drw_free. Returns NULL only if ecalloc fails.
+ *
  * @param[in] dpy    X display.
  * @param[in] screen X screen number.
  * @param[in] root   Root window used as the pixmap/GC parent.
@@ -380,6 +480,14 @@ utf8decode(const char *c, long *u, size_t clen)
  * @pre  dpy != NULL; root is a valid window on screen.
  * @post drw->w/h are at least 1; emoji_cache is empty.
  * @note Calls XCreatePixmap, XCreateGC, XftDrawCreate and XSetLineAttributes.
+ * @par Side Effects:
+ *      XCreatePixmap/XCreateGC/XftDrawCreate/XSetLineAttributes; heap
+ *      allocation and emoji_cache initialization. No X window/property
+ *      changes and no glyph rendering yet (drw_map is the only blitter).
+ * @par Threading and Reentrancy:
+ *      Single-threaded setup; touches process-global font_generation only
+ *      indirectly via slot initialization. Under DWM_TEST X11/Xft calls are
+ *      mocks with no real rasterization.
  * @warning Caller owns the result and must release it with drw_free.
  * @see drw_resize, drw_free
  * @anchor spec_drw_create
@@ -418,6 +526,13 @@ drw_create(Display *dpy, int screen, Window root, unsigned int w, unsigned int h
  * new height would read past the pixmap (BadMatch).  The glyph-width cache
  * survives (the font chain is unchanged).
  *
+ * @details Recreates the backing pixmap at the new (clamped >= 1) size. The
+ *          old XftDraw is tied to the old pixmap, so it is destroyed and
+ *          recreated; emoji cached pixmaps were captured at the old height and
+ *          are invalidated to avoid BadMatch on blit, while the glyph-width
+ *          cache survives since fonts are unchanged. See @ref arch_module_drw.
+ *          drw may be NULL (no-op); ownership of the context is unchanged.
+ *
  * @param[in] drw Drawing context; NULL is ignored.
  * @param[in] w   New width; 0 is clamped to 1.
  * @param[in] h   New height; 0 is clamped to 1.
@@ -426,6 +541,12 @@ drw_create(Display *dpy, int screen, Window root, unsigned int w, unsigned int h
  * @post drawable/xftd are re-created at the new size; emoji cache is empty.
  * @note Calls emoji_cache_invalidate, XFreePixmap, XftDrawDestroy,
  *       XCreatePixmap and XftDrawCreate.
+ * @par Side Effects:
+ *      Frees emoji pixmaps and the old drawable/XftDraw, then creates new
+ *      ones; invalidates the emoji cache. No X window/property changes.
+ * @par Threading and Reentrancy:
+ *      Single-threaded setup; cache invalidation is not synchronized. Under
+ *      DWM_TEST the X11/Xft calls are mocks with no real rasterization.
  * @see drw_create, emoji_cache_invalidate
  * @anchor spec_drw_resize
  */
@@ -453,12 +574,23 @@ drw_resize(Drw *drw, unsigned int w, unsigned int h)
  * freed, then frees the backing pixmap, the GC, the font chain and the Drw
  * itself.
  *
+ * @details Tears down a Drw: invalidates the emoji cache, destroys the XftDraw
+ *          before its pixmap, then frees the GC, backing pixmap, font chain and
+ *          the context itself. See @ref arch_module_drw. drw must be a non-NULL
+ *          result of drw_create; the pointer is invalid on return.
+ *
  * @param[in] drw Drawing context to destroy.
  *
  * @pre  drw must have been returned by drw_create (non-NULL).
  * @post All owned X resources and heap memory are released.
  * @note Calls emoji_cache_invalidate, XftDrawDestroy, XFreePixmap, XFreeGC
  *       and drw_fontset_free.
+ * @par Side Effects:
+ *      XFreePixmap per cached emoji, XftDrawDestroy, XFreePixmap, XFreeGC, and
+ *      frees the font chain plus Drw. No X window/property changes.
+ * @par Threading and Reentrancy:
+ *      Single-threaded teardown; must not race with any drw_* use of the
+ *      context or the global caches. Under DWM_TEST X11/Xft calls are mocks.
  * @warning Passing NULL dereferences; callers must guard.
  * @see drw_create, drw_fontset_free
  * @anchor spec_drw_free
@@ -482,6 +614,12 @@ drw_free(Drw *drw)
  * pattern is supplied (system fallback), no name pattern is stored.  The
  * font's line height is computed as ascent + descent.
  *
+ * @details Loads one XftFont either from a name (also parsing and storing the
+ *          FcPattern as a base for later fallback matches) or from a prepared
+ *          FcPattern. See @ref arch_module_drw. Exactly one of
+ *          fontname/fontpattern must be supplied (otherwise DIE) and drw must
+ *          be non-NULL; returns NULL on load/parse failure, printing to stderr.
+ *
  * @param[in] drw         Drawing context supplying dpy and screen.
  * @param[in] fontname    Font name string, or NULL when fontpattern is used.
  * @param[in] fontpattern FcPattern to open directly, or NULL when fontname is used.
@@ -492,6 +630,12 @@ drw_free(Drw *drw)
  * @post On success the returned node owns xfont and, for name loads, pattern.
  * @note Calls XftFontOpenName/FcNameParse or XftFontOpenPattern; dies if
  *       neither argument is supplied.
+ * @par Side Effects:
+ *      XftFontOpenName/XftFontOpenPattern and FcNameParse; allocates an Fnt
+ *      node. No pixmap/X window/property changes and no drawing.
+ * @par Threading and Reentrancy:
+ *      Single-threaded; uses DIE on bad args so it is not failure-isolated.
+ *      Under DWM_TEST Xft/Fc calls are deterministic fakes.
  * @warning On failure prints to stderr; internal helper, use drw_fontset_create.
  * @see drw_fontset_create, xfont_free
  * @anchor spec_xfont_create
@@ -542,11 +686,22 @@ xfont_create(Drw *drw, const char *fontname, FcPattern *fontpattern)
  * Destroys the node's FcPattern (if any), closes its XftFont and frees the
  * node.  Does NOT follow font->next (the caller manages the chain).
  *
+ * @details Releases a single Fnt: destroys its optional FcPattern, closes its
+ *          XftFont and frees the node without following font->next. See
+ *          @ref arch_module_drw. font may be NULL (no-op) or a node returned by
+ *          xfont_create; the node is invalid on return.
+ *
  * @param[in] font Font node to release; NULL is ignored.
  *
  * @pre  font is either NULL or a node returned by xfont_create.
  * @post The node and its pattern/font are released.
  * @note Calls FcPatternDestroy and XftFontClose.
+ * @par Side Effects:
+ *      FcPatternDestroy and XftFontClose plus free(); no X window/property
+ *      changes, no cache mutation and no drawing.
+ * @par Threading and Reentrancy:
+ *      Single-threaded; the caller owns chain lifetime. Under DWM_TEST Xft/Fc
+ *      calls are mocks.
  * @warning Does not recurse; use drw_fontset_free for a full chain.
  * @see xfont_create, drw_fontset_free
  * @anchor spec_xfont_free
@@ -570,6 +725,13 @@ xfont_free(Fnt *font)
  * global glyph-width cache are invalidated because the new fonts may have
  * different glyph metrics.  The result is stored in drw->fonts.
  *
+ * @details Loads fonts in reverse and prepends them so the first-named font is
+ *          the head of drw->fonts. Invalidates both the emoji cache and the
+ *          global glyph-width cache (bumping font_generation) since new fonts
+ *          change metrics and glyph images; failed fonts are silently skipped.
+ *          See @ref arch_module_drw. drw/fonts must be non-NULL else NULL; the
+ *          caller owns the chain and must drw_fontset_free it.
+ *
  * @param[in] drw       Drawing context; NULL returns NULL.
  * @param[in] fonts     Array of font name strings; NULL returns NULL.
  * @param[in] fontcount Number of entries in fonts.
@@ -580,6 +742,13 @@ xfont_free(Fnt *font)
  * @post drw->fonts points at the new chain; both caches are cleared.
  * @note Calls emoji_cache_invalidate, drw_fontset_invalidate_cache and
  *       xfont_create; failed fonts are silently skipped.
+ * @par Side Effects:
+ *      Frees cached emoji pixmaps, bumps font_generation, clears the global
+ *      glyph cache and no-match set, and mutates drw->fonts. No X
+ *      window/property changes or drawing.
+ * @par Threading and Reentrancy:
+ *      Single-threaded setup; global cache/generation changes are
+ *      unsynchronized. Under DWM_TEST Xft/Fc are fakes.
  * @warning Caller must release the chain with drw_fontset_free.
  * @see drw_fontset_free, xfont_create
  * @anchor spec_drw_fontset_create
@@ -611,11 +780,21 @@ drw_fontset_create(Drw *drw, const char *fonts[], size_t fontcount)
  * Walks the linked list of Fnt nodes via font->next and frees each with
  * xfont_free.  A NULL head is a no-op.
  *
+ * @details Recursively walks font->next and frees every Fnt via xfont_free;
+ *          a NULL head is a no-op. See @ref arch_module_drw. font must be NULL
+ *          or a chain from drw_fontset_create; all nodes are invalid on return.
+ *
  * @param[in] font Head of the font chain to free.
  *
  * @pre  font is NULL or a chain created by drw_fontset_create.
  * @post Every node in the chain is released.
  * @note Recursive; calls xfont_free per node.
+ * @par Side Effects:
+ *      Closes each XftFont and destroys each FcPattern; no cache/generation
+ *      change, no X window/property changes and no drawing.
+ * @par Threading and Reentrancy:
+ *      Single-threaded teardown; recursion depth equals the chain length.
+ *      Under DWM_TEST Xft/Fc calls are mocks.
  * @see drw_fontset_create, xfont_free
  * @anchor spec_drw_fontset_free
  */
@@ -635,6 +814,11 @@ drw_fontset_free(Fnt *font)
  * to fully opaque (0xff << 24) so that cairo-like compositing doesn't dim
  * text when drawn onto the backing pixmap.
  *
+ * @details Allocates an XftColor from a name ("#rrggbb", "blue", ...) and
+ *          forces alpha to 0xff, using an unsigned shift to avoid signed-shift
+ *          UB. See @ref arch_module_drw. drw, dest and clrname must be non-NULL
+ *          (else no-op); dest is caller-owned and DIE is used on alloc failure.
+ *
  * @param[in]  drw     Drawing context supplying dpy, screen, visual and colormap.
  * @param[out] dest    XftColor to populate.
  * @param[in]  clrname Color name string.
@@ -642,6 +826,12 @@ drw_fontset_free(Fnt *font)
  * @pre  drw, dest and clrname are all non-NULL, otherwise this is a no-op.
  * @post dest holds the allocated color with opaque alpha.
  * @note Calls XftColorAllocName; dies on allocation failure.
+ * @par Side Effects:
+ *      XftColorAllocName allocates a color and writes *dest. No pixmap/window
+ *      changes and no font/cache mutation.
+ * @par Threading and Reentrancy:
+ *      Single-threaded setup; uses DIE on failure. Under DWM_TEST Xft is a
+ *      fake allocator.
  * @warning dest is an out-parameter and must be an XftColor owned by the caller.
  * @see drw_scm_create
  * @anchor spec_drw_clr_create
@@ -664,6 +854,11 @@ drw_clr_create(Drw *drw, Clr *dest, const char *clrname)
  * Each entry is filled by drw_clr_create.  The array is heap-allocated and
  * the caller takes ownership.
  *
+ * @details Allocates an array of clrcount Clr entries and fills each through
+ *          drw_clr_create. See @ref arch_module_drw. drw and clrnames must be
+ *          non-NULL with clrcount >= 2, else NULL; the caller owns the returned
+ *          array and must free() it.
+ *
  * @param[in] drw      Drawing context; NULL returns NULL.
  * @param[in] clrnames Array of color name strings; NULL returns NULL.
  * @param[in] clrcount Number of colors; must be >= 2 or NULL is returned.
@@ -673,6 +868,12 @@ drw_clr_create(Drw *drw, Clr *dest, const char *clrname)
  * @pre  drw != NULL, clrnames != NULL and clrcount >= 2.
  * @post Returned array entries are allocated via drw_clr_create.
  * @note Calls ecalloc and drw_clr_create.
+ * @par Side Effects:
+ *      ecalloc plus per-entry XftColorAllocName via drw_clr_create; no
+ *      pixmap/window changes and no font/cache mutation.
+ * @par Threading and Reentrancy:
+ *      Single-threaded setup; per-entry DIE on failure. Under DWM_TEST Xft is
+ *      a fake allocator.
  * @warning Caller must free() the returned array.
  * @see drw_clr_create
  * @anchor spec_drw_scm_create
@@ -697,12 +898,26 @@ drw_scm_create(Drw *drw, const char *clrnames[], size_t clrcount)
  * Does NOT take ownership of the chain (the caller manages its lifetime).
  * A NULL drw is ignored.
  *
+ * @details Replaces drw->fonts with set without taking ownership, then
+ *          invalidates both the emoji cache and the global glyph-width cache
+ *          because the new chain has different metrics/glyphs. See
+ *          @ref arch_module_drw. drw may be NULL (no-op); the caller must keep
+ *          set alive while drw uses it.
+ *
  * @param[in] drw Drawing context; NULL is ignored.
  * @param[in] set Font chain to make active (stored verbatim in drw->fonts).
  *
  * @pre  drw may be NULL (no-op).
  * @post drw->fonts points at set when drw is non-NULL.
- * @note Does not invalidate either glyph or emoji cache.
+ * @note Invalidates the emoji cache, glyph-width cache, font generation and
+ *       the no-match set (see @ref spec_drw_fontset_invalidate_cache).
+ * @par Side Effects:
+ *      Mutates drw->fonts; frees cached emoji pixmaps, bumps font_generation
+ *      and clears the global glyph cache and no-match set. No X
+ *      window/property changes and no drawing.
+ * @par Threading and Reentrancy:
+ *      Single-threaded; cache/generation changes are unsynchronized. Under
+ *      DWM_TEST Xft is a fake with no real rasterization.
  * @warning No ownership transfer; freeing set while drw still uses it is unsafe.
  * @see drw_fontset_create, drw_fontset_free
  * @anchor spec_drw_setfontset
@@ -724,12 +939,21 @@ drw_setfontset(Drw *drw, Fnt *set)
  * Does NOT take ownership of the scheme (the caller manages its lifetime).
  * A NULL drw is ignored.
  *
+ * @details Sets drw->scheme to scm for subsequent draws without taking
+ *          ownership or allocating colors. See @ref arch_module_drw. drw may
+ *          be NULL (no-op); scm must outlive its use and index
+ *          ColFg/ColBg/ColBorder.
+ *
  * @param[in] drw Drawing context; NULL is ignored.
  * @param[in] scm Color scheme array to make active.
  *
  * @pre  drw may be NULL (no-op); scm indexes ColFg/ColBg/ColBorder.
  * @post drw->scheme points at scm when drw is non-NULL.
  * @note Does not allocate or free colors.
+ * @par Side Effects:
+ *      Mutates drw->scheme only; no X calls and no cache/pixmap/window changes.
+ * @par Threading and Reentrancy:
+ *      Single-threaded; no synchronization. Under DWM_TEST this is irrelevant.
  * @warning No ownership transfer; the scheme must outlive its use.
  * @see drw_scm_create
  * @anchor spec_drw_setscheme
@@ -748,6 +972,12 @@ drw_setscheme(Drw *drw, Clr *scm)
  * rectangles are drawn 1 px narrower/shorter (w-1, h-1) to fit inside the
  * given bounding box.  Zero width or height is a no-op.
  *
+ * @details Fills or strokes a rectangle in the off-screen pixmap using the
+ *          active scheme's ColFg/ColBg, optionally swapped when invert is set.
+ *          Strokes use (w-1, h-1) to stay inside the box; zero w or h is a no-op.
+ *          See @ref arch_module_drw. drw and drw->scheme must be non-NULL; no
+ *          ownership changes occur.
+ *
  * @param[in] drw    Drawing context; NULL is a no-op.
  * @param[in] x      Left edge in drawable coordinates.
  * @param[in] y      Top edge in drawable coordinates.
@@ -759,6 +989,13 @@ drw_setscheme(Drw *drw, Clr *scm)
  * @pre  drw and drw->scheme are non-NULL and w/h are non-zero.
  * @post Pixels are written into the off-screen pixmap via the GC.
  * @note Calls XSetForeground then XFillRectangle or XDrawRectangle.
+ * @par Side Effects:
+ *      XSetForeground + XFillRectangle/XDrawRectangle write off-screen pixmap
+ *      pixels only; no font/cache changes and no X window/property changes
+ *      (drw_map is the only blitter).
+ * @par Threading and Reentrancy:
+ *      Single-threaded; called during bar rendering. Under DWM_TEST X11 calls
+ *      are recorded mocks, not real draws.
  * @see drw_text, drw_map
  * @anchor spec_drw_rect
  */
@@ -798,6 +1035,17 @@ drw_rect(Drw *drw, int x, int y, unsigned int w, unsigned int h, int filled, int
  * the system are remembered to avoid repeated XftFontMatch calls, and a
  * match found for a missing glyph is appended to the font chain.
  *
+ * @details Dual-mode text engine. Measure mode (x=y=w=h=0) returns the advance
+ *          width and uses invert as an unsigned width budget; render mode fills
+ *          the background, batches ASCII into XftDrawStringUtf8 runs and routes
+ *          non-ASCII through glyph_getwidth plus the emoji pixmap cache. It
+ *          tracks the last safe ellipsis cut point and, on overflow, recursively
+ *          draws "..." in place of the tail. Missing glyphs trigger XftFontMatch
+ *          and append a fallback Fnt to drw->fonts, with a no-match set avoiding
+ *          repeated matches. See @ref arch_module_drw. drw/drw->fonts/text must
+ *          be non-NULL; render mode also needs drw->scheme and w != 0. It never
+ *          blits to a window — that is drw_map's job.
+ *
  * @param[in] drw    Drawing context; NULL returns 0.
  * @param[in] x      Left edge (draw mode) or unused (measure mode).
  * @param[in] y      Top edge (draw mode) or unused (measure mode).
@@ -816,6 +1064,15 @@ drw_rect(Drw *drw, int x, int y, unsigned int w, unsigned int h, int filled, int
  *       glyph_cache, emoji_cache and the font chain.
  * @note Calls Xft text APIs, Fc* matching and emoji cache helpers; uses
  *       the persistent drw->xftd drawable.
+ * @par Side Effects:
+ *      Writes off-screen pixmap pixels; may populate glyph_cache/emoji_cache,
+ *      append fallback fonts and grow the no-match set; calls Xft text APIs,
+ *      XCopyArea for cached emoji and Fc* matching. No X window/property
+ *      changes and no XSync (drw_map owns the blit).
+ * @par Threading and Reentrancy:
+ *      Single-threaded; cache tables and the no-match set are unsynchronized.
+ *      Recursive on ellipsis overflow. Under DWM_TEST Xft is a stateful fake
+ *      with no real rasterization or PNG decode.
  * @warning May append fallback fonts to drw->fonts, mutating the chain.
  * @see drw_fontset_getwidth, drw_fontset_getwidth_clamp, glyph_getwidth
  * @anchor spec_drw_text
@@ -1062,6 +1319,11 @@ no_match:
  *
  * Flushes the connection (XSync) so bar content appears immediately.
  *
+ * @details Copies a rectangle of the off-screen pixmap to win and XSyncs so
+ *          bar content appears immediately. This is the only function that
+ *          blits to an X window. See @ref arch_module_drw. drw must be non-NULL
+ *          and win a valid drawable of matching depth; no ownership changes.
+ *
  * @param[in] drw Drawing context; NULL is a no-op.
  * @param[in] win Destination window.
  * @param[in] x   Source/destination x-coordinate.
@@ -1072,6 +1334,12 @@ no_match:
  * @pre  drw != NULL; win is a valid drawable of matching depth.
  * @post The region is copied and the X connection is synced.
  * @note Calls XCopyArea then XSync.
+ * @par Side Effects:
+ *      XCopyArea to the target window followed by XSync; no font/cache/scheme
+ *      mutation and no off-screen pixmap drawing.
+ * @par Threading and Reentrancy:
+ *      Single-threaded; called from drawbar during dispatch/tail flush. The X
+ *      connection is not locked. Under DWM_TEST XCopyArea/XSync are mocks.
  * @see drw_text, drw_rect
  * @anchor spec_drw_map
  */
@@ -1092,6 +1360,12 @@ drw_map(Drw *drw, Window win, int x, int y, unsigned int w, unsigned int h)
  * goes through glyph_getwidth (cache-aware).  Each character is decoded with
  * utf8decode first so multi-byte sequences advance correctly.
  *
+ * @details Measures total advance width without drawing: ASCII is measured
+ *          against the first font, non-ASCII via cache-aware glyph_getwidth,
+ *          with each sequence decoded by utf8decode. See @ref arch_module_drw.
+ *          drw, drw->fonts and text must be non-NULL else 0; the caller owns no
+ *          cache entries.
+ *
  * @param[in] drw  Drawing context; NULL returns 0.
  * @param[in] text NUL-terminated UTF-8 text; NULL returns 0.
  *
@@ -1100,6 +1374,12 @@ drw_map(Drw *drw, Window win, int x, int y, unsigned int w, unsigned int h)
  * @pre  drw and drw->fonts are non-NULL, otherwise 0 is returned.
  * @post May populate the global glyph_cache for non-ASCII codepoints.
  * @note Calls utf8decode, drw_font_getexts and glyph_getwidth; no X drawing.
+ * @par Side Effects:
+ *      May populate the global glyph_cache on non-ASCII misses; no pixmap or
+ *      X window changes and no drawing.
+ * @par Threading and Reentrancy:
+ *      Single-threaded; the global glyph cache is unsynchronized. Under
+ *      DWM_TEST Xft extents come from a fake with no rasterization.
  * @see glyph_getwidth, drw_fontset_getwidth_clamp
  * @anchor spec_drw_fontset_getwidth
  */
@@ -1133,9 +1413,21 @@ drw_fontset_getwidth(Drw *drw, const char *text)
  * Call when fonts change so stale advance widths are not reused.  Every
  * slot's codepoint is reset to -1 (empty).
  *
+ * @details Bumps font_generation (logically invalidating all glyph cache
+ *          entries keyed by (codepoint, font_generation)), clears the no-match
+ *          set and ellipsis width, and resets every glyph_cache slot to -1.
+ *          This is the font-change invalidation point. See @ref arch_module_drw.
+ *          No arguments or ownership; the per-Dr emoji cache is untouched.
+ *
  * @pre  None; the cache is global static state.
  * @post All glyph_cache entries are empty.
  * @note Does not touch the per-Dr context emoji cache.
+ * @par Side Effects:
+ *      Mutates process globals: font_generation, nomatches, ellipsis_width and
+ *      glyph_cache. No X calls and no pixmap/window changes.
+ * @par Threading and Reentrancy:
+ *      Single-threaded; globals are unsynchronized. Under DWM_TEST no effect
+ *      on the fake Xft beyond generation bookkeeping.
  * @see glyph_getwidth, drw_fontset_create
  * @anchor spec_drw_fontset_invalidate_cache
  */
@@ -1156,6 +1448,11 @@ drw_fontset_invalidate_cache(void)
  * selects measure-only mode with a width budget of n so the scan stops
  * early once the budget is exceeded.
  *
+ * @details Calls drw_text in measure-only mode with n as the width budget, so
+ *          the scan stops early once the budget is exceeded, and returns
+ *          MIN(n, result). See @ref arch_module_drw. drw, drw->fonts and text
+ *          must be non-NULL with n != 0, else 0.
+ *
  * @param[in] drw  Drawing context; NULL yields 0.
  * @param[in] text NUL-terminated UTF-8 text; NULL yields 0.
  * @param[in] n    Width cap/budget; 0 yields 0.
@@ -1165,6 +1462,12 @@ drw_fontset_invalidate_cache(void)
  * @pre  drw, drw->fonts and text are non-NULL and n != 0, else 0.
  * @post May populate the global glyph_cache via drw_text.
  * @note Calls drw_text in measure-only mode (no drawing).
+ * @par Side Effects:
+ *      May populate the global glyph_cache through drw_text; zero coordinates
+ *      select measure mode, so no pixmap or X window changes occur.
+ * @par Threading and Reentrancy:
+ *      Single-threaded; the global glyph cache is unsynchronized. Under
+ *      DWM_TEST no real rasterization occurs.
  * @see drw_text, drw_fontset_getwidth
  * @anchor spec_drw_fontset_getwidth_clamp
  */
@@ -1184,6 +1487,11 @@ drw_fontset_getwidth_clamp(Drw *drw, const char *text, unsigned int n)
  * the font's overall line height (ascent + descent), not a per-text value.
  * Either output pointer may be NULL to skip it.
  *
+ * @details Queries XftTextExtentsUtf8 for a run in one Fnt: *w gets the
+ *          horizontal advance (xOff) and *h gets the font's line height, not a
+ *          per-text value; either output may be NULL. See @ref arch_module_drw.
+ *          font and text must be non-NULL else nothing is written.
+ *
  * @param[in]  font Font whose metrics are used.
  * @param[in]  text UTF-8 text bytes; NULL is a no-op.
  * @param[in]  len  Number of bytes to measure.
@@ -1193,6 +1501,12 @@ drw_fontset_getwidth_clamp(Drw *drw, const char *text, unsigned int n)
  * @pre  font != NULL and text != NULL, otherwise nothing is written.
  * @post w/h, when non-NULL, are written from the XGlyphInfo result.
  * @note Calls XftTextExtentsUtf8; no drawing occurs.
+ * @par Side Effects:
+ *      Writes only caller-provided w and h; calls XftTextExtentsUtf8. No
+ *      cache/pixmap/window changes.
+ * @par Threading and Reentrancy:
+ *      Pure aside from its outputs; no globals. Safe in the single-threaded
+ *      model. Under DWM_TEST Xft extents are faked.
  * @see drw_fontset_getwidth, glyph_getwidth
  * @anchor spec_drw_font_getexts
  */
@@ -1217,6 +1531,10 @@ drw_font_getexts(Fnt *font, const char *text, unsigned int len, unsigned int *w,
  * Wraps XCreateFontCursor in a heap-allocated Cur.  Returns NULL if drw is
  * NULL or allocation fails.
  *
+ * @details Wraps XCreateFontCursor in a heap Cur. See @ref arch_module_drw.
+ *          drw must be non-NULL; returns NULL on NULL drw or ecalloc failure.
+ *          The caller owns the Cur and must release it with drw_cur_free.
+ *
  * @param[in] drw   Drawing context supplying dpy.
  * @param[in] shape Core cursor shape constant (e.g. XC_xterm).
  *
@@ -1225,6 +1543,11 @@ drw_font_getexts(Fnt *font, const char *text, unsigned int len, unsigned int *w,
  * @pre  drw != NULL for an actual cursor to be created.
  * @post The returned wrapper owns an X cursor resource.
  * @note Calls ecalloc and XCreateFontCursor.
+ * @par Side Effects:
+ *      ecalloc plus XCreateFontCursor; no bar pixmap/font/cache changes and no
+ *      X window/property changes.
+ * @par Threading and Reentrancy:
+ *      Single-threaded setup. Under DWM_TEST XCreateFontCursor is a mock.
  * @warning Caller must release with drw_cur_free.
  * @see drw_cur_free
  * @anchor spec_drw_cur_create
@@ -1248,12 +1571,22 @@ drw_cur_create(Drw *drw, int shape)
  * Safe to call with a NULL cursor.  A NULL drw with a non-NULL cursor is not
  * checked and would dereference drw->dpy.
  *
+ * @details Frees an X cursor and its Cur wrapper; a NULL cursor is a no-op.
+ *          See @ref arch_module_drw. cursor must be NULL or from drw_cur_create;
+ *          drw must be non-NULL when cursor is (drw->dpy is dereferenced) and
+ *          the wrapper is invalid on return.
+ *
  * @param[in] drw    Drawing context supplying dpy.
  * @param[in] cursor Cursor wrapper to release; NULL is a no-op.
  *
  * @pre  cursor is NULL or was returned by drw_cur_create.
  * @post The X cursor is freed and the wrapper released.
  * @note Calls XFreeCursor then free.
+ * @par Side Effects:
+ *      XFreeCursor then free(); no bar pixmap/font/cache changes and no X
+ *      window/property changes.
+ * @par Threading and Reentrancy:
+ *      Single-threaded teardown. Under DWM_TEST XFreeCursor is a mock.
  * @see drw_cur_create
  * @anchor spec_drw_cur_free
  */

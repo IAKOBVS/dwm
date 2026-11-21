@@ -22,6 +22,7 @@ test_emoji_cache_insert_and_overwrite(void)
 	int idx;
 
 	init_cache(&drw);
+	mock_x11_reset();
 	emoji_cache_insert(&drw, 0x1F600, 5, 10, 1, 2);
 	idx = emoji_cache_lookup(&drw, 0x1F600, 1, 2);
 	ASSERT(idx >= 0, "emoji_cache_insert: entry retrievable");
@@ -34,6 +35,8 @@ test_emoji_cache_insert_and_overwrite(void)
 		"emoji_cache_insert: old scheme no longer matches");
 	ASSERT_EQ(drw.emoji_cache[idx].w, 20,
 		"emoji_cache_insert: width updated");
+	ASSERT_EQ(mock_xfreepixmap_calls, 1,
+		"emoji_cache_insert: evicted pixmap is freed");
 }
 
 static void

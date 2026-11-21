@@ -13,6 +13,7 @@ test_motionnotify_no_crash(void)
 {
 	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
 	winhash_count = 0;
+	mock_x11_reset();
 	save_selmon();
 	Monitor *m = make_monitor(0);
 	selmon = m;
@@ -26,10 +27,14 @@ test_motionnotify_no_crash(void)
 	ev.xmotion.y_root = 100;
 
 	motionnotify(&ev);
-	ASSERT(1, "motionnotify: does not crash");
+	/* A single monitor has no cross-monitor tracking to do. */
+	ASSERT(selmon == m, "motionnotify single monitor: selection unchanged");
+	ASSERT_EQ(mock_xset_input_focus.count, 0, "motionnotify single monitor: no focus reassertion");
+	ASSERT_EQ(mock_xdelete_property.count, 0, "motionnotify single monitor: no _NET_ACTIVE_WINDOW change");
+	ASSERT_EQ(mock_xsync_calls, 0, "motionnotify single monitor: no XSync");
 
 	restore_selmon();
-	free(m); /* fixture leaked (ASan-reported) */
+	free(m);
 }
 
 /* --- motionnotify multi-monitor --- */
@@ -38,9 +43,11 @@ test_motionnotify_multi_monitor(void)
 {
 	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
 	winhash_count = 0;
+	mock_x11_reset();
 	Monitor *m1 = make_monitor(0);
 	Monitor *m2 = make_monitor(1);
 	m1->next = m2;
+	m2->wx = 1920;            /* m2 sits to the right of m1 */
 	m1->sel = NULL;
 	m2->sel = NULL;
 	mons = m1;
@@ -50,14 +57,22 @@ test_motionnotify_multi_monitor(void)
 	XEvent ev;
 	memset(&ev, 0, sizeof ev);
 	ev.xmotion.window = root;
-	ev.xmotion.x_root = 2000;
+	/* First event establishes the static 'mon' on m1. */
+	ev.xmotion.x_root = 100;
 	ev.xmotion.y_root = 500;
+	motionnotify(&ev);
+	ASSERT(selmon == m1, "motionnotify multi monitor: no switch while on m1");
+	ASSERT_EQ(mock_xset_input_focus.count, 0, "motionnotify multi monitor: no focus change on m1");
 
+	/* Second event lands in m2, forcing a focus switch. */
+	ev.xmotion.x_root = 2000;
 	motionnotify(&ev);
-	/* Second call with different coords triggers monitor switch */
-	ev.xmotion.x_root = 500;
-	motionnotify(&ev);
-	ASSERT(1, "motionnotify: multi-monitor does not crash");
+	ASSERT(selmon == m2, "motionnotify multi monitor: switches to m2");
+	ASSERT_EQ(mock_xset_input_focus.count, 1, "motionnotify multi monitor: focus reasserted once");
+	ASSERT_EQ(mock_xset_input_focus.win, (unsigned long)root, "motionnotify multi monitor: root focused when no client");
+	ASSERT_EQ(mock_xdelete_property.count, 1, "motionnotify multi monitor: active-window cleared");
+	ASSERT_EQ(mock_xdelete_property.win, (unsigned long)root, "motionnotify multi monitor: property on root");
+	ASSERT_EQ(mock_xdelete_property.mask, (unsigned long)netatom[NetActiveWindow], "motionnotify multi monitor: NetActiveWindow atom");
 
 	restore_selmon();
 	free(m1);
@@ -70,6 +85,7 @@ test_motionnotify_cross_monitor(void)
 {
 	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
 	winhash_count = 0;
+	mock_x11_reset();
 	Monitor *m1 = make_monitor(0);
 	Monitor *m2 = make_monitor(1);
 	m1->sel = NULL;
@@ -100,10 +116,15 @@ test_motionnotify_cross_monitor(void)
 	ev2.xmotion.y_root = 0;
 	motionnotify(&ev2);
 	ASSERT(selmon == m2, "motionnotify: cross-monitor switches focus to m2");
+	/* Each monitor switch reasserts focus on the root when nothing is selected. */
+	ASSERT(mock_xset_input_focus.count >= 1, "motionnotify cross-monitor: focus reasserted");
+	ASSERT_EQ(mock_xset_input_focus.win, (unsigned long)root, "motionnotify cross-monitor: root focused");
+	ASSERT(mock_xdelete_property.count >= 1, "motionnotify cross-monitor: active-window cleared");
+	ASSERT_EQ(mock_xdelete_property.mask, (unsigned long)netatom[NetActiveWindow], "motionnotify cross-monitor: NetActiveWindow cleared");
 
 	restore_selmon();
-	free(m1); /* fixture leaked (ASan-reported) */
-	free(m2); /* fixture leaked (ASan-reported) */
+	free(m1);
+	free(m2);
 }
 
 /* --- motionnotify non-root window early return (line 1123) --- */
@@ -130,8 +151,11 @@ test_motionnotify_non_root(void)
 	ev.xmotion.y_root = 0;
 
 	motionnotify(&ev);
-	/* No crash, early return taken */
-	ASSERT(1, "motionnotify non-root: returns early without crash");
+	/* No crash, early return taken with no focus/X side effects. */
+	ASSERT(selmon == m1, "motionnotify non-root: selection unchanged");
+	ASSERT_EQ(mock_xset_input_focus.count, 0, "motionnotify non-root: no focus reassertion");
+	ASSERT_EQ(mock_xdelete_property.count, 0, "motionnotify non-root: no active-window change");
+	ASSERT_EQ(mock_xsync_calls, 0, "motionnotify non-root: no XSync");
 
 	mock_x11_reset();
 	free(m1);

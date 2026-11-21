@@ -13,6 +13,7 @@ test_enternotify_normal_same_sel(void)
 {
 	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
 	winhash_count = 0;
+	mock_x11_reset();
 	Monitor *m = make_monitor(0);
 	m->sel = NULL;
 	save_selmon();
@@ -26,7 +27,11 @@ test_enternotify_normal_same_sel(void)
 	ev.xcrossing.window = 99999; /* not a client, not root => wintomon returns selmon */
 
 	enternotify(&ev);
-	ASSERT(1, "enternotify: normal entering non-client no crash");
+	/* Crossing an unknown window on the selected monitor is a no-op. */
+	ASSERT(selmon == m, "enternotify normal: selected monitor unchanged");
+	ASSERT_EQ(selmon->sel, NULL, "enternotify normal: selection unchanged");
+	ASSERT_EQ(mock_xset_input_focus.count, 0, "enternotify normal: no focus reassertion");
+	ASSERT_EQ(mock_xset_window_border.count, 0, "enternotify normal: no border change");
 
 	restore_selmon();
 	free(m);
@@ -37,6 +42,7 @@ test_enternotify_inferior_returns_early(void)
 {
 	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
 	winhash_count = 0;
+	mock_x11_reset();
 	save_selmon();
 	selmon = make_monitor(0);
 	mons = selmon;
@@ -48,7 +54,10 @@ test_enternotify_inferior_returns_early(void)
 	ev.xcrossing.window = root;
 
 	enternotify(&ev);
-	ASSERT(1, "enternotify: NotifyInferior on root returns early");
+	/* Inferior detail on root is still tracked, but resolves to selmon. */
+	ASSERT_EQ(mock_xset_input_focus.count, 0, "enternotify inferior: no focus reassertion");
+	ASSERT_EQ(mock_xset_window_border.count, 0, "enternotify inferior: no border change");
+	ASSERT_EQ(selmon->sel, NULL, "enternotify inferior: selection unchanged");
 
 {
 		Monitor *tmpm = selmon; /* free the fixture, then restore globals */
@@ -63,6 +72,7 @@ test_enternotify_different_monitor(void)
 {
 	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
 	winhash_count = 0;
+	mock_x11_reset();
 	Monitor *m1 = make_monitor(0);
 	Monitor *m2 = make_monitor(1);
 	m2->wx = 1920;
@@ -88,6 +98,13 @@ test_enternotify_different_monitor(void)
 	enternotify(&ev);
 
 	ASSERT(selmon == m2, "enternotify different monitor: selmon changed to m2");
+	/* The entered client becomes the selection and focus is reasserted. */
+	ASSERT_EQ(m2->sel, c, "enternotify different monitor: entered client selected");
+	ASSERT_EQ(mock_xset_input_focus.count, 1, "enternotify different monitor: focus reasserted");
+	ASSERT_EQ(mock_xset_input_focus.win, (unsigned long)c->win, "enternotify different monitor: focus on entered client");
+	ASSERT_EQ(mock_xset_window_border.count, 1, "enternotify different monitor: selection border set");
+	ASSERT_EQ(mock_xset_window_border.win, (unsigned long)c->win, "enternotify different monitor: border on entered client");
+	ASSERT_EQ(mock_xchange_property.win, (unsigned long)root, "enternotify different monitor: _NET_ACTIVE_WINDOW on root");
 
 	restore_selmon();
 	winclient_remove(c);
@@ -100,6 +117,7 @@ test_enternotify_guard_notifyinferior(void)
 {
 	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
 	winhash_count = 0;
+	mock_x11_reset();
 	save_selmon();
 	Monitor *m = make_monitor(0);
 	mons = m;
@@ -121,6 +139,8 @@ test_enternotify_guard_notifyinferior(void)
 
 	/* Line 701: early return because detail == NotifyInferior and window != root */
 	ASSERT(m->sel == c, "enternotify guard: NotifyInferior returns early, sel unchanged");
+	ASSERT_EQ(mock_xset_input_focus.count, 0, "enternotify guard: no focus reassertion");
+	ASSERT_EQ(mock_xset_window_border.count, 0, "enternotify guard: no border change");
 
 	winclient_remove(c);
 	free(c); free(m);
@@ -132,7 +152,9 @@ test_enternotify_grab_mode(void)
 {
 	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
 	winhash_count = 0;
+	mock_x11_reset();
 	Monitor *m = make_monitor(0);
+	save_selmon();
 	selmon = m;
 	mons = m;
 
@@ -143,7 +165,10 @@ test_enternotify_grab_mode(void)
 	ev.xcrossing.window = root;
 
 	enternotify(&ev);
-	ASSERT(1, "enternotify: NotifyGrab returns early no crash");
+	/* Grab-mode crossing on root resolves to selmon but has no client to focus. */
+	ASSERT_EQ(mock_xset_input_focus.count, 0, "enternotify grab: no focus reassertion");
+	ASSERT_EQ(mock_xset_window_border.count, 0, "enternotify grab: no border change");
+	ASSERT(selmon == m, "enternotify grab: selected monitor unchanged");
 
 	/* restore globals BEFORE freeing m */
 	restore_selmon();
@@ -155,10 +180,12 @@ test_enternotify_own_window(void)
 {
 	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
 	winhash_count = 0;
+	mock_x11_reset();
 	Monitor *m = make_monitor(0);
 	Client *c = make_client(1, m);
 	m->sel = c;
 	m->clients = c;
+	save_selmon();
 	selmon = m;
 	mons = m;
 
@@ -169,7 +196,10 @@ test_enternotify_own_window(void)
 	ev.xcrossing.window = c->win;
 
 	enternotify(&ev);
-	ASSERT(1, "enternotify: entering own sel window returns early");
+	/* Entering the already-selected client is a no-op. */
+	ASSERT_EQ(m->sel, c, "enternotify own window: selection unchanged");
+	ASSERT_EQ(mock_xset_input_focus.count, 0, "enternotify own window: no focus reassertion");
+	ASSERT_EQ(mock_xset_window_border.count, 0, "enternotify own window: no border change");
 
 	/* restore globals BEFORE freeing m */
 	restore_selmon();
@@ -182,7 +212,9 @@ test_enternotify_ungrab_mode(void)
 {
 	memset(winhash, 0, sizeof winhash); /* isolate window index per test */
 	winhash_count = 0;
+	mock_x11_reset();
 	Monitor *m = make_monitor(0);
+	save_selmon();
 	selmon = m;
 	mons = m;
 
@@ -193,7 +225,9 @@ test_enternotify_ungrab_mode(void)
 	ev.xcrossing.window = root;
 
 	enternotify(&ev);
-	ASSERT(1, "enternotify: NotifyUngrab returns early no crash");
+	ASSERT_EQ(mock_xset_input_focus.count, 0, "enternotify ungrab: no focus reassertion");
+	ASSERT_EQ(mock_xset_window_border.count, 0, "enternotify ungrab: no border change");
+	ASSERT(selmon == m, "enternotify ungrab: selected monitor unchanged");
 
 	/* restore globals BEFORE freeing m */
 	restore_selmon();

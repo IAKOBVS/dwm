@@ -13,6 +13,9 @@ static void
 start_recorder(const char *name, const char *signal)
 {
 	(void)name;
+	if (start_calls == 0)
+		ASSERT_EQ(procstate, PROC_RESTARTING,
+			"killatfullscreen_start: enters PROC_RESTARTING before body");
 	if (start_calls < (int)sizeof start_order - 1)
 		start_order[start_calls] = signal[1];
 	start_calls++;
@@ -32,6 +35,8 @@ test_start_runs_body_synchronously_in_tests(void)
 	if (per == 1)
 		ASSERT_EQ(start_order[0], 'C',
 			"killatfullscreen_start: CONT precedes HUP");
+	ASSERT_EQ(procstate, PROC_RUNNING,
+		"killatfullscreen_start: body ends in PROC_RUNNING");
 
 	killall_impl = saved;
 }
